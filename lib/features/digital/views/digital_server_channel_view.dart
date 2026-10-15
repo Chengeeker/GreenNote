@@ -157,84 +157,90 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
       header: reviewDefaultRefreshHeader,
       onRefresh: () => _load(refresh: true),
       onLoad: _more ? () => _load(refresh: false) : null,
-      child: _items.isEmpty
-          ? ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              children: [
-                SizedBox(
-                  height: MediaQuery.sizeOf(context).height * .55,
-                  child: Center(
-                    child: _loading
-                        ? const CircularProgressIndicator()
-                        : Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(_error ?? '服务端暂未返回内容'),
-                              if (_error != null)
-                                TextButton(
-                                  onPressed: () => _load(refresh: true),
-                                  child: const Text('重试'),
-                                ),
-                            ],
-                          ),
+      child: filterHorizontalScrollNotifications(
+        _items.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.sizeOf(context).height * .55,
+                    child: Center(
+                      child: _loading
+                          ? const CircularProgressIndicator()
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(_error ?? '服务端暂未返回内容'),
+                                if (_error != null)
+                                  TextButton(
+                                    onPressed: () => _load(refresh: true),
+                                    child: const Text('重试'),
+                                  ),
+                              ],
+                            ),
+                    ),
                   ),
+                ],
+              )
+            : ListView.builder(
+                padding: EdgeInsets.fromLTRB(
+                  0,
+                  8,
+                  0,
+                  widget.bottomPadding + MediaQuery.paddingOf(context).bottom,
                 ),
-              ],
-            )
-          : ListView.builder(
-              padding: EdgeInsets.fromLTRB(
-                0,
-                8,
-                0,
-                widget.bottomPadding + MediaQuery.paddingOf(context).bottom,
-              ),
-              itemCount: _items.length + (_loading || _error != null ? 1 : 0),
-              itemBuilder: (context, index) {
-                if (index == _items.length) {
-                  if (_error != null) {
-                    return TextButton(
-                      onPressed: () => _load(refresh: false),
-                      child: Text('加载失败，点击重试：$_error'),
+                itemCount: _items.length + (_loading || _error != null ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index == _items.length) {
+                    if (_error != null) {
+                      return TextButton(
+                        onPressed: () => _load(refresh: false),
+                        child: Text('加载失败，点击重试：$_error'),
+                      );
+                    }
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: CircularProgressIndicator(),
+                      ),
                     );
                   }
-                  return const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: CircularProgressIndicator(),
-                    ),
-                  );
-                }
-                final entity = _items[index];
-                if (widget.groupProductRows && _isDirectProduct(entity)) {
-                  final startsGroup =
-                      index == 0 || !_isDirectProduct(_items[index - 1]);
-                  final endsGroup =
-                      index == _items.length - 1 ||
-                      !_isDirectProduct(_items[index + 1]);
-                  final colorScheme = Theme.of(context).colorScheme;
-                  final radius = BorderRadius.vertical(
-                    top: startsGroup ? const Radius.circular(18) : Radius.zero,
-                    bottom: endsGroup ? const Radius.circular(18) : Radius.zero,
-                  );
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color:
-                            Theme.of(context).cardTheme.color ??
-                            colorScheme.surfaceContainerHigh,
-                        borderRadius: radius,
+                  final entity = _items[index];
+                  if (widget.groupProductRows && _isDirectProduct(entity)) {
+                    final startsGroup =
+                        index == 0 || !_isDirectProduct(_items[index - 1]);
+                    final endsGroup =
+                        index == _items.length - 1 ||
+                        !_isDirectProduct(_items[index + 1]);
+                    final colorScheme = Theme.of(context).colorScheme;
+                    final radius = BorderRadius.vertical(
+                      top: startsGroup
+                          ? const Radius.circular(18)
+                          : Radius.zero,
+                      bottom: endsGroup
+                          ? const Radius.circular(18)
+                          : Radius.zero,
+                    );
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color:
+                              Theme.of(context).cardTheme.color ??
+                              colorScheme.surfaceContainerHigh,
+                          borderRadius: radius,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: _buildProductListItem(entity),
+                        ),
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: _buildProductListItem(entity),
-                      ),
-                    ),
-                  );
-                }
-                return _section(entity);
-              },
-            ),
+                    );
+                  }
+                  return _section(entity);
+                },
+              ),
+      ),
     );
   }
 

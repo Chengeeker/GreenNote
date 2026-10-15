@@ -10,6 +10,9 @@ import 'cached_network_image.dart';
 const Map<String, String> coolapkEmotionMap = {
   '滑稽': 'c-huaji',
   'doge': 'c-doge',
+  '傲慢': 'c-aoman',
+  'doge喝茶': 'c-dogehechi',
+  'doge笑哭': 'c-dogexiaoku',
   '二哈': 'c-erha',
   '流泪': 'c-liulei',
   '捂脸': 'c-wulian',
@@ -103,7 +106,9 @@ String? getCoolapkEmotionUrl(String name) {
   final cleanName = name.startsWith('[') && name.endsWith(']')
       ? name.substring(1, name.length - 1)
       : name;
-  final code = coolapkEmotionMap[cleanName];
+  final code =
+      coolapkEmotionMap[cleanName] ??
+      coolapkEmotionMap[cleanName.toLowerCase()];
   if (code == null) return null;
   return '$_coolapkEmotionCdn$code.png';
 }

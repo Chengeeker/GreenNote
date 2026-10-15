@@ -41,7 +41,11 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('退出酷安？'),
-        content: const Text('将清除本机保存的登录凭据。'),
+        content: Text(
+          widget.api.isAnonymous
+              ? '将退出匿名模式并进入游客状态，本地资料、关注和收藏保留。'
+              : '将清除本机保存的登录凭据。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -58,7 +62,9 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
     setState(() => _working = true);
     try {
       await widget.api.logout();
-      if (mounted) AppToast.show(context, '已退出酷安账号');
+      if (mounted) {
+        AppToast.show(context, widget.api.isAnonymous ? '已退出匿名账户' : '已退出酷安账号');
+      }
     } catch (error) {
       if (mounted) AppToast.show(context, error.toString());
     } finally {
@@ -83,21 +89,25 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                   Icons.manage_accounts_outlined,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
-                title: '登录与 Cookie 管理',
-                subtitle: widget.api.hasCookie
+                title: '登录方式与账号管理',
+                subtitle: widget.api.isAnonymous
+                    ? '匿名账户：关注和收藏保存在本地'
+                    : widget.api.hasCookie
                     ? '管理本机安全保存的酷安登录凭据'
                     : '登录并管理本机保存的酷安 Cookie',
                 onTap: _openCookieManager,
               ),
-              if (widget.api.hasCookie) ...[
+              if (widget.api.hasAccount) ...[
                 const Divider(height: 1, indent: 56),
                 ReviewPreferenceTile(
                   leading: Icon(
                     Icons.logout_rounded,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
-                  title: '退出登录',
-                  subtitle: '清除本机保存的登录凭据',
+                  title: widget.api.isAnonymous ? '退出匿名账户' : '退出登录',
+                  subtitle: widget.api.isAnonymous
+                      ? '退出后保留本地资料、关注和收藏'
+                      : '清除本机保存的登录凭据',
                   trailing: _working
                       ? const SizedBox.square(
                           dimension: 20,

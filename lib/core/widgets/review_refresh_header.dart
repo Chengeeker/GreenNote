@@ -13,6 +13,13 @@ const ClassicHeader reviewDefaultRefreshHeader = ClassicHeader(
   showMessage: true,
 );
 
+Widget filterHorizontalScrollNotifications(Widget child) =>
+    NotificationListener<ScrollNotification>(
+      onNotification: (notification) =>
+          notification.metrics.axis == Axis.horizontal,
+      child: child,
+    );
+
 Widget _buildFrostedAppBarRefreshIndicator(
   BuildContext context,
   IndicatorState state,

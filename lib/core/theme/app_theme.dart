@@ -308,6 +308,7 @@ class AppTheme {
         elevation: 0,
         scrolledUnderElevation: 1.5,
         centerTitle: false,
+        toolbarHeight: 52,
         titleTextStyle: TextStyle(
           color: scheme.onSurface,
           fontSize: 18,
@@ -318,7 +319,7 @@ class AppTheme {
         elevation: 0,
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(20),
           side: BorderSide(
             color: scheme.outlineVariant.withValues(alpha: 0.25),
             width: 0.8,
@@ -328,8 +329,9 @@ class AppTheme {
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       ),
       listTileTheme: ListTileThemeData(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-        minVerticalPadding: 8,
+        dense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+        minVerticalPadding: 4,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         titleTextStyle: TextStyle(
           fontWeight: adjustFontWeight(FontWeight.w600, fontWeightAdjustment),
@@ -347,6 +349,7 @@ class AppTheme {
         ),
       ),
       tabBarTheme: TabBarThemeData(
+        labelPadding: const EdgeInsets.symmetric(horizontal: 12),
         labelStyle: TextStyle(
           fontWeight: adjustFontWeight(FontWeight.w600, fontWeightAdjustment),
           fontSize: 15,
@@ -476,6 +479,7 @@ class AppTheme {
         elevation: 0,
         scrolledUnderElevation: 1.5,
         centerTitle: false,
+        toolbarHeight: 52,
         titleTextStyle: TextStyle(
           color: effectiveScheme.onSurface,
           fontSize: 18,
@@ -486,7 +490,7 @@ class AppTheme {
         elevation: 0,
         clipBehavior: Clip.antiAlias,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(20),
           side: BorderSide(
             color: isPureBlack
                 ? Colors.white.withValues(alpha: 0.12)
@@ -498,8 +502,9 @@ class AppTheme {
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       ),
       listTileTheme: ListTileThemeData(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
-        minVerticalPadding: 8,
+        dense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+        minVerticalPadding: 4,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         titleTextStyle: TextStyle(
           fontWeight: adjustFontWeight(FontWeight.w600, fontWeightAdjustment),
@@ -517,6 +522,7 @@ class AppTheme {
         ),
       ),
       tabBarTheme: TabBarThemeData(
+        labelPadding: const EdgeInsets.symmetric(horizontal: 12),
         labelStyle: TextStyle(
           fontWeight: adjustFontWeight(FontWeight.w600, fontWeightAdjustment),
           fontSize: 15,

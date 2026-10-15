@@ -56,7 +56,6 @@ class _NineGridViewState extends State<NineGridView> {
   String get statusId => widget.statusId;
   bool get isDetail => widget.isDetail;
   String? get authorName => widget.authorName;
-  String? get webpageCardCaption => widget.webpageCardCaption;
   int get _visibleCount => !isDetail && pics.length > 9 ? 9 : pics.length;
 
   @override
@@ -65,68 +64,11 @@ class _NineGridViewState extends State<NineGridView> {
 
     final count = _visibleCount;
 
-    if (count == 1) {
-      return _buildSingleImage(context, pics[0], caption: webpageCardCaption);
-    }
-
-    if (count == 2 || count == 4) {
+    if (count == 1 || count == 2 || count == 4) {
       return _buildGrid(context, crossAxisCount: 2);
     }
 
     return _buildGrid(context, crossAxisCount: 3);
-  }
-
-  Widget _buildSingleImage(
-    BuildContext context,
-    GalleryImage pic, {
-    String? caption,
-  }) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    double maxWidth = 260.0;
-    double maxHeight = 260.0;
-
-    double aspectRatio = 1.0;
-    if (pic.width > 0 && pic.height > 0) {
-      aspectRatio = pic.width / pic.height;
-      if (aspectRatio > 2.0) aspectRatio = 2.0;
-      if (aspectRatio < 0.5) aspectRatio = 0.5;
-    }
-
-    final radius = BorderRadius.circular(16);
-
-    final image = Container(
-      constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
-      child: AspectRatio(
-        aspectRatio: aspectRatio,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            ClipRRect(
-              borderRadius: radius,
-              child: _buildImageContent(pic, colorScheme, cacheWidth: 800),
-            ),
-            if (pic.badgeText.isNotEmpty)
-              Positioned(
-                bottom: 6,
-                right: 6,
-                child: _buildBadge(pic.badgeText),
-              ),
-          ],
-        ),
-      ),
-    );
-
-    return GestureDetector(
-      onTap: () => _openMedia(context, 0),
-      child: ImageGalleryHeroThumbnail(
-        scope: _heroScope,
-        index: 0,
-        pic: pic,
-        child: image,
-      ),
-    );
   }
 
   Widget _buildGrid(BuildContext context, {required int crossAxisCount}) {
@@ -153,12 +95,7 @@ class _NineGridViewState extends State<NineGridView> {
           children: [
             ClipRRect(
               borderRadius: radius,
-              child: _buildImageContent(
-                pic,
-                colorScheme,
-                cacheWidth: 450,
-                cacheHeight: 450,
-              ),
+              child: _buildImageContent(pic, colorScheme, cacheWidth: 450),
             ),
             if (pic.badgeText.isNotEmpty)
               Positioned(
@@ -206,16 +143,15 @@ class _NineGridViewState extends State<NineGridView> {
     GalleryImage pic,
     ColorScheme colorScheme, {
     int? cacheWidth,
-    int? cacheHeight,
+    BoxFit fit = BoxFit.cover,
   }) {
     Widget networkImage(String url) {
       return ExtendedImage.network(
         url,
         headers: coolapkImageHeaders(url, api: widget.api),
-        fit: BoxFit.cover,
+        fit: fit,
         cache: true,
         cacheWidth: cacheWidth,
-        cacheHeight: cacheHeight,
         loadStateChanged: (state) {
           if (state.extendedImageLoadState == LoadState.loading) {
             return Container(

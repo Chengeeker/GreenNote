@@ -211,54 +211,56 @@ class _DigitalHomeViewState extends State<DigitalHomeView>
     return EasyRefresh(
       header: reviewDefaultRefreshHeader,
       onRefresh: _loadData,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          0,
-          8,
-          0,
-          24 + MediaQuery.paddingOf(context).bottom,
+      child: filterHorizontalScrollNotifications(
+        ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(
+            0,
+            8,
+            0,
+            24 + MediaQuery.paddingOf(context).bottom,
+          ),
+          children: [
+            // 1. "我的关注"（仅当有关注设备时展示）
+            DigitalFollowCard(
+              api: widget.api,
+              items: followItems,
+              onMoreTap: () => widget.onSelectTab?.call(0),
+            ),
+
+            // 2. 10个品类5列网格
+            DigitalCategoryGridCard(
+              api: widget.api,
+              items: categoryItems,
+              onCategoryTap: _handleCategoryTap,
+            ),
+
+            // 3. 推荐横幅
+            DigitalBannerCard(
+              api: widget.api,
+              imageUrl: bannerUrl,
+              title: serverBannerCard?['title']?.toString() ?? '数码精选',
+              targetUrl: serverBannerCard?['url']?.toString(),
+            ),
+
+            // 4. "今日热门" 8款机型榜单
+            DigitalRankGridCard(
+              api: widget.api,
+              title: serverRankCard?['title']?.toString() ?? '今日热门',
+              subTitle: serverRankCard?['subTitle']?.toString() ?? '榜单',
+              items: rankItems,
+              onMoreTap: () {
+                if (widget.onSelectTab != null) {
+                  widget.onSelectTab!(3); // Navigate to 排行榜
+                }
+              },
+            ),
+
+            // 5. 其余服务端卡片 (如热门系统、评分榜、时间线、动态等)
+            if (otherCards.isNotEmpty)
+              for (final card in otherCards) _buildDynamicServerCard(card),
+          ],
         ),
-        children: [
-          // 1. "我的关注"（仅当有关注设备时展示）
-          DigitalFollowCard(
-            api: widget.api,
-            items: followItems,
-            onMoreTap: () => widget.onSelectTab?.call(0),
-          ),
-
-          // 2. 10个品类5列网格
-          DigitalCategoryGridCard(
-            api: widget.api,
-            items: categoryItems,
-            onCategoryTap: _handleCategoryTap,
-          ),
-
-          // 3. 推荐横幅
-          DigitalBannerCard(
-            api: widget.api,
-            imageUrl: bannerUrl,
-            title: serverBannerCard?['title']?.toString() ?? '数码精选',
-            targetUrl: serverBannerCard?['url']?.toString(),
-          ),
-
-          // 4. "今日热门" 8款机型榜单
-          DigitalRankGridCard(
-            api: widget.api,
-            title: serverRankCard?['title']?.toString() ?? '今日热门',
-            subTitle: serverRankCard?['subTitle']?.toString() ?? '榜单',
-            items: rankItems,
-            onMoreTap: () {
-              if (widget.onSelectTab != null) {
-                widget.onSelectTab!(3); // Navigate to 排行榜
-              }
-            },
-          ),
-
-          // 5. 其余服务端卡片 (如热门系统、评分榜、时间线、动态等)
-          if (otherCards.isNotEmpty)
-            for (final card in otherCards) _buildDynamicServerCard(card),
-        ],
       ),
     );
   }

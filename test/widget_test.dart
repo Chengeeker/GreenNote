@@ -15,6 +15,9 @@ import 'package:greennote/features/settings/personalization_page.dart';
 import 'package:greennote/core/design_system/components/review_choice_tile.dart';
 
 class FakeApi implements CoolapkApi {
+  @override
+  bool get isAnonymous => false;
+
   final paths = <String>[];
   @override
   String get currentUid => '1';
@@ -104,6 +107,7 @@ void main() {
     expect(state.themeSeedArgb, 0xFF2E7D32);
     expect(state.useDynamicColor, false);
     expect(state.useFloatingNavBar, true);
+    expect(state.useLiquidGlassNavBar, true);
     final dark = AppTheme.darkTheme(colorIndex: 3);
     expect(dark.scaffoldBackgroundColor, const Color(0xFF111215));
     expect(dark.cardTheme.color, const Color(0xFF1B1C20));
@@ -116,11 +120,28 @@ void main() {
     );
   });
   test(
+    'liquid glass defaults on while a saved selection is retained',
+    () async {
+      final firstInstall = AppSettingsNotifier();
+      await firstInstall.setFloatingNavBar(true);
+      expect(firstInstall.state.useFloatingNavBar, true);
+      expect(firstInstall.state.useLiquidGlassNavBar, true);
+      await firstInstall.setLiquidGlassNavBar(false);
+      firstInstall.dispose();
+
+      final existingInstall = AppSettingsNotifier();
+      await existingInstall.setFloatingNavBar(true);
+      expect(existingInstall.state.useLiquidGlassNavBar, false);
+      existingInstall.dispose();
+    },
+  );
+  test(
     'backup includes UI preferences and remains compatible with v1',
     () async {
       final controller = AppSettingsNotifier();
       await controller.setPureBlackDark(true);
       await controller.setFloatingNavBar(false);
+      await controller.setLiquidGlassNavBar(true);
       await controller.setUseCustomFontWeight(true);
       await controller.setCustomFontWeightDelta(100);
       final backup = await controller.exportBackup(
@@ -131,10 +152,12 @@ void main() {
       final prefs = backup['preferences'] as Map<String, dynamic>;
       expect(prefs['pureBlackDark'], true);
       expect(prefs['floatingNavBar'], false);
+      expect(prefs['liquidGlassNavBar'], true);
       expect(prefs['customFontWeightDelta'], 100);
       for (final key in [
         'pureBlackDark',
         'floatingNavBar',
+        'liquidGlassNavBar',
         'useCustomFontWeight',
         'customFontWeightDelta',
       ]) {
@@ -142,6 +165,7 @@ void main() {
       }
       await controller.restoreBackup(backup);
       expect(controller.state.useFloatingNavBar, true);
+      expect(controller.state.useLiquidGlassNavBar, true);
       expect(controller.state.isPureBlackDark, false);
       backup['preferences'] = <String, dynamic>{
         ...prefs,
@@ -152,6 +176,14 @@ void main() {
         throwsFormatException,
       );
       expect(controller.state.useFloatingNavBar, true);
+      backup['preferences'] = <String, dynamic>{
+        ...prefs,
+        'liquidGlassNavBar': 'true',
+      };
+      await expectLater(
+        controller.restoreBackup(backup),
+        throwsFormatException,
+      );
       controller.dispose();
     },
   );
@@ -193,6 +225,23 @@ void main() {
             .length,
         5,
       );
+      final settings = container.read(appSettingsProvider.notifier);
+      await settings.setFloatingNavBar(true);
+      await settings.setLiquidGlassNavBar(true);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('liquid-glass-publish-action')),
+        findsOneWidget,
+      );
+      expect(find.text('发布'), findsNothing);
+      selected = -1;
+      await tester.tap(find.text('发现'));
+      expect(selected, 3);
+      selected = -1;
+      await tester.tap(
+        find.byKey(const ValueKey('liquid-glass-publish-action')),
+      );
+      expect(selected, 2);
       expect(tester.takeException(), isNull);
     },
   );
@@ -281,4 +330,28 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets('liquid glass setting follows the floating bar setting', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(child: MaterialApp(home: const PersonalizationPage())),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).first, const Offset(0, -4000));
+    await tester.pumpAndSettle();
+    expect(find.text('使用液态玻璃效果'), findsOneWidget);
+
+    final settings = ProviderScope.containerOf(
+      tester.element(find.byType(PersonalizationPage)),
+    ).read(appSettingsProvider.notifier);
+    await settings.setFloatingNavBar(false);
+    await tester.pumpAndSettle();
+    expect(find.text('使用液态玻璃效果'), findsNothing);
+
+    await settings.setFloatingNavBar(true);
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).first, const Offset(0, -4000));
+    await tester.pumpAndSettle();
+    expect(find.text('使用液态玻璃效果'), findsOneWidget);
+  });
 }

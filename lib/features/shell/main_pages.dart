@@ -1,3 +1,5 @@
+import '../account/local_account_page.dart';
+
 import 'package:easy_refresh/easy_refresh.dart';
 
 import '../../core/widgets/review_refresh_header.dart';
@@ -11,13 +13,13 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
 import '../../core/design_system/components/review_card.dart';
 import '../../core/widgets/app_avatar.dart';
 import '../settings/app_settings_page.dart';
-import '../../core/widgets/app_section_card.dart';
 import '../feed/feed_pages.dart';
 import '../shared/api_list_page.dart';
 import '../../core/utils/haptic_feedback_util.dart';
@@ -43,7 +45,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
   static const _channels = [
     _DiscoveryChannel('酷品', '/page?url=V11_FIND_GOODS'),
     _DiscoveryChannel('生活', null),
-    _DiscoveryChannel('二手', '/page?url=V11_DISCOVERY_SECOND_HAND'),
+    _DiscoveryChannel('二手', '#/feed/ershouList?dataListType=staggered'),
     _DiscoveryChannel('酷图', '#/feed/coolPictureRankList'),
     _DiscoveryChannel('宠物', null),
     _DiscoveryChannel('运动', null),
@@ -120,7 +122,10 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     if (channel.title == '酷图') {
       return CoolPicPage(api: widget.api);
     }
-    final route = _serverRoutes[channel.title] ?? channel.fallback;
+    // The configured secondhand page is only a category menu; open its default feed.
+    final route = channel.title == '二手'
+        ? channel.fallback
+        : _serverRoutes[channel.title] ?? channel.fallback;
     if (route == null) {
       return Center(
         child: Padding(
@@ -956,8 +961,9 @@ class _SearchResultsPageState extends State<SearchResultsPage>
     _currentQuery = widget.query;
     _searchController = TextEditingController(text: _currentQuery);
 
-    final initialIndex =
-        searchTabs.indexWhere((t) => t.type == widget.initialType);
+    final initialIndex = searchTabs.indexWhere(
+      (t) => t.type == widget.initialType,
+    );
     _tabController = TabController(
       length: searchTabs.length,
       initialIndex: initialIndex >= 0 ? initialIndex : 0,
@@ -1030,19 +1036,13 @@ class _SearchResultsPageState extends State<SearchResultsPage>
                     controller: _searchController,
                     textInputAction: TextInputAction.search,
                     onSubmitted: _submitSearch,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Colors.white,
-                    ),
+                    style: const TextStyle(fontSize: 14, color: Colors.white),
                     decoration: const InputDecoration(
                       border: InputBorder.none,
                       isDense: true,
                       contentPadding: EdgeInsets.zero,
                       hintText: '搜索酷安',
-                      hintStyle: TextStyle(
-                        fontSize: 14,
-                        color: Colors.white38,
-                      ),
+                      hintStyle: TextStyle(fontSize: 14, color: Colors.white38),
                     ),
                   ),
                 ),
@@ -1075,17 +1075,12 @@ class _SearchResultsPageState extends State<SearchResultsPage>
               fontWeight: FontWeight.normal,
             ),
             dividerColor: Colors.transparent,
-            tabs: [
-              for (final tab in searchTabs)
-                Tab(text: tab.label),
-            ],
+            tabs: [for (final tab in searchTabs) Tab(text: tab.label)],
           ),
         ),
         body: TabBarView(
           controller: _tabController,
-          children: [
-            for (final tab in searchTabs) _buildTabView(tab.type),
-          ],
+          children: [for (final tab in searchTabs) _buildTabView(tab.type)],
         ),
       ),
     );
@@ -1094,7 +1089,7 @@ class _SearchResultsPageState extends State<SearchResultsPage>
   Widget _buildTabView(String type) {
     if (type == 'all') {
       return ApiListPage(
-        key: ValueKey('search-all-$_currentQuery-$_allSortType'),
+        key: ValueKey('search-all-$_currentQuery'),
         api: widget.api,
         title: '综合',
         path: '/v6/search',
@@ -1111,7 +1106,7 @@ class _SearchResultsPageState extends State<SearchResultsPage>
     }
     if (type == 'feed') {
       return ApiListPage(
-        key: ValueKey('search-feed-$_currentQuery-$_feedSortType-$_feedType'),
+        key: ValueKey('search-feed-$_currentQuery'),
         api: widget.api,
         title: '动态',
         path: '/v6/search',
@@ -1138,11 +1133,7 @@ class _SearchResultsPageState extends State<SearchResultsPage>
       api: widget.api,
       title: '搜索',
       path: '/v6/search',
-      query: {
-        'type': type,
-        'searchValue': _currentQuery,
-        'show_flag': 1,
-      },
+      query: {'type': type, 'searchValue': _currentQuery, 'show_flag': 1},
       showAppBar: false,
     );
   }
@@ -1722,21 +1713,82 @@ class AccountPage extends StatefulWidget {
 }
 
 class _AccountPageState extends State<AccountPage> {
+  static const _cardTitles = ['我关注的话题', '我的常去', '浏览历史', '我的收藏单', '我的问答'];
+  Set<String> _hiddenCards = {};
   Map<String, dynamic>? _login;
   String? _error;
   bool _checking = false;
   bool _lastObservedCookie = false;
   Future<Map<String, dynamic>>? _spaceFuture;
   Future<ApiPage>? _topicsFuture;
+  Future<ApiPage>? _visitsFuture;
   Future<ApiPage>? _historyFuture;
   Future<ApiPage>? _collectionsFuture;
   Future<ApiPage>? _questionsFuture;
+  String _observedPublicUid = '';
+  bool _observedAnonymous = false;
 
   @override
   void initState() {
     super.initState();
     _lastObservedCookie = widget.api.hasCookie;
-    if (widget.api.hasCookie) _checkLogin();
+    _observedPublicUid =
+        widget.api.localAccount.publicIdentity?['uid'] as String? ?? '';
+    _observedAnonymous = widget.api.isAnonymous;
+    widget.api.localAccount.addListener(_onLocalAccountChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_initializeDashboard());
+    });
+  }
+
+  Future<void> _initializeDashboard() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _hiddenCards =
+          (preferences.getStringList('greennote.account.hiddenCards') ?? [])
+              .where(_cardTitles.contains)
+              .toSet();
+    });
+    if (widget.api.hasCookie) {
+      await _checkLogin();
+    } else if (widget.api.isAnonymous && _observedPublicUid.isNotEmpty) {
+      _loadDashboard();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.api.localAccount.removeListener(_onLocalAccountChanged);
+    super.dispose();
+  }
+
+  void _onLocalAccountChanged() {
+    final nextUid =
+        widget.api.localAccount.publicIdentity?['uid'] as String? ?? '';
+    final nextAnonymous = widget.api.isAnonymous;
+    final changed =
+        nextUid != _observedPublicUid || nextAnonymous != _observedAnonymous;
+    _observedPublicUid = nextUid;
+    _observedAnonymous = nextAnonymous;
+    if (!mounted) return;
+    if (changed) {
+      final effectiveUid = nextAnonymous ? nextUid : widget.api.currentUid;
+      if (effectiveUid.isEmpty) {
+        setState(() {
+          _spaceFuture = null;
+          _topicsFuture = null;
+          _visitsFuture = null;
+          _historyFuture = null;
+          _collectionsFuture = null;
+          _questionsFuture = null;
+        });
+      } else {
+        _loadDashboard();
+      }
+    } else {
+      setState(() {});
+    }
   }
 
   @override
@@ -1772,10 +1824,11 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   Future<void> _loginPage() async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => CookieLoginPage(api: widget.api)),
-    );
-    if (mounted) _checkLogin();
+    await showLoginOptions(context, widget.api);
+    if (mounted) {
+      setState(() {});
+      if (widget.api.hasCookie) _checkLogin();
+    }
   }
 
   Future<void> _openSettings() async {
@@ -1806,6 +1859,7 @@ class _AccountPageState extends State<AccountPage> {
           _error = null;
           _spaceFuture = null;
           _topicsFuture = null;
+          _visitsFuture = null;
           _historyFuture = null;
           _collectionsFuture = null;
           _questionsFuture = null;
@@ -1815,20 +1869,42 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   void _loadDashboard() {
-    final uid = widget.api.currentUid;
+    final anonymous = widget.api.isAnonymous;
+    final identity = anonymous ? widget.api.localAccount.publicIdentity : null;
+    final uid = identity?['uid'] as String? ?? widget.api.currentUid;
     if (uid.isEmpty) return;
     setState(() {
       _spaceFuture = _loadSpace(uid);
-      _topicsFuture = widget.api.getList('/v6/topic/myFollowTopicList');
-      _historyFuture = widget.api.getList('/v6/member/recentHistoryList');
-      _collectionsFuture = widget.api.getList(
-        '/v6/collection/myCollectionList',
-      );
-      _questionsFuture = widget.api.getUserPage(
-        '/v6/user/questionAndAnswerList',
-        uid,
-        1,
-      );
+      _topicsFuture = anonymous || _hiddenCards.contains('我关注的话题')
+          ? null
+          : widget.api.getList('/v6/topic/myFollowTopicList');
+      _visitsFuture = anonymous || _hiddenCards.contains('我的常去')
+          ? null
+          : widget.api.getList('/v6/member/recentHistoryList');
+      _historyFuture = anonymous || _hiddenCards.contains('浏览历史')
+          ? null
+          : widget.api.getList('/v6/user/hitHistoryList');
+      _collectionsFuture = _hiddenCards.contains('我的收藏单')
+          ? null
+          : anonymous
+          ? widget.api.getList(
+              '/v6/collection/list',
+              query: {'uid': uid, 'showDefault': 1},
+            )
+          : widget.api.getList('/v6/collection/myCollectionList');
+      _questionsFuture = _hiddenCards.contains('我的问答')
+          ? null
+          : widget.api.getUserPage('/v6/user/questionAndAnswerList', uid, 1);
+      // Offscreen cards subscribe later; FutureBuilder still receives these errors.
+      for (final future in [
+        _topicsFuture,
+        _visitsFuture,
+        _historyFuture,
+        _collectionsFuture,
+        _questionsFuture,
+      ]) {
+        future?.ignore();
+      }
     });
   }
 
@@ -1850,8 +1926,8 @@ class _AccountPageState extends State<AccountPage> {
     return {
       if (spaceUser is Map) ...Map<String, dynamic>.from(spaceUser),
       if (profileUser is Map) ...Map<String, dynamic>.from(profileUser),
-      if (spaceData is Map) ...Map<String, dynamic>.from(spaceData),
       if (profileData is Map) ...Map<String, dynamic>.from(profileData),
+      if (spaceData is Map) ...Map<String, dynamic>.from(spaceData),
       ...spaceResponse,
     };
   }
@@ -1861,78 +1937,304 @@ class _AccountPageState extends State<AccountPage> {
     if (_lastObservedCookie != widget.api.hasCookie) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _syncAccountState());
     }
-    final loggedIn = widget.api.hasCookie && _login != null && _error == null;
+    final anonymous = widget.api.isAnonymous;
+    final loggedIn =
+        anonymous || widget.api.hasCookie && _login != null && _error == null;
+    final publicIdentity = anonymous
+        ? widget.api.localAccount.publicIdentity
+        : null;
     final loginUser = _login?['userInfo'] ?? _login?['user_info'];
     final user = <String, dynamic>{
-      if (loginUser is Map) ...Map<String, dynamic>.from(loginUser),
-      ...?_login,
+      if (!anonymous && loginUser is Map)
+        ...Map<String, dynamic>.from(loginUser),
+      if (!anonymous) ...?_login,
+      if (anonymous)
+        'username': publicIdentity?['username'] ?? widget.api.localAccount.name,
+      if (anonymous && publicIdentity != null)
+        'userAvatar': publicIdentity['userAvatar'],
     };
-    final uid = _first(_login, ['uid', 'userId', 'id']).isEmpty
-        ? widget.api.currentUid
-        : _first(_login, ['uid', 'userId', 'id']);
-    return ListView(
-      padding: EdgeInsets.fromLTRB(
-        10,
-        8,
-        10,
-        24 + MediaQuery.paddingOf(context).bottom,
-      ),
-      children: [
-        _buildProfile(user, loggedIn, uid),
-        _buildStatistics(uid, enabled: loggedIn),
-        _buildShortcuts(uid, enabled: loggedIn),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(5, 18, 5, 2),
-          child: Row(
+    final uid = anonymous
+        ? (publicIdentity?['uid'] as String? ?? '')
+        : (_first(_login, ['uid', 'userId', 'id']).isEmpty
+              ? widget.api.currentUid
+              : _first(_login, ['uid', 'userId', 'id']));
+    final collectionRoute = publicIdentity != null
+        ? '/v6/collection/list'
+        : '/v6/collection/myCollectionList';
+    return ColoredBox(
+      color: Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF101010)
+          : Theme.of(context).colorScheme.surface,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 600),
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(
+              8,
+              0,
+              8,
+              24 + MediaQuery.paddingOf(context).bottom,
+            ),
             children: [
-              Expanded(
-                child: Text(
-                  '我的卡片',
-                  style: Theme.of(context).textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w700),
+              _buildProfile(user, loggedIn, uid),
+              _buildStatistics(uid, enabled: loggedIn),
+              _buildShortcuts(uid, enabled: loggedIn),
+              _buildOrders(),
+              _buildHelp(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 2, 4, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '我的卡片',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _manageCards,
+                      style: TextButton.styleFrom(
+                        foregroundColor: Theme.of(context)
+                            .colorScheme
+                            .onSurfaceVariant,
+                      ),
+                      child: const Text('卡片管理', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
                 ),
               ),
-              TextButton(
-                onPressed: loggedIn && uid.isNotEmpty
-                    ? () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              UserSpacePage(api: widget.api, uid: uid),
-                        ),
-                      )
-                    : _openSettings,
-                child: const Text('更多'),
+              if (!_hiddenCards.contains('我关注的话题'))
+                _previewSection(
+                  '我关注的话题',
+                  '/v6/topic/myFollowTopicList',
+                  _topicsFuture,
+                  icon: Icons.tag_rounded,
+                ),
+              if (!_hiddenCards.contains('我的常去'))
+                _previewSection(
+                  '我的常去',
+                  '/v6/member/recentHistoryList',
+                  _visitsFuture,
+                  icon: Icons.history_rounded,
+                ),
+              if (!_hiddenCards.contains('浏览历史'))
+                _previewSection(
+                  '浏览历史',
+                  '/v6/user/hitHistoryList',
+                  _historyFuture,
+                  icon: Icons.history_rounded,
+                ),
+              if (!_hiddenCards.contains('我的收藏单'))
+                _previewSection(
+                  '我的收藏单',
+                  collectionRoute,
+                  _collectionsFuture,
+                  icon: Icons.folder_outlined,
+                  query: publicIdentity != null
+                      ? {'uid': uid, 'showDefault': 1}
+                      : const {},
+                  allowAnonymousPublicRead: publicIdentity != null,
+                ),
+              if (!_hiddenCards.contains('我的问答'))
+                _previewSection(
+                  '我的问答',
+                  '/v6/user/questionAndAnswerList',
+                  _questionsFuture,
+                  icon: Icons.question_answer_outlined,
+                  query: {'uid': uid},
+                  allowAnonymousPublicRead: publicIdentity != null,
+                ),
+              _group(context, '更多', [_CreateCollectionRow(api: widget.api)]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _accountSurface({required Widget child}) => Material(
+    color: Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF1E1E1E)
+        : Theme.of(context).colorScheme.surfaceContainerLow,
+    borderRadius: BorderRadius.circular(14),
+    clipBehavior: Clip.antiAlias,
+    child: child,
+  );
+
+  Widget _cardHeader(String title, {VoidCallback? onTap, String? trailing}) =>
+      InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontSize: 16, fontWeight: FontWeight.w500),
+                  ),
+                ),
+                if (trailing != null)
+                  Text(
+                    trailing,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  Widget _buildOrders() => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: _accountSurface(
+      child: Column(
+        children: [
+          _cardHeader('酷回收订单', trailing: '官方客户端查看'),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Row(
+              children: [
+                for (final action in const [
+                  (Icons.inventory_2_outlined, '待发货'),
+                  (Icons.local_shipping_outlined, '已发货'),
+                  (Icons.verified_user_outlined, '验机中'),
+                  (Icons.receipt_long_outlined, '待确认'),
+                  (Icons.headset_mic_outlined, '在线客服'),
+                ])
+                  Expanded(
+                    child: _ShortcutButton(
+                      icon: action.$1,
+                      label: action.$2,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      tooltip: '请在官方酷安客户端查看酷回收订单',
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _buildHelp() => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: _accountSurface(
+      child: InkWell(
+        onTap: () async {
+          try {
+            final opened = await launchUrl(
+              Uri.parse('https://m.coolapk.com/mp/do?c=help&m=questionNew'),
+              mode: LaunchMode.externalApplication,
+            );
+            if (!opened && mounted) AppToast.show(context, '无法打开帮助页面');
+          } catch (_) {
+            if (mounted) AppToast.show(context, '无法打开帮助页面');
+          }
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.volume_up_rounded,
+                size: 22,
+                color: Color(0xFF2196F3),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '有疑惑请参考「酷安常见问题」 >>>',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, size: 20),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Future<void> _manageCards() async {
+    var saving = false;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, updateSheet) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text('卡片管理', style: TextStyle(fontSize: 18)),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final title in _cardTitles)
+                      SwitchListTile(
+                        title: Text(title),
+                        value: !_hiddenCards.contains(title),
+                        onChanged: saving
+                            ? null
+                            : (visible) async {
+                                updateSheet(() => saving = true);
+                                final next = {..._hiddenCards};
+                                if (visible) {
+                                  next.remove(title);
+                                } else {
+                                  next.add(title);
+                                }
+                                try {
+                                  final preferences =
+                                      await SharedPreferences.getInstance();
+                                  if (!await preferences.setStringList(
+                                    'greennote.account.hiddenCards',
+                                    next.toList(),
+                                  )) {
+                                    throw StateError('保存失败');
+                                  }
+                                  if (!mounted) return;
+                                  setState(() => _hiddenCards = next);
+                                  if (visible) _loadDashboard();
+                                } catch (_) {
+                                  if (mounted) {
+                                    AppToast.show(this.context, '卡片设置保存失败，请重试');
+                                  }
+                                } finally {
+                                  if (sheetContext.mounted) {
+                                    updateSheet(() => saving = false);
+                                  }
+                                }
+                              },
+                      ),
+                  ],
+                ),
               ),
             ],
           ),
         ),
-        _previewSection(
-          '我关注的话题',
-          '/v6/topic/myFollowTopicList',
-          _topicsFuture,
-          icon: Icons.tag_rounded,
-        ),
-        _previewSection(
-          '我的常去',
-          '/v6/member/recentHistoryList',
-          _historyFuture,
-          icon: Icons.history_rounded,
-        ),
-        _previewSection(
-          '我的收藏单',
-          '/v6/collection/myCollectionList',
-          _collectionsFuture,
-          icon: Icons.folder_open_rounded,
-        ),
-        _previewSection(
-          '我的问答',
-          '/v6/user/questionAndAnswerList',
-          _questionsFuture,
-          icon: Icons.question_answer_outlined,
-          query: {'uid': uid},
-        ),
-        _group(context, '更多', [_CreateCollectionRow(api: widget.api)]),
-      ],
+      ),
     );
   }
 
@@ -1941,6 +2243,7 @@ class _AccountPageState extends State<AccountPage> {
     bool loggedIn,
     String uid,
   ) => FutureBuilder<Map<String, dynamic>>(
+    key: ValueKey('profile-$uid'),
     future: _spaceFuture,
     builder: (context, snapshot) {
       final data = {...user, ...?snapshot.data};
@@ -1952,9 +2255,19 @@ class _AccountPageState extends State<AccountPage> {
       );
       final showProgress =
           experience != null && nextExperience != null && nextExperience > 0;
+      final anonymous = widget.api.isAnonymous;
+      final publicIdentity = anonymous
+          ? widget.api.localAccount.publicIdentity
+          : null;
       return InkWell(
         borderRadius: BorderRadius.circular(20),
-        onTap: loggedIn && uid.isNotEmpty
+        onTap: anonymous && publicIdentity == null
+            ? () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => LocalProfilePage(api: widget.api),
+                ),
+              )
+            : loggedIn && uid.isNotEmpty
             ? () => Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
                   builder: (_) => UserSpacePage(api: widget.api, uid: uid),
@@ -1962,28 +2275,55 @@ class _AccountPageState extends State<AccountPage> {
               )
             : _openSettings,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 22, 8, 12),
+          padding: const EdgeInsets.fromLTRB(4, 12, 4, 12),
           child: Row(
             children: [
-              AppAvatar(
-                url: _first(data, ['userAvatar', 'avatar']).isEmpty
-                    ? widget.api.currentUserAvatar
-                    : _first(data, ['userAvatar', 'avatar']),
-                api: widget.api,
-                size: 82,
-                name: name,
-              ),
-              const SizedBox(width: 14),
+              if (anonymous && publicIdentity == null)
+                LocalAvatar(
+                  avatar: widget.api.localAccount.avatar,
+                  name: widget.api.localAccount.name,
+                  radius: 36,
+                )
+              else
+                AppAvatar(
+                  url: _first(data, ['userAvatar', 'avatar']).isEmpty
+                      ? widget.api.currentUserAvatar
+                      : _first(data, ['userAvatar', 'avatar']),
+                  api: widget.api,
+                  size: 72,
+                  name: name,
+                ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      name.isEmpty ? (loggedIn ? '酷安用户' : '未登录') : name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            name.isEmpty ? (loggedIn ? '酷安用户' : '未登录') : name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ),
+                        if (publicIdentity != null) ...[
+                          const SizedBox(width: 6),
+                          Tooltip(
+                            message: '匿名登录 · 公开主页身份',
+                            child: Icon(
+                              Icons.cloud_outlined,
+                              size: 19,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     if (level.isNotEmpty || showProgress) ...[
                       const SizedBox(height: 8),
@@ -2001,7 +2341,15 @@ class _AccountPageState extends State<AccountPage> {
                                   ),
                             ),
                           const Spacer(),
-                          if (showProgress) Text('$experience/$nextExperience'),
+                          if (showProgress)
+                            Flexible(
+                              child: Text(
+                                '$experience/$nextExperience',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
                         ],
                       ),
                       if (showProgress) ...[
@@ -2010,14 +2358,18 @@ class _AccountPageState extends State<AccountPage> {
                           borderRadius: BorderRadius.circular(99),
                           child: LinearProgressIndicator(
                             value: (experience / nextExperience).clamp(0, 1),
-                            minHeight: 6,
+                            minHeight: 5,
                           ),
                         ),
                       ],
                     ] else ...[
                       const SizedBox(height: 5),
                       Text(
-                        _checking
+                        anonymous
+                            ? publicIdentity != null
+                                  ? '公开主页 · UID $uid · 只读'
+                                  : '匿名账户 · 本地保存'
+                            : _checking
                             ? '正在校验登录状态…'
                             : _error ?? (uid.isEmpty ? '点击登录酷安' : 'UID $uid'),
                         maxLines: 1,
@@ -2031,11 +2383,17 @@ class _AccountPageState extends State<AccountPage> {
                 ),
               ),
               const SizedBox(width: 8),
-              Icon(
-                loggedIn ? Icons.qr_code_2_rounded : Icons.login_rounded,
-                size: 28,
-              ),
-              const SizedBox(width: 6),
+              if (!(anonymous && publicIdentity != null)) ...[
+                Icon(
+                  anonymous
+                      ? Icons.edit_outlined
+                      : loggedIn
+                      ? Icons.qr_code_2_rounded
+                      : Icons.login_rounded,
+                  size: 28,
+                ),
+                const SizedBox(width: 6),
+              ],
               const Icon(Icons.chevron_right_rounded, size: 28),
             ],
           ),
@@ -2046,12 +2404,13 @@ class _AccountPageState extends State<AccountPage> {
 
   Widget _buildStatistics(String uid, {required bool enabled}) =>
       FutureBuilder<Map<String, dynamic>>(
+        key: ValueKey('statistics-$uid'),
         future: _spaceFuture,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return Padding(
               padding: const EdgeInsets.only(top: 10),
-              child: AppSectionCard(
+              child: _accountSurface(
                 child: ListTile(
                   title: const Text('个人统计加载失败'),
                   subtitle: Text(
@@ -2068,38 +2427,72 @@ class _AccountPageState extends State<AccountPage> {
             );
           }
           final data = snapshot.data;
+          final anonymous = widget.api.isAnonymous;
+          final publicIdentity = anonymous
+              ? widget.api.localAccount.publicIdentity
+              : null;
+          final localOnly = anonymous && publicIdentity == null;
           final values = [
-            _first(data, ['feed_num', 'feedNum', 'feednum', 'feedCount']),
-            _first(data, ['follow_num', 'followNum', 'follownum', 'follow']),
-            _first(data, ['fans_num', 'fansNum', 'fansnum', 'fans']),
+            localOnly
+                ? '0'
+                : _first(data, [
+                    'feed_num',
+                    'feedNum',
+                    'feednum',
+                    'feed_count',
+                    'feedCount',
+                    'feed_num_txt',
+                    'feedNumTxt',
+                  ]),
+            localOnly
+                ? '${widget.api.localAccount.follows.length}'
+                : _first(data, [
+                    'follow_num',
+                    'followNum',
+                    'follownum',
+                    'follow',
+                  ]),
+            localOnly
+                ? '—'
+                : _first(data, ['fans_num', 'fansNum', 'fansnum', 'fans']),
           ];
           final taps = [
-            () => enabled
+            () => localOnly
+                ? _showLoginRequired()
+                : enabled
                 ? _openRoute('/v6/user/feedList', {'uid': uid})
                 : _openSettings(),
-            () => enabled
-                ? _openRoute('/v6/user/myFollowList', const {})
-                : _openSettings(),
-            () => enabled
+            () => localOnly
+                ? _openLocalLibrary(follows: true)
+                : _openFollowingList(enabled: enabled),
+            () => localOnly
+                ? _showLoginRequired()
+                : anonymous
+                ? _openRoute('/v6/user/userFansList', {'uid': uid})
+                : enabled
                 ? _openRoute('/v6/user/myFansList', const {})
                 : _openSettings(),
           ];
           return Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: AppSectionCard(
+            padding: const EdgeInsets.only(top: 0),
+            child: _accountSurface(
               child: Row(
                 children: [
                   for (var index = 0; index < values.length; index++) ...[
                     _stat(
                       context,
-                      enabled ? values[index] : '—',
+                      enabled || anonymous ? values[index] : '—',
                       ['动态', '关注', '粉丝'][index],
                       taps[index],
                     ),
                     if (index < values.length - 1)
-                      const SizedBox(
-                        height: 48,
-                        child: VerticalDivider(width: 1),
+                      SizedBox(
+                        height: 24,
+                        child: VerticalDivider(
+                          width: 1,
+                          color: Theme.of(context).colorScheme.onSurface
+                              .withValues(alpha: 0.04),
+                        ),
                       ),
                   ],
                 ],
@@ -2118,13 +2511,13 @@ class _AccountPageState extends State<AccountPage> {
     child: InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(
           children: [
             Text(
               value.isEmpty ? '—' : value,
               style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w700),
+                  ?.copyWith(fontSize: 22, fontWeight: FontWeight.w500),
             ),
             Text(label, style: Theme.of(context).textTheme.bodySmall),
           ],
@@ -2133,49 +2526,58 @@ class _AccountPageState extends State<AccountPage> {
     ),
   );
 
-  Widget _buildShortcuts(String uid, {required bool enabled}) => Padding(
-    padding: const EdgeInsets.only(top: 10),
-    child: AppSectionCard(
-      child: Row(
-        children: [
-          _shortcut(
-            context,
-            Icons.star_rounded,
-            '我的收藏',
-            '/v6/collection/myCollectionList',
-            color: const Color(0xFF2589E8),
-            enabled: enabled,
-          ),
-          _shortcut(
-            context,
-            Icons.article_rounded,
-            '我的图文',
-            '/v6/user/htmlFeedList',
-            query: {'uid': uid},
-            color: const Color(0xFFE94848),
-            enabled: enabled,
-          ),
-          _shortcut(
-            context,
-            Icons.apps_rounded,
-            '应用管理',
-            '/v6/apk/developerAppList',
-            query: {'uid': uid},
-            color: const Color(0xFF9862E8),
-            enabled: enabled,
-          ),
-          Expanded(
-            child: _ShortcutButton(
-              icon: Icons.more_horiz_rounded,
-              label: '更多',
-              color: const Color(0xFF1DB8C3),
-              onTap: _showMore,
+  Widget _buildShortcuts(String uid, {required bool enabled}) {
+    final publicIdentity = widget.api.isAnonymous
+        ? widget.api.localAccount.publicIdentity
+        : null;
+    final canReadPublic = publicIdentity != null;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: _accountSurface(
+        child: Row(
+          children: [
+            _shortcut(
+              context,
+              Icons.star_rounded,
+              '我的收藏',
+              canReadPublic
+                  ? '/v6/collection/list'
+                  : '/v6/collection/myCollectionList',
+              query: canReadPublic ? {'uid': uid, 'showDefault': 1} : const {},
+              color: const Color(0xFF2589E8),
+              enabled: enabled && (!widget.api.isAnonymous || canReadPublic),
             ),
-          ),
-        ],
+            _shortcut(
+              context,
+              Icons.article_rounded,
+              '我的图文',
+              '/v6/user/htmlFeedList',
+              query: {'uid': uid},
+              color: const Color(0xFFE94848),
+              enabled: enabled && (!widget.api.isAnonymous || canReadPublic),
+            ),
+            _shortcut(
+              context,
+              Icons.stay_current_portrait_rounded,
+              '应用管理',
+              '/v6/apk/developerAppList',
+              query: {'uid': uid},
+              color: const Color(0xFF9862E8),
+              enabled: enabled && (!widget.api.isAnonymous || canReadPublic),
+            ),
+            Expanded(
+              child: _ShortcutButton(
+                icon: Icons.more_horiz_rounded,
+                label: '更多',
+                color: const Color(0xFF1DB8C3),
+                onTap: _showMore,
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _shortcut(
     BuildContext context,
@@ -2190,9 +2592,48 @@ class _AccountPageState extends State<AccountPage> {
       icon: icon,
       label: label,
       color: color,
-      onTap: () => enabled ? _openRoute(path, query) : _openSettings(),
+      onTap: () {
+        if (widget.api.isAnonymous) {
+          if (widget.api.localAccount.publicIdentity != null) {
+            _openRoute(path, query);
+          } else if (label == '我的收藏') {
+            _openLocalLibrary(follows: false);
+          } else {
+            _showLoginRequired();
+          }
+        } else if (enabled) {
+          _openRoute(path, query);
+        } else {
+          _openSettings();
+        }
+      },
     ),
   );
+
+  void _showLoginRequired() =>
+      AppToast.show(context, widget.api.loginRequiredMessage);
+
+  void _openFollowingList({bool enabled = true}) {
+    if (widget.api.isAnonymous) {
+      final uid = widget.api.localAccount.publicIdentity?['uid'];
+      if (uid is String && uid.isNotEmpty) {
+        _openRoute('/v6/user/followList', {'uid': uid});
+      } else {
+        _openLocalLibrary(follows: true);
+      }
+    } else if (enabled) {
+      _openRoute('/v6/user/myFollowList', const {});
+    } else {
+      _openSettings();
+    }
+  }
+
+  void _openLocalLibrary({required bool follows}) =>
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => LocalLibraryPage(api: widget.api, follows: follows),
+        ),
+      );
 
   Widget _previewSection(
     String title,
@@ -2200,136 +2641,161 @@ class _AccountPageState extends State<AccountPage> {
     Future<ApiPage>? future, {
     required IconData icon,
     Map<String, dynamic> query = const {},
-  }) => Padding(
-    padding: const EdgeInsets.only(top: 14),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(5, 0, 4, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                ),
+    bool allowAnonymousPublicRead = false,
+  }) {
+    final canReadAnonymous = _canReadAnonymousPublic(
+      query,
+      allowAnonymousPublicRead,
+    );
+    void open() {
+      if (canReadAnonymous || widget.api.hasCookie && _login != null) {
+        _openRoute(route, query);
+      } else if (widget.api.isAnonymous) {
+        _showLoginRequired();
+      } else {
+        _openSettings();
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: _accountSurface(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _cardHeader(title, onTap: open),
+            FutureBuilder<ApiPage>(
+              key: ValueKey(
+                '$title:${widget.api.localAccount.publicIdentity?['uid'] ?? widget.api.currentUid}',
               ),
-              TextButton.icon(
-                onPressed: widget.api.hasCookie && _login != null
-                    ? () => _openRoute(route, query)
-                    : _openSettings,
-                icon: const Icon(Icons.chevron_right_rounded, size: 18),
-                label: const Text('更多'),
-              ),
-            ],
-          ),
+              future: future,
+              builder: (context, snapshot) {
+                if (widget.api.hasCookie && _error != null && _login == null) {
+                  return ListTile(
+                    leading: Icon(icon),
+                    title: const Text('登录状态校验失败'),
+                    subtitle: Text(
+                      _error!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: IconButton(
+                      tooltip: '重试',
+                      onPressed: _checkLogin,
+                      icon: const Icon(Icons.refresh_rounded),
+                    ),
+                  );
+                }
+                if (!canReadAnonymous &&
+                    (!widget.api.hasCookie || _login == null)) {
+                  return InkWell(
+                    onTap: open,
+                    child: _cardMessage('登录后查看$title'),
+                  );
+                }
+                if (snapshot.connectionState == ConnectionState.waiting ||
+                    (canReadAnonymous && future == null)) {
+                  return const Padding(
+                    padding: EdgeInsets.all(22),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return ListTile(
+                    leading: Icon(icon),
+                    title: const Text('内容加载失败'),
+                    subtitle: Text(
+                      snapshot.error.toString(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: IconButton(
+                      tooltip: '重试',
+                      onPressed: _loadDashboard,
+                      icon: const Icon(Icons.refresh_rounded),
+                    ),
+                  );
+                }
+                final items =
+                    snapshot.data?.items ?? const <Map<String, dynamic>>[];
+                if (items.isEmpty) {
+                  return _cardMessage(_emptyLabel(title));
+                }
+                if (title == '我关注的话题' || title == '我的常去') {
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 2, 6, 14),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final item in items.take(4))
+                          Expanded(child: _accountMiniCard(item)),
+                        for (var index = items.length; index < 4; index++)
+                          const Spacer(),
+                      ],
+                    ),
+                  );
+                }
+                return Column(
+                  children: [
+                    for (final item in items.take(
+                      title == '浏览历史'
+                          ? 5
+                          : title == '我的收藏单'
+                          ? 3
+                          : 4,
+                    ))
+                      if (title == '浏览历史' || title == '我的收藏单')
+                        _accountRow(item, collection: title == '我的收藏单')
+                      else
+                        ApiEntityCard(api: widget.api, entity: item),
+                  ],
+                );
+              },
+            ),
+          ],
         ),
-        AppSectionCard(
-          child: FutureBuilder<ApiPage>(
-            future: future,
-            builder: (context, snapshot) {
-              if (widget.api.hasCookie && _error != null && _login == null) {
-                return ListTile(
-                  leading: Icon(icon),
-                  title: const Text('登录状态校验失败'),
-                  subtitle: Text(
-                    _error!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: IconButton(
-                    tooltip: '重试',
-                    onPressed: _checkLogin,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
-                );
-              }
-              if (!widget.api.hasCookie || _login == null) {
-                return ListTile(
-                  leading: Icon(icon),
-                  title: const Text('登录后查看'),
-                  subtitle: Text(title),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: _openSettings,
-                );
-              }
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Padding(
-                  padding: EdgeInsets.all(22),
-                  child: Center(child: CircularProgressIndicator()),
-                );
-              }
-              if (snapshot.hasError) {
-                return ListTile(
-                  leading: Icon(icon),
-                  title: const Text('内容加载失败'),
-                  subtitle: Text(
-                    snapshot.error.toString(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: IconButton(
-                    tooltip: '重试',
-                    onPressed: _loadDashboard,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
-                );
-              }
-              final items =
-                  snapshot.data?.items ?? const <Map<String, dynamic>>[];
-              if (items.isEmpty) {
-                return ListTile(
-                  leading: Icon(icon),
-                  title: Text(_emptyLabel(title)),
-                );
-              }
-              if (title == '我关注的话题' || title == '我的常去') {
-                return SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 14,
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final item in items.take(8)) _accountMiniCard(item),
-                    ],
-                  ),
-                );
-              }
-              return Column(
-                children: [
-                  for (final item in items.take(4))
-                    ApiEntityCard(api: widget.api, entity: item),
-                ],
-              );
-            },
-          ),
-        ),
-      ],
+      ),
+    );
+  }
+
+  Widget _cardMessage(String message) => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 20, 12, 26),
+    child: Center(
+      child: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: Theme.of(context).textTheme.bodyMedium
+            ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+      ),
     ),
   );
 
+  bool _canReadAnonymousPublic(
+    Map<String, dynamic> query,
+    bool allowAnonymousPublicRead,
+  ) {
+    if (!allowAnonymousPublicRead || !widget.api.isAnonymous) return false;
+    final uid = widget.api.localAccount.publicIdentity?['uid'];
+    return uid is String && uid.isNotEmpty && query['uid'] == uid;
+  }
+
   String _emptyLabel(String title) => switch (title) {
-    '我的问答' => '还没有发布过问答',
+    '我的关注' => '还没有关注其他用户',
+    '我的问答' => '你还没有发布过问答',
     '我的收藏单' => '还没有创建收藏单',
     '我关注的话题' => '还没有关注话题',
+    '浏览历史' => '暂无浏览记录',
     _ => '暂无最近访问内容',
   };
 
   Widget _accountMiniCard(Map<String, dynamic> item) {
     final type = _first(item, ['entityType', 'entity_type']).toLowerCase();
-    final image = _first(item, [
-      'logo',
-      'icon',
-      'pic',
-      'cover',
-      'userAvatar',
-      'avatar',
-    ]);
     final title = _first(item, [
       'title',
       'username',
@@ -2346,74 +2812,213 @@ class _AccountPageState extends State<AccountPage> {
     ]);
     final subtitle = count.isNotEmpty
         ? (type.contains('topic') ? '$count条动态' : count)
-        : _first(item, ['description', 'message']);
-    return SizedBox(
-      width: 104,
-      child: InkWell(
-        onTap: () => _openAccountItem(item, type),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Column(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: image.isEmpty
-                    ? Container(
-                        width: 72,
-                        height: 72,
-                        color: Theme.of(context).colorScheme.surfaceContainer,
-                        child: const Icon(Icons.image_outlined),
-                      )
-                    : CachedNetworkImage(
-                        image,
-                        headers: coolapkImageHeaders(image, api: widget.api),
-                        width: 72,
-                        height: 72,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => const SizedBox(
-                          width: 72,
-                          height: 72,
-                          child: Icon(Icons.broken_image_outlined),
-                        ),
-                      ),
-              ),
-              const SizedBox(height: 7),
+        : _first(item, ['typeName', 'subTitle', 'description']);
+    return InkWell(
+      onTap: () => _openAccountItem(item, type),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Column(
+          children: [
+            _accountThumbnail(item, size: 56),
+            const SizedBox(height: 7),
+            Text(
+              title.isEmpty ? '酷安内容' : title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            if (subtitle.isNotEmpty)
               Text(
-                title.isEmpty ? '酷安内容' : title,
+                subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              if (subtitle.isNotEmpty)
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _accountThumbnail(
+    Map<String, dynamic> item, {
+    required double size,
+    bool collection = false,
+  }) {
+    final image = normalizeCoolapkImageUrl(
+      _first(item, [
+        'logo',
+        'pic',
+        'cover_pic',
+        'cover',
+        'userAvatar',
+        'avatar',
+        'icon',
+      ]),
+    );
+    Widget fallback() => Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: collection
+            ? null
+            : Theme.of(context).colorScheme.surfaceContainerHighest,
+        gradient: collection
+            ? const LinearGradient(
+                colors: [Color(0xFF10B8C5), Color(0xFF24C4A0)],
+              )
+            : null,
+      ),
+      child: Icon(
+        collection ? Icons.folder_outlined : Icons.image_outlined,
+        color: collection
+            ? Colors.white
+            : Theme.of(context).colorScheme.onSurfaceVariant,
+        size: collection ? size * 0.6 : size * 0.45,
+      ),
+    );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: image.isEmpty
+          ? fallback()
+          : CachedNetworkImage(
+              image,
+              headers: coolapkImageHeaders(image, api: widget.api),
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => fallback(),
+            ),
+    );
+  }
+
+  Widget _accountRow(Map<String, dynamic> item, {required bool collection}) {
+    final type = _first(item, ['entityType', 'entity_type']).toLowerCase();
+    final title = _first(item, ['title', 'username', 'name']);
+    var subtitle = _first(item, ['subTitle', 'description', 'message']);
+    if (collection && subtitle.isEmpty) {
+      final follows = _first(item, ['follownum', 'followNum']);
+      final feeds = _first(item, ['feednum', 'feedNum', 'itemnum']);
+      subtitle = [
+        if (follows.isNotEmpty) '$follows人关注',
+        if (feeds.isNotEmpty) '$feeds个内容',
+      ].join('  ');
+    }
+    final time = collection
+        ? ''
+        : formatRelativeTime(_first(item, ['dateline', 'time']));
+    final typeName = collection ? '' : _first(item, ['typeName']);
+    return InkWell(
+      onTap: () => _openAccountItem(item, collection ? 'collection' : type),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: Row(
+          children: [
+            _accountThumbnail(
+              item,
+              size: collection ? 60 : 48,
+              collection: collection,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title.isEmpty ? '酷安内容' : title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyLarge,
+                        ),
+                      ),
+                      if (typeName.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Text(
+                            typeName,
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (time.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Text(
+                time,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );
   }
 
   void _openAccountItem(Map<String, dynamic> item, String type) {
-    final id = _first(item, [
-      'uid',
-      'id',
-      'entityId',
-      'entity_id',
-      'tag',
-      'tagName',
-      'packageName',
-      'productId',
-    ]);
+    var id = type.contains('collection')
+        ? _first(item, ['id', 'collectionId', 'collection_id'])
+        : _first(item, [
+            'uid',
+            'id',
+            'entityId',
+            'entity_id',
+            'tag',
+            'tagName',
+            'packageName',
+            'productId',
+          ]);
+    if (type.contains('history') || id.isEmpty) {
+      final url = _first(item, ['url']);
+      final uri = Uri.tryParse(url.startsWith('#/') ? url.substring(1) : url);
+      final parts = uri?.pathSegments ?? const <String>[];
+      if (uri != null &&
+          (!uri.hasAuthority ||
+              uri.host == 'coolapk.com' ||
+              uri.host.endsWith('.coolapk.com')) &&
+          parts.length >= 2) {
+        final targetType = switch (parts.first) {
+          'u' => 'user',
+          't' => 'topic',
+          'feed' => 'feed',
+          'product' => 'product',
+          'collection' => 'collection',
+          _ => '',
+        };
+        if (targetType.isNotEmpty) {
+          type = targetType;
+          id = parts[1];
+        }
+      }
+    }
     if (id.isEmpty) return;
     final Widget page;
     if (type.contains('feed')) {
@@ -2436,6 +3041,13 @@ class _AccountPageState extends State<AccountPage> {
         api: widget.api,
         id: id,
         title: _first(item, ['title', 'name']),
+      );
+    } else if (type == 'collection') {
+      page = ApiListPage(
+        api: widget.api,
+        title: _first(item, ['title', 'name']),
+        path: '/v6/collection/itemlist',
+        query: {'id': id},
       );
     } else {
       page = RawEntityPage(api: widget.api, entity: item);
@@ -2460,10 +3072,13 @@ class _AccountPageState extends State<AccountPage> {
   String _routeTitle(String path) => switch (path) {
     '/v6/topic/myFollowTopicList' => '我关注的话题',
     '/v6/member/recentHistoryList' => '最近访问',
+    '/v6/user/hitHistoryList' => '浏览历史',
     '/v6/collection/myCollectionList' => '我的收藏单',
+    '/v6/collection/list' => '我的收藏单',
     '/v6/user/questionAndAnswerList' => '我的问答',
     '/v6/user/feedList' => '我的动态',
     '/v6/user/myFollowList' => '我的关注',
+    '/v6/user/followList' => '我的关注',
     '/v6/user/myFansList' => '我的粉丝',
     '/v6/user/htmlFeedList' => '我的图文',
     '/v6/apk/developerAppList' => '开发者应用',
@@ -2491,7 +3106,7 @@ class _AccountPageState extends State<AccountPage> {
               title: const Text('我的关注'),
               onTap: () {
                 Navigator.pop(context);
-                _openRoute('/v6/user/myFollowList', const {});
+                _openFollowingList();
               },
             ),
             ListTile(
@@ -2499,9 +3114,47 @@ class _AccountPageState extends State<AccountPage> {
               title: const Text('我的粉丝'),
               onTap: () {
                 Navigator.pop(context);
-                _openRoute('/v6/user/myFansList', const {});
+                if (widget.api.isAnonymous) {
+                  final uid = widget.api.localAccount.publicIdentity?['uid'];
+                  if (uid is String && uid.isNotEmpty) {
+                    _openRoute('/v6/user/userFansList', {'uid': uid});
+                  } else {
+                    _showLoginRequired();
+                  }
+                } else {
+                  _openRoute('/v6/user/myFansList', const {});
+                }
               },
             ),
+            if (widget.api.isAnonymous)
+              ListTile(
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('编辑本地匿名资料'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.of(this.context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => LocalProfilePage(api: widget.api),
+                    ),
+                  );
+                },
+              ),
+            if (widget.api.localAccount.publicIdentity != null)
+              ListTile(
+                leading: const Icon(Icons.cloud_off_outlined),
+                title: const Text('取消公开主页身份'),
+                onTap: () {
+                  Navigator.pop(context);
+                  widget.api.localAccount
+                      .clearPublicIdentity()
+                      .then((_) {
+                        if (mounted) _snack(this.context, '已恢复本地匿名资料显示');
+                      })
+                      .catchError((Object error) {
+                        if (mounted) _snack(this.context, error.toString());
+                      });
+                },
+              ),
           ],
         ),
       ),
@@ -2521,7 +3174,7 @@ class _AccountPageState extends State<AccountPage> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-            AppSectionCard(
+            _accountSurface(
               child: Column(
                 children: [
                   for (var i = 0; i < children.length; i++) ...[
@@ -2546,36 +3199,46 @@ class _ShortcutButton extends StatelessWidget {
   const _ShortcutButton({
     required this.icon,
     required this.label,
-    required this.onTap,
+    this.onTap,
     this.color,
+    this.tooltip,
   });
   final IconData icon;
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final Color? color;
+  final String? tooltip;
 
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    borderRadius: BorderRadius.circular(18),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 2),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            color: color ?? Theme.of(context).colorScheme.primary,
-            size: 25,
+  Widget build(BuildContext context) => Tooltip(
+    message: tooltip ?? label,
+    child: Semantics(
+      button: true,
+      enabled: onTap != null,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                color: color ?? Theme.of(context).colorScheme.primary,
+                size: 24,
+              ),
+              const SizedBox(height: 5),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(fontSize: 13),
+              ),
+            ],
           ),
-          const SizedBox(height: 5),
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
+        ),
       ),
     ),
   );
@@ -2949,10 +3612,7 @@ class _CreateCollectionRow extends StatelessWidget {
 }
 
 class _FeatureRow extends StatelessWidget {
-  const _FeatureRow({
-    required this.api,
-    required this.item,
-  });
+  const _FeatureRow({required this.api, required this.item});
   final CoolapkApi api;
   final _RouteItem item;
 
@@ -2965,17 +3625,17 @@ class _FeatureRow extends StatelessWidget {
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     ),
     onTap: () {
-          Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => ApiListPage(
-                api: api,
-                title: item.label,
-                path: item.path,
-                query: item.query,
-              ),
-            ),
-          );
-        },
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => ApiListPage(
+            api: api,
+            title: item.label,
+            path: item.path,
+            query: item.query,
+          ),
+        ),
+      );
+    },
   );
 }
 

@@ -1,3 +1,5 @@
+import 'features/account/local_account_page.dart';
+
 import 'dart:async';
 import 'dart:io';
 
@@ -5,6 +7,7 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'core/network/coolapk_api.dart';
 import 'core/network/http_overrides.dart';
@@ -20,12 +23,19 @@ import 'features/settings/app_settings_page.dart';
 import 'features/shared/api_list_page.dart';
 import 'features/shell/main_pages.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   HttpOverrides.global = AppHttpOverrides();
   PaintingBinding.instance.imageCache.maximumSize = 3000;
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 512 * 1024 * 1024; // 512MB
-  runApp(const ProviderScope(child: GreennoteApp()));
+  PaintingBinding.instance.imageCache.maximumSizeBytes =
+      512 * 1024 * 1024; // 512MB
+  await LiquidGlassWidgets.initialize(enablePerformanceMonitor: false);
+  runApp(
+    LiquidGlassWidgets.wrap(
+      child: const ProviderScope(child: GreennoteApp()),
+      brightnessResolver: Theme.maybeBrightnessOf,
+    ),
+  );
 }
 
 class GreennoteApp extends ConsumerWidget {
@@ -137,8 +147,10 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
 
   void _selectTab(int index) {
     if (index == _selectedIndex) return;
+    final isFirstVisit = !_visitedTabs.contains(index);
     HapticFeedbackUtil.selection();
-    if (MediaQuery.disableAnimationsOf(context)) {
+    if (isFirstVisit || MediaQuery.disableAnimationsOf(context)) {
+      // Keep a page's first layout out of the two-page transition composite.
       _tabTransitionController.stop();
       setState(() {
         _visitedTabs.add(index);
@@ -210,9 +222,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
         api: api,
         onTopBarChanged: (tabBar) => _setPageTabBar(0, tabBar),
         onLoginRequested: () async {
-          await Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(builder: (_) => CookieLoginPage(api: api)),
-          );
+          await showLoginOptions(context, api);
         },
       ),
       DigitalPage(
@@ -314,32 +324,37 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
       onTap: () => Navigator.of(context).push<void>(
         MaterialPageRoute<void>(builder: (_) => SearchHubPage(api: client)),
       ),
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest
-              .withValues(alpha: 0.65),
-          borderRadius: BorderRadius.circular(19),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                hint,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+      child: SizedBox(
+        height: 48,
+        child: Center(
+          child: Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    hint,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.search_rounded,
+                  size: 20,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
-              ),
+              ],
             ),
-            Icon(
-              Icons.search_rounded,
-              size: 20,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -369,11 +384,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                 builder: (_) => AppSettingsPage(
                   api: client,
                   onOpenCookieManager: () async {
-                    await Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) => CookieLoginPage(api: client),
-                      ),
-                    );
+                    await showLoginOptions(context, client);
                   },
                   onAccountChanged: _accountChanged,
                 ),
@@ -402,7 +413,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
     }
 
     return ReviewFrostedAppBar(
-      titleSpacing: 10,
+      titleSpacing: 8,
       bottom: _currentPageTabBar(),
       leadingWidth: 54,
       leading: Padding(
@@ -410,13 +421,26 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
         child: Center(
           child: GestureDetector(
             onTap: () => _selectTab(3),
-            child: AppAvatar(
-              url: client.currentUserAvatar.isNotEmpty
-                  ? client.currentUserAvatar
-                  : null,
-              api: client,
-              size: 34,
-            ),
+            child:
+                client.isAnonymous && client.localAccount.publicIdentity == null
+                ? LocalAvatar(
+                    avatar: client.localAccount.avatar,
+                    name: client.localAccount.name,
+                    radius: 17,
+                  )
+                : AppAvatar(
+                    url: client.isAnonymous
+                        ? (client.localAccount.publicIdentity?['userAvatar']
+                              as String?)
+                        : client.currentUserAvatar,
+                    name: client.isAnonymous
+                        ? (client.localAccount.publicIdentity?['username']
+                                  as String? ??
+                              '')
+                        : '',
+                    api: client,
+                    size: 34,
+                  ),
           ),
         ),
       ),
@@ -435,42 +459,67 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
     final floating = ref.watch(
       appSettingsProvider.select((s) => s.useFloatingNavBar),
     );
-    return api.when(
-      loading: () => const _StartupScaffold(),
-      error: (error, _) => _StartupScaffold(
-        error: error.toString(),
-        onRetry: () => ref.invalidate(coolapkApiProvider),
-      ),
-      data: (client) {
-        if (!identical(_initializedApi, client)) {
-          _initializedApi = client;
-          unawaited(
-            client.loadHomeTabRoutes().then<void>((_) {}).catchError((_) {}),
-          );
-        }
-        return Scaffold(
-          extendBody: floating,
-          appBar: _buildAppBar(context, client),
-          body: _buildTabContent(context, client),
-          bottomNavigationBar: ReviewNavigationBar(
-            selectedIndex: _selectedIndex >= 2
-                ? _selectedIndex + 1
-                : _selectedIndex,
-            hasBottomInset: MediaQuery.paddingOf(context).bottom > 0,
-            onSelected: (index) {
-              if (index == 2) {
-                Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => ComposeFeedPage(api: client),
-                  ),
-                );
-              } else {
-                _selectTab(index > 2 ? index - 1 : index);
-              }
-            },
-          ),
-        );
+    final useLiquidGlassNavBar = ref.watch(
+      appSettingsProvider.select((s) => s.useLiquidGlassNavBar),
+    );
+    return PopScope<Object?>(
+      canPop: _selectedIndex == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectedIndex != 0) _selectTab(0);
       },
+      child: api.when(
+        loading: () => const _StartupScaffold(),
+        error: (error, _) => _StartupScaffold(
+          error: error.toString(),
+          onRetry: () => ref.invalidate(coolapkApiProvider),
+        ),
+        data: (client) {
+          if (!identical(_initializedApi, client)) {
+            _initializedApi = client;
+            unawaited(
+              client.loadHomeTabRoutes().then<void>((_) {}).catchError((_) {}),
+            );
+          }
+          return ListenableBuilder(
+            listenable: client.localAccount,
+            builder: (context, _) => GlassPage(
+              child: Scaffold(
+                extendBody: floating,
+                appBar: _buildAppBar(context, client),
+                // Skia fallback needs the live page registered as its backdrop.
+                body: GlassBackgroundSource(
+                  enabled: floating && useLiquidGlassNavBar,
+                  child: KeyedSubtree(
+                    key: ValueKey('${client.isAnonymous}:${client.hasCookie}'),
+                    child: _buildTabContent(context, client),
+                  ),
+                ),
+                bottomNavigationBar: ReviewNavigationBar(
+                  selectedIndex: _selectedIndex >= 2
+                      ? _selectedIndex + 1
+                      : _selectedIndex,
+                  hasBottomInset: MediaQuery.paddingOf(context).bottom > 0,
+                  onSelected: (index) {
+                    if (index == 2) {
+                      if (client.isAnonymous) {
+                        AppToast.show(context, client.loginRequiredMessage);
+                        return;
+                      }
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => ComposeFeedPage(api: client),
+                        ),
+                      );
+                    } else {
+                      _selectTab(index > 2 ? index - 1 : index);
+                    }
+                  },
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

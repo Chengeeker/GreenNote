@@ -303,13 +303,19 @@ class PersonalizationPage extends ConsumerWidget {
                               '应用字体大小',
                               style: TextStyle(
                                 fontSize: 16,
-                                fontWeight: context.adjustWeight(FontWeight.w600),
+                                fontWeight: context.adjustWeight(
+                                  FontWeight.w600,
+                                ),
                                 height: 1.35,
                                 letterSpacing: 0.0,
                               ),
                             ),
                             Text(
-                              '当前缩放：${(themeState.fontScale * 100).round()}%${themeState.fontScale == 1.0 ? ' (标准默认)' : themeState.fontScale < 1.0 ? ' (精简紧凑)' : ' (放大阅读)'}',
+                              '当前缩放：${(themeState.fontScale * 100).round()}%${themeState.fontScale == 1.0
+                                  ? ' (标准默认)'
+                                  : themeState.fontScale < 1.0
+                                  ? ' (精简紧凑)'
+                                  : ' (放大阅读)'}',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: colorScheme.onSurfaceVariant,
@@ -380,27 +386,28 @@ class PersonalizationPage extends ConsumerWidget {
                   child: Wrap(
                     spacing: 8,
                     runSpacing: 6,
-                    children: [
-                      {'label': '小 (85%)', 'scale': 0.85},
-                      {'label': '偏小 (90%)', 'scale': 0.90},
-                      {'label': '默认 (100%)', 'scale': 1.00},
-                      {'label': '偏大 (110%)', 'scale': 1.10},
-                      {'label': '大 (120%)', 'scale': 1.20},
-                    ].map((item) {
-                      final scale = item['scale'] as double;
-                      final isSelected =
-                          (themeState.fontScale - scale).abs() < 0.02;
-                      return ChoiceChip(
-                        label: Text(item['label'] as String),
-                        selected: isSelected,
-                        onSelected: (_) {
-                          HapticFeedbackUtil.light();
-                          ref
-                              .read(appSettingsProvider.notifier)
-                              .setFontScale(scale);
-                        },
-                      );
-                    }).toList(),
+                    children:
+                        [
+                          {'label': '小 (85%)', 'scale': 0.85},
+                          {'label': '偏小 (90%)', 'scale': 0.90},
+                          {'label': '默认 (100%)', 'scale': 1.00},
+                          {'label': '偏大 (110%)', 'scale': 1.10},
+                          {'label': '大 (120%)', 'scale': 1.20},
+                        ].map((item) {
+                          final scale = item['scale'] as double;
+                          final isSelected =
+                              (themeState.fontScale - scale).abs() < 0.02;
+                          return ChoiceChip(
+                            label: Text(item['label'] as String),
+                            selected: isSelected,
+                            onSelected: (_) {
+                              HapticFeedbackUtil.light();
+                              ref
+                                  .read(appSettingsProvider.notifier)
+                                  .setFontScale(scale);
+                            },
+                          );
+                        }).toList(),
                   ),
                 ),
                 const Divider(height: 1, indent: 16, endIndent: 16),
@@ -507,6 +514,26 @@ class PersonalizationPage extends ConsumerWidget {
                         .setFloatingNavBar(val);
                   },
                 ),
+                if (themeState.useFloatingNavBar)
+                  ReviewSwitchTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 3,
+                    ),
+                    leading: Icon(
+                      Icons.blur_on_rounded,
+                      color: colorScheme.primary,
+                    ),
+                    title: '使用液态玻璃效果',
+                    summary: '为悬浮底栏启用实验性玻璃材质',
+                    value: themeState.useLiquidGlassNavBar,
+                    onChanged: (val) {
+                      HapticFeedbackUtil.light();
+                      ref
+                          .read(appSettingsProvider.notifier)
+                          .setLiquidGlassNavBar(val);
+                    },
+                  ),
               ],
             ),
           ),

@@ -178,6 +178,11 @@ class WebDavService {
       );
       final response = await _dio.get<String>(
         uri.toString(),
+        onReceiveProgress: (received, total) {
+          if (received > 20 * 1024 * 1024 || total > 20 * 1024 * 1024) {
+            throw const FormatException('备份超过 20 MB，无法恢复');
+          }
+        },
         options: Options(
           responseType: ResponseType.plain,
           headers: {'Authorization': _authorization(username, password)},

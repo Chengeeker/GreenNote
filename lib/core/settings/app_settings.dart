@@ -1,3 +1,5 @@
+import '../accounts/local_account.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -15,6 +17,7 @@ class AppSettingsState {
     this.themeSeedArgb = 0xFF2E7D32,
     this.enableHaptics = true,
     this.useFloatingNavBar = true,
+    this.useLiquidGlassNavBar = true,
     this.isPureBlackDark = false,
     this.useCustomFontWeight = false,
     this.customFontWeightDelta = 0,
@@ -27,6 +30,7 @@ class AppSettingsState {
   final int themeSeedArgb;
   final bool enableHaptics;
   final bool useFloatingNavBar;
+  final bool useLiquidGlassNavBar;
   final bool isPureBlackDark;
   final bool useCustomFontWeight;
   final int customFontWeightDelta;
@@ -44,6 +48,7 @@ class AppSettingsState {
     int? themeSeedArgb,
     bool? enableHaptics,
     bool? useFloatingNavBar,
+    bool? useLiquidGlassNavBar,
     bool? isPureBlackDark,
     bool? useCustomFontWeight,
     int? customFontWeightDelta,
@@ -55,6 +60,7 @@ class AppSettingsState {
     themeSeedArgb: themeSeedArgb ?? this.themeSeedArgb,
     enableHaptics: enableHaptics ?? this.enableHaptics,
     useFloatingNavBar: useFloatingNavBar ?? this.useFloatingNavBar,
+    useLiquidGlassNavBar: useLiquidGlassNavBar ?? this.useLiquidGlassNavBar,
     isPureBlackDark: isPureBlackDark ?? this.isPureBlackDark,
     useCustomFontWeight: useCustomFontWeight ?? this.useCustomFontWeight,
     customFontWeightDelta: customFontWeightDelta ?? this.customFontWeightDelta,
@@ -79,6 +85,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
   static const _dynamicColorKey = 'greennote.dynamic_color';
   static const _themeSeedKey = 'greennote.theme_seed_argb';
   static const _floatingKey = 'greennote.floating_nav';
+  static const _liquidGlassNavKey = 'greennote.liquid_glass_nav';
   static const _hapticsKey = 'greennote.enable_haptics';
   static const _webDavUrlKey = 'greennote.webdav.url';
   static const _webDavUsernameKey = 'greennote.webdav.username';
@@ -101,6 +108,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
           0xFF2E7D32,
       enableHaptics: preferences.getBool(_hapticsKey) ?? true,
       useFloatingNavBar: preferences.getBool(_floatingKey) ?? true,
+      useLiquidGlassNavBar: preferences.getBool(_liquidGlassNavKey) ?? true,
       isPureBlackDark: preferences.getBool(_pureBlackKey) ?? false,
       useCustomFontWeight: preferences.getBool(_customFontKey) ?? false,
       customFontWeightDelta: preferences.getInt(_fontDeltaKey) ?? 0,
@@ -211,6 +219,13 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     state = state.copyWith(useFloatingNavBar: value);
   }
 
+  Future<void> setLiquidGlassNavBar(bool value) async {
+    await _ready;
+    final prefs = await _preferences;
+    await prefs.setBool(_liquidGlassNavKey, value);
+    state = state.copyWith(useLiquidGlassNavBar: value);
+  }
+
   Future<void> setHaptics(bool value) async {
     await _ready;
     HapticFeedbackUtil.isEnabled = value;
@@ -247,7 +262,8 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     await _ready;
     return {
       'app': 'Greennote',
-      'version': 1,
+      'version': 2,
+      'localAccount': LocalAccount(await _preferences).export(),
       'exported_at': DateTime.now().toIso8601String(),
       'preferences': {
         'themeMode': switch (state.themeMode) {
@@ -259,6 +275,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
         'themeSeedArgb': state.themeSeedArgb,
         'enableHaptics': state.enableHaptics,
         'floatingNavBar': state.useFloatingNavBar,
+        'liquidGlassNavBar': state.useLiquidGlassNavBar,
         'pureBlackDark': state.isPureBlackDark,
         'useCustomFontWeight': state.useCustomFontWeight,
         'customFontWeightDelta': state.customFontWeightDelta,
@@ -271,9 +288,13 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
 
   Future<Map<String, String>> restoreBackup(Map<String, dynamic> backup) async {
     await _ready;
-    if (backup['app'] != 'Greennote' || backup['version'] != 1) {
+    if (backup['app'] != 'Greennote' ||
+        !const [1, 2].contains(backup['version'])) {
       throw const FormatException('这不是兼容的 Greennote 设置备份');
     }
+    final localData = backup['version'] == 2
+        ? LocalAccount.validate(backup['localAccount'])
+        : null;
     final raw = backup['preferences'];
     if (raw is! Map) throw const FormatException('备份中缺少设置内容');
     if (raw.keys.any((key) => key is! String)) {
@@ -300,6 +321,9 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     final floating = values.containsKey('floatingNavBar')
         ? values['floatingNavBar']
         : true;
+    final liquidGlassNav = values.containsKey('liquidGlassNavBar')
+        ? values['liquidGlassNavBar']
+        : true;
     final pureBlack = values.containsKey('pureBlackDark')
         ? values['pureBlackDark']
         : false;
@@ -321,6 +345,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
         seed > 0xFFFFFFFF ||
         haptics is! bool ||
         floating is! bool ||
+        liquidGlassNav is! bool ||
         pureBlack is! bool ||
         customFont is! bool ||
         fontDelta is! int ||
@@ -335,11 +360,15 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     }
 
     final prefs = await _preferences;
+    if (localData != null) {
+      await LocalAccount(prefs).restoreWithRollback(localData);
+    }
     await prefs.setInt(_themeModeKey, mode);
     await prefs.setBool(_dynamicColorKey, dynamicColor);
     await prefs.setString(_themeSeedKey, seed.toRadixString(16));
     await prefs.setBool(_hapticsKey, haptics);
     await prefs.setBool(_floatingKey, floating);
+    await prefs.setBool(_liquidGlassNavKey, liquidGlassNav);
     await prefs.setBool(_pureBlackKey, pureBlack);
     await prefs.setBool(_customFontKey, customFont);
     await prefs.setInt(_fontDeltaKey, fontDelta);
@@ -356,6 +385,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
       themeSeedArgb: seed,
       enableHaptics: haptics,
       useFloatingNavBar: floating,
+      useLiquidGlassNavBar: liquidGlassNav,
       isPureBlackDark: pureBlack,
       useCustomFontWeight: customFont,
       customFontWeightDelta: fontDelta,

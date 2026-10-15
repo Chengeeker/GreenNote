@@ -1,3 +1,4 @@
+import '../../core/network/coolapk_api.dart';
 import '../../core/utils/app_dialog.dart';
 import '../../core/design_system/components/review_frosted_app_bar.dart';
 
@@ -151,7 +152,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       if (mounted) {
         setState(
           () => _status = success
-              ? 'Greennote 设置已备份到 WebDAV。'
+              ? '匿名账户与设置已备份到 WebDAV。'
               : '备份失败，请检查连接、目录权限和服务器空间。',
         );
       }
@@ -175,7 +176,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       builder: (context) => AlertDialog(
         title: const Text('恢复 WebDAV 备份？'),
         content: const Text(
-          '云端备份会覆盖当前的明暗模式、主题颜色、触感反馈和 WebDAV 地址设置。酷安 Cookie 与 WebDAV 密码不会备份或恢复。',
+          '云端快照将替换本地匿名账户及应用设置；恢复前的匿名数据会保留，可在匿名账户页找回。旧版设置备份不会改动匿名账户。酷安 Cookie 与 WebDAV 密码不会备份或恢复。',
         ),
         actions: [
           TextButton(
@@ -213,6 +214,8 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       final config = await ref
           .read(appSettingsProvider.notifier)
           .restoreBackup(backup);
+      final api = await ref.read(coolapkApiProvider.future);
+      api.localAccount.reload();
       final restoredUrl = config['url'] ?? '';
       final restoredUsername = config['username'] ?? '';
       String comparableUrl(String value) {
@@ -239,7 +242,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       setState(
         () => _status = credentialsChanged
             ? '设置已恢复；服务器或用户名已更改，请重新输入 WebDAV 密码。'
-            : '备份设置已恢复。',
+            : '备份已恢复；匿名数据副本可在匿名账户页找回。',
       );
     } catch (error) {
       if (mounted) {
@@ -309,7 +312,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '备份主题、字体、底栏与触感设置；酷安 Cookie、Token 与 WebDAV 密码不会上传。',
+                          '备份匿名账户头像、用户名、本地关注、收藏文字及图片地址，以及应用设置。酷安 Cookie、Token 与 WebDAV 密码不会上传。图片文件不包含在内；这是手动快照，多设备请先恢复再修改及备份。',
                           style: TextStyle(
                             fontSize: 14,
                             color: colorScheme.onSurfaceVariant,

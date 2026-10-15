@@ -2,12 +2,16 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_refresh/easy_refresh.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'video_player_page.dart';
 
 import '../../core/widgets/review_refresh_header.dart';
 import '../../core/design_system/components/review_card.dart';
+import '../../core/design_system/components/review_navigation_bar.dart';
+import '../../core/settings/app_settings.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_avatar.dart';
 import '../../core/widgets/cached_network_image.dart';
@@ -573,6 +577,9 @@ class _FeedListPageState extends State<_FeedListPage>
   Widget build(BuildContext context) {
     super.build(context);
     if (widget.channel.id == 'topic') return _HomeTopicPage(api: widget.api);
+    if (widget.channel.id == 'follow' && widget.api.isAnonymous) {
+      return _LocalFollowTimeline(api: widget.api);
+    }
     if (widget.channel.id == 'follow' && !widget.api.hasCookie) {
       return _FollowLoginPrompt(onLogin: _login);
     }
@@ -611,57 +618,514 @@ class _FeedListPageState extends State<_FeedListPage>
     return EasyRefresh(
       header: reviewDefaultRefreshHeader,
       onRefresh: () => _load(refresh: true),
-      child: ListView.builder(
-        controller: _scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          0,
-          6,
-          0,
-          20 + MediaQuery.paddingOf(context).bottom,
-        ),
-        itemCount: _feeds.length + (showHeader ? 1 : 0) + 1,
-        itemBuilder: (context, index) {
-          if (showHeader && index == 0) {
-            return HomeChannelCardsHeader(
+      child: filterHorizontalScrollNotifications(
+        ListView.builder(
+          controller: _scrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(
+            0,
+            6,
+            0,
+            20 + MediaQuery.paddingOf(context).bottom,
+          ),
+          itemCount: _feeds.length + (showHeader ? 1 : 0) + 1,
+          itemBuilder: (context, index) {
+            if (showHeader && index == 0) {
+              return HomeChannelCardsHeader(
+                api: widget.api,
+                cards: _banners,
+                channelId: widget.channel.id,
+                activeCategoryIndex: _activeCategoryIndex,
+                onSelectCategory: _onSelectCategory,
+              );
+            }
+            final feedIndex = index - (showHeader ? 1 : 0);
+            if (feedIndex == _feeds.length) {
+              if (_error != null) {
+                if (_isCaptchaError(_error!)) return const SizedBox.shrink();
+                return TextButton.icon(
+                  onPressed: _loadMore,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: Text('加载失败，点击重试：$_error'),
+                );
+              }
+              if (_busy) {
+                return const Padding(
+                  padding: EdgeInsets.all(18),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              return const SizedBox(height: 12);
+            }
+            final rankNumber = (isRankChannel && feedIndex < 20)
+                ? (feedIndex + 1)
+                : null;
+            return FeedCard(
               api: widget.api,
-              cards: _banners,
-              channelId: widget.channel.id,
-              activeCategoryIndex: _activeCategoryIndex,
-              onSelectCategory: _onSelectCategory,
+              feed: _feeds[feedIndex],
+              rankNumber: rankNumber,
+              isHeadline: widget.channel.id == 'headline',
             );
-          }
-          final feedIndex = index - (showHeader ? 1 : 0);
-          if (feedIndex == _feeds.length) {
-            if (_error != null) {
-              if (_isCaptchaError(_error!)) return const SizedBox.shrink();
-              return TextButton.icon(
-                onPressed: _loadMore,
-                icon: const Icon(Icons.refresh_rounded),
-                label: Text('加载失败，点击重试：$_error'),
-              );
-            }
-            if (_busy) {
-              return const Padding(
-                padding: EdgeInsets.all(18),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            return const SizedBox(height: 12);
-          }
-          final rankNumber = (isRankChannel && feedIndex < 20)
-              ? (feedIndex + 1)
-              : null;
-          return FeedCard(
-            api: widget.api,
-            feed: _feeds[feedIndex],
-            rankNumber: rankNumber,
-            isHeadline: widget.channel.id == 'headline',
-          );
-        },
+          },
+        ),
       ),
     );
   }
+}
+
+class _LocalFollowTimeline extends StatefulWidget {
+  const _LocalFollowTimeline({required this.api});
+  final CoolapkApi api;
+
+  @override
+  State<_LocalFollowTimeline> createState() => _LocalFollowTimelineState();
+}
+
+class _LocalFollowTimelineState extends State<_LocalFollowTimeline> {
+  static const _requestConcurrency = 3;
+  static const _followCacheDuration = Duration(minutes: 5);
+  final _scrollController = ScrollController();
+  final _feedsById = <String, CoolapkFeed>{};
+  final _loadedPages = <String, int>{};
+  final _hasMoreByUser = <String, bool>{};
+  final _firstItemsByUser = <String, String>{};
+  final _lastItemsByUser = <String, String>{};
+  List<CoolapkFeed> _feeds = [];
+  List<String> _userIds = [];
+  String _sourcePublicUid = '';
+  String _cachedFollowUid = '';
+  List<String> _cachedFollowIds = const [];
+  DateTime? _followCacheTime;
+  String? _sourceError;
+  int _generation = 0;
+  int _progress = 0;
+  int _total = 0;
+  int _failed = 0;
+  bool _loading = false;
+  bool _readingFollowing = false;
+  bool _loadingMore = false;
+  bool _refreshPending = false;
+  bool get _hasMore => _hasMoreByUser.values.any((hasMore) => hasMore);
+
+  @override
+  void initState() {
+    super.initState();
+    _sourcePublicUid = _activePublicUid();
+    _userIds = _sourcePublicUid.isEmpty ? _followedUserIds() : [];
+    widget.api.localAccount.addListener(_onAccountChanged);
+    _scrollController.addListener(_onScroll);
+    unawaited(_refresh(force: true));
+  }
+
+  @override
+  void didUpdateWidget(covariant _LocalFollowTimeline oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.api != widget.api) {
+      oldWidget.api.localAccount.removeListener(_onAccountChanged);
+      widget.api.localAccount.addListener(_onAccountChanged);
+      _sourcePublicUid = _activePublicUid();
+      unawaited(_refresh(force: true));
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.api.localAccount.removeListener(_onAccountChanged);
+    _scrollController
+      ..removeListener(_onScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  List<String> _followedUserIds() =>
+      widget.api.localAccount.follows.keys.toList(growable: false);
+
+  String _activePublicUid() {
+    if (!widget.api.isAnonymous) return '';
+    final uid = widget.api.localAccount.publicIdentity?['uid'];
+    return uid is String ? uid : '';
+  }
+
+  void _onAccountChanged() {
+    final publicUid = _activePublicUid();
+    if (publicUid != _sourcePublicUid) {
+      _sourcePublicUid = publicUid;
+      _userIds = publicUid.isEmpty ? _followedUserIds() : [];
+      unawaited(_refresh(force: true));
+      return;
+    }
+    if (publicUid.isNotEmpty) return;
+    final next = _followedUserIds();
+    var unchanged = next.length == _userIds.length;
+    for (var index = 0; unchanged && index < next.length; index++) {
+      unchanged = next[index] == _userIds[index];
+    }
+    if (unchanged) {
+      return;
+    }
+    _userIds = next;
+    unawaited(_refresh(force: true));
+  }
+
+  void _onScroll() {
+    if (_scrollController.hasClients &&
+        _scrollController.position.extentAfter < 650) {
+      unawaited(_loadMore());
+    }
+  }
+
+  Future<void> _refresh({bool force = false}) async {
+    if (force) {
+      _followCacheTime = null;
+      // Source changes must never leave another identity's timeline visible.
+      setState(() => _feeds = []);
+    }
+    if (_loading || _loadingMore) {
+      if (force) _refreshPending = true;
+      return;
+    }
+    final generation = ++_generation;
+    final publicUid = _activePublicUid();
+    setState(() {
+      _sourcePublicUid = publicUid;
+      _userIds = publicUid.isEmpty ? _followedUserIds() : [];
+      _feedsById.clear();
+      _loadedPages.clear();
+      _hasMoreByUser.clear();
+      _firstItemsByUser.clear();
+      _lastItemsByUser.clear();
+      _progress = 0;
+      _total = _userIds.length;
+      _failed = 0;
+      _sourceError = null;
+      _loading = true;
+      _readingFollowing = publicUid.isNotEmpty;
+      _loadingMore = false;
+    });
+    try {
+      final userIds = publicUid.isEmpty
+          ? _userIds
+          : await _loadPublicFollowIds(publicUid);
+      if (!mounted ||
+          generation != _generation ||
+          publicUid != _activePublicUid()) {
+        return;
+      }
+      setState(() {
+        _userIds = userIds;
+        _total = userIds.length;
+        _readingFollowing = false;
+        if (userIds.isEmpty) _feeds = [];
+      });
+      await _loadUserPages(
+        {for (final uid in userIds) uid: 1},
+        generation: generation,
+        sourcePublicUid: publicUid,
+        countProgress: true,
+      );
+      if (!mounted ||
+          generation != _generation ||
+          publicUid != _activePublicUid()) {
+        return;
+      }
+      setState(() => _loading = false);
+    } catch (error) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _sourceError = error.toString();
+        _readingFollowing = false;
+        _loading = false;
+      });
+    } finally {
+      if (mounted && generation == _generation && _loading) {
+        setState(() {
+          _loading = false;
+          _readingFollowing = false;
+        });
+      }
+      if (mounted && generation == _generation && _refreshPending) {
+        _refreshPending = false;
+        unawaited(_refresh(force: true));
+      }
+    }
+  }
+
+  Future<List<String>> _loadPublicFollowIds(String uid) async {
+    final cachedAt = _followCacheTime;
+    // shortcut: remote follow changes can take five minutes to appear.
+    if (_cachedFollowUid == uid &&
+        cachedAt != null &&
+        DateTime.now().difference(cachedAt) < _followCacheDuration) {
+      return _cachedFollowIds;
+    }
+    final userIds = <String>{};
+    var pageNumber = 1;
+    var firstItem = '';
+    var lastItem = '';
+    while (true) {
+      final page = await widget.api.getUserPage(
+        '/v6/user/followList',
+        uid,
+        pageNumber,
+        firstItem: firstItem,
+        lastItem: lastItem,
+      );
+      if (uid != _activePublicUid()) return const [];
+      final previousCount = userIds.length;
+      for (final user in page.items) {
+        final followedUid = '${user['uid'] ?? user['userId'] ?? ''}'.trim();
+        if (followedUid.isNotEmpty) userIds.add(followedUid);
+      }
+      if (page.items.isNotEmpty &&
+          pageNumber == 1 &&
+          userIds.length == previousCount) {
+        throw const CoolapkApiException('无法从公开关注列表中读取用户 UID');
+      }
+      if (!page.hasMore ||
+          page.items.isEmpty ||
+          userIds.length == previousCount) {
+        break;
+      }
+      firstItem = page.firstItem;
+      lastItem = page.lastItem;
+      pageNumber++;
+    }
+    _cachedFollowUid = uid;
+    _cachedFollowIds = userIds.toList(growable: false);
+    _followCacheTime = DateTime.now();
+    return _cachedFollowIds;
+  }
+
+  Future<void> _loadMore() async {
+    if (_loading || _loadingMore) return;
+    final nextPages = <String, int>{
+      for (final uid in _userIds)
+        if (_hasMoreByUser[uid] == true) uid: (_loadedPages[uid] ?? 1) + 1,
+    };
+    if (nextPages.isEmpty) return;
+    final generation = _generation;
+    setState(() => _loadingMore = true);
+    await _loadUserPages(
+      nextPages,
+      generation: generation,
+      sourcePublicUid: _sourcePublicUid,
+    );
+    if (mounted && generation == _generation) {
+      setState(() => _loadingMore = false);
+      if (_refreshPending) {
+        _refreshPending = false;
+        unawaited(_refresh(force: true));
+      }
+    }
+  }
+
+  Future<void> _loadUserPages(
+    Map<String, int> pages, {
+    required int generation,
+    required String sourcePublicUid,
+    bool countProgress = false,
+  }) async {
+    final entries = pages.entries.toList(growable: false);
+    final hadFeeds = _feeds.isNotEmpty;
+    for (
+      var offset = 0;
+      offset < entries.length;
+      offset += _requestConcurrency
+    ) {
+      final batch = entries.skip(offset).take(_requestConcurrency).toList();
+      final results = <(String, int, FeedPage?, Object?)>[];
+      await Future.wait(
+        batch.map((entry) async {
+          try {
+            final page = await widget.api.getUserFeedPage(
+              entry.key,
+              entry.value,
+              firstItem: _firstItemsByUser[entry.key] ?? '',
+              lastItem: _lastItemsByUser[entry.key] ?? '',
+            );
+            results.add((entry.key, entry.value, page, null));
+          } catch (error) {
+            results.add((entry.key, entry.value, null, error));
+          }
+        }),
+      );
+      if (!mounted ||
+          generation != _generation ||
+          sourcePublicUid != _activePublicUid()) {
+        return;
+      }
+      setState(() {
+        for (final (uid, pageNumber, page, _) in results) {
+          if (page == null) {
+            _failed++;
+            _hasMoreByUser[uid] = false;
+            continue;
+          }
+          _loadedPages[uid] = pageNumber;
+          _hasMoreByUser[uid] = page.hasMore;
+          _firstItemsByUser[uid] = page.firstItem;
+          _lastItemsByUser[uid] = page.lastItem;
+          for (final feed in page.items) {
+            if (feed.id.isEmpty) continue;
+            _feedsById[feed.id] = feed;
+          }
+        }
+        if (countProgress) _progress += batch.length;
+        // Keep the visible list stable while refreshing; sort once at completion.
+        if ((!hadFeeds && _feeds.isEmpty) ||
+            offset + batch.length == entries.length) {
+          final timestamps = {
+            for (final feed in _feedsById.values) feed.id: _timestamp(feed),
+          };
+          if (_feedsById.isNotEmpty || _failed == 0) {
+            _feeds = _feedsById.values.toList()
+              ..sort((left, right) {
+                final byDate = timestamps[right.id]!.compareTo(
+                  timestamps[left.id]!,
+                );
+                return byDate != 0 ? byDate : right.id.compareTo(left.id);
+              });
+          }
+        }
+      });
+    }
+  }
+
+  int _timestamp(CoolapkFeed feed) {
+    final value =
+        feed.raw['dateline'] ??
+        feed.raw['createTime'] ??
+        feed.raw['create_time'];
+    if (value is num) return value.toInt();
+    final text = value?.toString() ?? '';
+    return int.tryParse(text) ??
+        DateTime.tryParse(text)?.millisecondsSinceEpoch ??
+        0;
+  }
+
+  Widget _status(String text, {bool progress = false}) => SizedBox(
+    height: 260,
+    child: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (progress)
+            const SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
+          if (progress) const SizedBox(height: 14),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Text(text, textAlign: TextAlign.center),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => EasyRefresh(
+    header: reviewDefaultRefreshHeader,
+    onRefresh: () => _refresh(),
+    child: filterHorizontalScrollNotifications(
+      ListView.builder(
+        controller: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.only(
+          bottom: 20 + MediaQuery.paddingOf(context).bottom,
+        ),
+        itemCount: _feeds.length + 1,
+        itemBuilder: (context, index) {
+          if (index < _feeds.length) {
+            final feed = _feeds[index];
+            return FeedCard(
+              key: ValueKey(feed.id),
+              api: widget.api,
+              feed: feed,
+            );
+          }
+          if (_feeds.isEmpty) {
+            if (_loading) {
+              return _status(
+                _readingFollowing
+                    ? '正在读取 UID 对应的关注列表'
+                    : '正在汇总关注动态 $_progress/$_total',
+                progress: true,
+              );
+            }
+            if (_sourceError != null) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _status('读取 UID 对应的关注列表失败：$_sourceError'),
+                  TextButton(onPressed: _refresh, child: const Text('重试')),
+                ],
+              );
+            }
+            if (_userIds.isEmpty) {
+              return _status(
+                _sourcePublicUid.isNotEmpty
+                    ? '该 UID 暂时没有关注用户'
+                    : '在博主主页点击关注，最新动态会显示在这里',
+              );
+            }
+            if (_hasMore) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _status(
+                    _failed > 0 ? '$_failed 位用户暂时无法读取，可下拉重试' : '暂时没有较新的动态',
+                  ),
+                  TextButton(onPressed: _loadMore, child: const Text('加载更早动态')),
+                ],
+              );
+            }
+            if (_failed > 0) {
+              return _status('获取关注动态失败，向下拉动重试');
+            }
+            return _status('你关注的用户暂时没有发布动态');
+          }
+          if (_loading || _loadingMore) {
+            return ListTile(
+              leading: const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              title: Text(
+                _loading ? '正在汇总关注动态 $_progress/$_total' : '正在加载更早动态',
+              ),
+            );
+          }
+          if (_sourceError != null) {
+            return ListTile(title: Text('刷新关注列表失败，已保留现有动态：$_sourceError'));
+          }
+          if (_hasMore) {
+            return Padding(
+              padding: const EdgeInsets.all(12),
+              child: Center(
+                child: TextButton(
+                  onPressed: _loadMore,
+                  child: Text(
+                    _failed > 0 ? '继续加载（$_failed 位用户暂时不可用）' : '加载更早动态',
+                  ),
+                ),
+              ),
+            );
+          }
+          if (_failed > 0) {
+            return ListTile(title: Text('$_failed 位用户的动态加载失败，下拉可重试'));
+          }
+          return const Padding(
+            padding: EdgeInsets.all(18),
+            child: Center(child: Text('没有更多动态')),
+          );
+        },
+      ),
+    ),
+  );
 }
 
 class _FollowLoginPrompt extends StatelessWidget {
@@ -985,7 +1449,7 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
                     child: InkWell(
                       onTap: () {
                         HapticFeedbackUtil.selection();
-                        _openHeadlineTarget(context, widget.api, item);
+                        openHeadlineTarget(context, widget.api, item);
                       },
                       child: CachedNetworkImage(
                         normalizeCoolapkImageUrl(image),
@@ -1476,23 +1940,25 @@ class _ChannelIconGridCardTwoPageState
         children: [
           SizedBox(
             height: 78,
-            child: PageView.builder(
-              itemCount: pageCount,
-              onPageChanged: (page) => setState(() => _currentPage = page),
-              itemBuilder: (context, pageIndex) {
-                final start = pageIndex * 5;
-                final end = (start + 5).clamp(0, items.length);
-                final pageItems = items.sublist(start, end);
+            child: filterHorizontalScrollNotifications(
+              PageView.builder(
+                itemCount: pageCount,
+                onPageChanged: (page) => setState(() => _currentPage = page),
+                itemBuilder: (context, pageIndex) {
+                  final start = pageIndex * 5;
+                  final end = (start + 5).clamp(0, items.length);
+                  final pageItems = items.sublist(start, end);
 
-                return Row(
-                  children: [
-                    for (final item in pageItems)
-                      Expanded(child: _buildGridItem(context, item)),
-                    for (var i = 0; i < 5 - pageItems.length; i++)
-                      const Expanded(child: SizedBox.shrink()),
-                  ],
-                );
-              },
+                  return Row(
+                    children: [
+                      for (final item in pageItems)
+                        Expanded(child: _buildGridItem(context, item)),
+                      for (var i = 0; i < 5 - pageItems.length; i++)
+                        const Expanded(child: SizedBox.shrink()),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
           if (pageCount > 1) ...[
@@ -1542,7 +2008,7 @@ class _ChannelIconGridCardTwoPageState
       borderRadius: BorderRadius.circular(12),
       onTap: () {
         HapticFeedbackUtil.selection();
-        _openHeadlineTarget(context, widget.api, item);
+        openHeadlineTarget(context, widget.api, item);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1661,7 +2127,7 @@ class _ChannelIconGridCardSingleRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                     onTap: () {
                       HapticFeedbackUtil.selection();
-                      _openHeadlineTarget(context, api, item);
+                      openHeadlineTarget(context, api, item);
                     },
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -1766,7 +2232,7 @@ class _ChannelMiniScrollCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(18),
               onTap: () {
                 HapticFeedbackUtil.selection();
-                _openHeadlineTarget(context, api, item);
+                openHeadlineTarget(context, api, item);
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(
@@ -2204,7 +2670,7 @@ class _HotNewsMiniGridCardState extends State<_HotNewsMiniGridCard> {
       borderRadius: BorderRadius.circular(8),
       onTap: () {
         HapticFeedbackUtil.selection();
-        _openHeadlineTarget(context, widget.api, targetItem);
+        openHeadlineTarget(context, widget.api, targetItem);
       },
       child: Row(
         children: [
@@ -2624,7 +3090,7 @@ class _VideoFilterBar extends StatelessWidget {
   }
 }
 
-void _openHeadlineTarget(
+void openHeadlineTarget(
   BuildContext context,
   CoolapkApi api,
   Map<String, dynamic> item,
@@ -2808,6 +3274,20 @@ void _openHeadlineTarget(
   if (uri == null) return;
 
   final path = uri.path;
+
+  if (path == '/feed/headline' || path == '/v6/main/headline') {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ApiListPage(
+          api: api,
+          title: title.isNotEmpty ? title : '今日酷安',
+          path: '/v6/main/headline',
+          query: uri.queryParameters,
+        ),
+      ),
+    );
+    return;
+  }
 
   if (path.startsWith('/feed/')) {
     final segments = path.substring('/feed/'.length).split('/');
@@ -3089,35 +3569,37 @@ class _SearchPageState extends State<SearchPage>
     return EasyRefresh(
       header: reviewDefaultRefreshHeader,
       onRefresh: () => _submit(_query),
-      child: ListView.builder(
-        controller: _scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(
-          0,
-          6,
-          0,
-          20 + MediaQuery.paddingOf(context).bottom,
+      child: filterHorizontalScrollNotifications(
+        ListView.builder(
+          controller: _scrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(
+            0,
+            6,
+            0,
+            20 + MediaQuery.paddingOf(context).bottom,
+          ),
+          itemCount: _feeds.length + 1,
+          itemBuilder: (context, index) {
+            if (index == _feeds.length) {
+              if (_error != null) {
+                return TextButton.icon(
+                  onPressed: _loadMore,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: Text('加载失败，点击重试：$_error'),
+                );
+              }
+              if (_busy) {
+                return const Padding(
+                  padding: EdgeInsets.all(18),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              return const SizedBox(height: 12);
+            }
+            return FeedCard(api: widget.api, feed: _feeds[index]);
+          },
         ),
-        itemCount: _feeds.length + 1,
-        itemBuilder: (context, index) {
-          if (index == _feeds.length) {
-            if (_error != null) {
-              return TextButton.icon(
-                onPressed: _loadMore,
-                icon: const Icon(Icons.refresh_rounded),
-                label: Text('加载失败，点击重试：$_error'),
-              );
-            }
-            if (_busy) {
-              return const Padding(
-                padding: EdgeInsets.all(18),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            return const SizedBox(height: 12);
-          }
-          return FeedCard(api: widget.api, feed: _feeds[index]);
-        },
       ),
     );
   }
@@ -3258,7 +3740,7 @@ class _FeedCardState extends State<FeedCard> {
 
   Future<void> _openQuickReply() async {
     if (!widget.api.hasCookie) {
-      AppToast.show(context, '请先登录酷安账号');
+      AppToast.show(context, widget.api.loginRequiredMessage);
       return;
     }
     var replyText = '';
@@ -3344,8 +3826,8 @@ class _FeedCardState extends State<FeedCard> {
     final isDetail = widget.isDetail;
     final innerContent = Padding(
       padding: isDetail
-          ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8)
-          : const EdgeInsets.fromLTRB(14, 14, 14, 10),
+          ? const EdgeInsets.symmetric(horizontal: 14, vertical: 6)
+          : const EdgeInsets.fromLTRB(12, 12, 12, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3394,8 +3876,9 @@ class _FeedCardState extends State<FeedCard> {
                             Icon(
                               Icons.keyboard_arrow_down_rounded,
                               size: 16,
-                              color: scheme.onSurfaceVariant
-                                  .withValues(alpha: 0.6),
+                              color: scheme.onSurfaceVariant.withValues(
+                                alpha: 0.6,
+                              ),
                             ),
                           ],
                         ),
@@ -3422,8 +3905,9 @@ class _FeedCardState extends State<FeedCard> {
                                   Icon(
                                     Icons.smartphone_rounded,
                                     size: 12,
-                                    color: scheme.onSurfaceVariant
-                                        .withValues(alpha: 0.8),
+                                    color: scheme.onSurfaceVariant.withValues(
+                                      alpha: 0.8,
+                                    ),
                                   ),
                                   const SizedBox(width: 2),
                                   Flexible(
@@ -3491,7 +3975,7 @@ class _FeedCardState extends State<FeedCard> {
                 ],
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
           ],
           Builder(
             builder: (context) {
@@ -3505,7 +3989,7 @@ class _FeedCardState extends State<FeedCard> {
                   feedTitle != feed.message &&
                   !isGenericFeedTitle) {
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(bottom: 6),
                   child: Text(
                     feedTitle,
                     style: TextStyle(
@@ -3558,10 +4042,11 @@ class _FeedCardState extends State<FeedCard> {
               }
               if (feed.pictures.isNotEmpty) {
                 return Padding(
-                  padding: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.only(top: 8),
                   child: _PictureGrid(
                     api: widget.api,
                     urls: feed.pictures,
+                    metadata: feed.pictureMetadata,
                     isDetail: widget.isDetail,
                   ),
                 );
@@ -3609,7 +4094,7 @@ class _FeedCardState extends State<FeedCard> {
                 ].join(' · ');
                 if (infoLine.isEmpty) return const SizedBox.shrink();
                 return Padding(
-                  padding: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.only(top: 8),
                   child: Text(
                     infoLine,
                     style: TextStyle(
@@ -3621,7 +4106,7 @@ class _FeedCardState extends State<FeedCard> {
               },
             ),
           if (!isDetail) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
@@ -3663,7 +4148,7 @@ class _FeedCardState extends State<FeedCard> {
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       elevation: 1,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(20),
         side: BorderSide.none,
       ),
       enableFeedback: false,
@@ -4546,8 +5031,9 @@ class _FeedTargetOrTagRow extends StatelessWidget {
     }
 
     // 4. Fallback: If not detail page, check if device exists to show device capsule pill
-    final device =
-        (raw['device_title'] ?? raw['device_name'] ?? '').toString().trim();
+    final device = (raw['device_title'] ?? raw['device_name'] ?? '')
+        .toString()
+        .trim();
     if (!isDetail) {
       if (device.isNotEmpty) {
         return Padding(
@@ -4624,44 +5110,51 @@ class _FeedTargetOrTagRow extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.only(top: 8),
-      child: Wrap(
-        spacing: 6,
-        runSpacing: 4,
-        children: [
-          for (final tag in tagsList)
-            InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () {
-                Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => TopicPage(api: api, tag: tag),
-                  ),
-                );
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: scheme.primary.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.tag_rounded, size: 13, color: scheme.primary),
-                    const SizedBox(width: 2),
-                    Text(
-                      tag,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: scheme.primary,
-                      ),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragUpdate: (_) {},
+        child: Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final tag in tagsList)
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () {
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => TopicPage(api: api, tag: tag),
                     ),
-                  ],
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.tag_rounded, size: 13, color: scheme.primary),
+                      const SizedBox(width: 2),
+                      Text(
+                        tag,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: scheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -4763,7 +5256,7 @@ class _TargetFollowPillState extends State<_TargetFollowPill> {
   Future<void> _toggle() async {
     if (_busy) return;
     if (!widget.api.hasCookie) {
-      AppToast.show(context, '请先登录');
+      AppToast.show(context, widget.api.loginRequiredMessage);
       return;
     }
     setState(() => _busy = true);
@@ -4847,7 +5340,7 @@ class _PostFeedPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         onTap: () {
           if (!api.hasCookie) {
-            AppToast.show(context, '请先登录');
+            AppToast.show(context, api.loginRequiredMessage);
             return;
           }
           final cleanTag = tag.replaceAll('#', '').trim();
@@ -4903,21 +5396,25 @@ class _AuthorFollowButton extends StatefulWidget {
 }
 
 class _AuthorFollowButtonState extends State<_AuthorFollowButton> {
-  late bool _following = widget.initialFollowing;
+  late bool _following = widget.api.isAnonymous
+      ? widget.api.localAccount.follows.containsKey(widget.uid)
+      : widget.initialFollowing;
   bool _busy = false;
 
   @override
   void didUpdateWidget(covariant _AuthorFollowButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initialFollowing != widget.initialFollowing) {
-      _following = widget.initialFollowing;
+      _following = widget.api.isAnonymous
+          ? widget.api.localAccount.follows.containsKey(widget.uid)
+          : widget.initialFollowing;
     }
   }
 
   Future<void> _toggle() async {
     if (_busy) return;
-    if (!widget.api.hasCookie) {
-      AppToast.show(context, '请先登录');
+    if (!widget.api.hasAccount) {
+      AppToast.show(context, widget.api.loginRequiredMessage);
       return;
     }
     setState(() => _busy = true);
@@ -5047,17 +5544,17 @@ class _TargetFollowButtonState extends State<_TargetFollowButton> {
   }
 }
 
-class FeedDetailPage extends StatefulWidget {
+class FeedDetailPage extends ConsumerStatefulWidget {
   const FeedDetailPage({required this.api, required this.feed, super.key});
 
   final CoolapkApi api;
   final CoolapkFeed feed;
 
   @override
-  State<FeedDetailPage> createState() => _FeedDetailPageState();
+  ConsumerState<FeedDetailPage> createState() => _FeedDetailPageState();
 }
 
-class _FeedDetailPageState extends State<FeedDetailPage> {
+class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   final _scroll = ScrollController();
   final _replyController = TextEditingController();
   Map<String, dynamic>? _detail;
@@ -5082,7 +5579,9 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
   void initState() {
     super.initState();
     _liked = widget.feed.liked;
-    _favorited = widget.feed.favorited;
+    _favorited = widget.api.isAnonymous
+        ? widget.api.localAccount.favorites.containsKey(widget.feed.id)
+        : widget.feed.favorited;
     _scroll.addListener(_onScroll);
     _load();
   }
@@ -5157,9 +5656,19 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
           if (refresh) _replies.clear();
           final ids = _replies.map((reply) => reply.id).toSet();
           _replies.addAll(
-            result.items
-                .map(CoolapkFeed.fromJson)
-                .where((reply) => reply.id.isEmpty || ids.add(reply.id)),
+            result.items.map(CoolapkFeed.fromJson).where((reply) {
+              final type =
+                  (reply.raw['entityType'] ??
+                          reply.raw['entity_type'] ??
+                          reply.raw['type'] ??
+                          '')
+                      .toString()
+                      .toLowerCase();
+              return type != 'feed_detail_reply_sponsor_card' &&
+                  reply.message.trim().toUpperCase() !=
+                      'FEED_DETAIL_REPLY_SPONSOR_CARD' &&
+                  (reply.id.isEmpty || ids.add(reply.id));
+            }),
           );
           _replyPage = next;
           _replyHasMore = result.hasMore && result.items.isNotEmpty;
@@ -5189,7 +5698,17 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
     if (_feedActionBusy) return;
     setState(() => _feedActionBusy = true);
     try {
-      await widget.api.favoriteFeed(widget.feed.id, favorited: _favorited);
+      await widget.api.favoriteFeed(
+        widget.feed.id,
+        favorited: _favorited,
+        feed: _detail == null
+            ? widget.feed
+            : CoolapkFeed.fromJson({
+                ...widget.feed.raw,
+                ..._detail!,
+                'id': widget.feed.id,
+              }),
+      );
       if (mounted) setState(() => _favorited = !_favorited);
     } catch (error) {
       if (mounted) _showMessage(error.toString());
@@ -5198,12 +5717,18 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
     }
   }
 
-  Future<void> _toggleReplyLike(CoolapkFeed reply) async {
+  Future<void> _toggleReplyLike(
+    CoolapkFeed reply, {
+    VoidCallback? onUpdated,
+  }) async {
     if (reply.id.isEmpty) return;
     final liked = _replyLikes[reply.id] ?? reply.liked;
     try {
       await widget.api.likeReply(reply.id, liked: liked);
-      if (mounted) setState(() => _replyLikes[reply.id] = !liked);
+      if (mounted) {
+        setState(() => _replyLikes[reply.id] = !liked);
+        onUpdated?.call();
+      }
     } catch (error) {
       if (mounted) _showMessage(error.toString());
     }
@@ -5234,6 +5759,172 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
       if (mounted) _showMessage(error.toString());
     }
   }
+
+  Future<void> _showReplyThread(
+    CoolapkFeed reply,
+    String authorUid,
+  ) => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) => StatefulBuilder(
+      builder: (sheetContext, setSheetState) {
+        final theme = Theme.of(sheetContext);
+        final isDark = theme.brightness == Brightness.dark;
+        final replyCount =
+            int.tryParse(
+              '${reply.raw['replyRowsMore'] ?? reply.raw['replynum'] ?? reply.replyCount}',
+            ) ??
+            0;
+        return SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * 0.64,
+          child: Material(
+            color: theme.colorScheme.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                Material(
+                  color: isDark
+                      ? const Color(0xFF1E1E1E)
+                      : theme.colorScheme.surfaceContainerLow,
+                  child: SizedBox(
+                    height: 64,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: '关闭回复',
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                          icon: const Icon(Icons.close_rounded, size: 28),
+                        ),
+                        Expanded(
+                          child: Text(
+                            '回复($replyCount)',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () =>
+                              Navigator.of(sheetContext)
+                                  .popUntil((route) => route is PageRoute),
+                          child: const Text('查看原动态'),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                    ),
+                  ),
+                ),
+                Divider(
+                  height: 1,
+                  color: theme.colorScheme.outlineVariant.withValues(
+                    alpha: 0.35,
+                  ),
+                ),
+                Expanded(
+                  child: ApiListPage(
+                    key: ValueKey('reply-thread-${reply.id}'),
+                    api: widget.api,
+                    title: '',
+                    path: '/v6/feed/replyList',
+                    query: {'id': reply.id, 'feedType': 'feed_reply'},
+                    showAppBar: false,
+                    header: ColoredBox(
+                      color: isDark
+                          ? const Color(0xFF2A2A2A)
+                          : theme.colorScheme.surfaceContainerHigh,
+                      child: _replyThreadTile(
+                        sheetContext,
+                        reply,
+                        authorUid,
+                        isThreadRoot: true,
+                        onUpdated: () {
+                          if (sheetContext.mounted) setSheetState(() {});
+                        },
+                      ),
+                    ),
+                    itemBuilder: (itemContext, item) {
+                      final entityType =
+                          (item['entityType'] ??
+                                  item['entity_type'] ??
+                                  item['type'] ??
+                                  '')
+                              .toString()
+                              .toLowerCase();
+                      final message = (item['message'] ?? '')
+                          .toString()
+                          .trim()
+                          .toUpperCase();
+                      if (entityType == 'feed_detail_reply_sponsor_card' ||
+                          message == 'FEED_DETAIL_REPLY_SPONSOR_CARD') {
+                        return const SizedBox.shrink();
+                      }
+                      return _replyThreadTile(
+                        itemContext,
+                        CoolapkFeed.fromJson(item),
+                        authorUid,
+                        onUpdated: () {
+                          if (sheetContext.mounted) setSheetState(() {});
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+
+  Widget _replyThreadTile(
+    BuildContext context,
+    CoolapkFeed reply,
+    String authorUid, {
+    VoidCallback? onUpdated,
+    bool isThreadRoot = false,
+  }) => _ReplyTile(
+    api: widget.api,
+    reply: reply,
+    authorUid: authorUid,
+    showSubReplies: !isThreadRoot,
+    showThreadAction: !isThreadRoot,
+    showDivider: true,
+    liked: _replyLikes[reply.id] ?? reply.liked,
+    onReply: () {
+      Navigator.of(context).popUntil((route) => route is PageRoute);
+      if (!mounted) return;
+      setState(() => _replyTo = reply.id);
+      _openCommentComposer();
+    },
+    onLike: () => _toggleReplyLike(
+      reply,
+      onUpdated: () {
+        if (context.mounted) onUpdated?.call();
+      },
+    ),
+    onDelete:
+        widget.api.currentUid.isNotEmpty && widget.api.currentUid == reply.uid
+        ? () {
+            Navigator.of(context).popUntil((route) => route is PageRoute);
+            unawaited(_deleteReply(reply));
+          }
+        : null,
+    onDetails: () => Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ApiDetailPage(
+          api: widget.api,
+          title: '评论详情',
+          path: '/v6/feed/replyDetail',
+          query: {'id': reply.id},
+        ),
+      ),
+    ),
+    onThread: () => _showReplyThread(reply, authorUid),
+  );
 
   Future<void> _sendReply() async {
     final message = _replyController.text.trim();
@@ -5327,6 +6018,12 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final useLiquidGlass = ref.watch(
+      appSettingsProvider.select(
+        (settings) =>
+            settings.useFloatingNavBar && settings.useLiquidGlassNavBar,
+      ),
+    );
     final displayUsername =
         (_detail?['username'] ??
                 _detail?['user_info']?['username'] ??
@@ -5381,7 +6078,7 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
       if (device.isNotEmpty) '📱 $device',
     ].join(' ');
 
-    return Scaffold(
+    final scaffold = Scaffold(
       extendBody: true,
       appBar: ReviewFrostedAppBar(
         titleSpacing: 0,
@@ -5521,202 +6218,211 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
           const SizedBox(width: 4),
         ],
       ),
-      body: EasyRefresh(
-        header: reviewDefaultRefreshHeader,
-        onRefresh: _load,
-        child: ListView(
-          controller: _scroll,
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            0,
-            0,
-            0,
-            80 + MediaQuery.paddingOf(context).bottom,
-          ),
-          children: [
-            _DetailContent(api: widget.api, feed: widget.feed, detail: _detail),
-            if (_loadingDetail)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: Center(child: LinearProgressIndicator()),
-              )
-            else if (_detailError != null && !_isCaptchaError(_detailError!))
-              _InlineRetry(message: _detailError!, onRetry: _loadDetail),
-            Divider(
-              height: 16,
-              thickness: 0.5,
-              color: Theme.of(context).colorScheme.outlineVariant
-                  .withValues(alpha: 0.25),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Builder(
-                    builder: (context) {
-                      final replyNum =
-                          int.tryParse(
-                            '${_detail?['replynum'] ?? _detail?['replyNum'] ?? widget.feed.replyCount}',
-                          ) ??
-                          _replies.length;
-                      final totalReplies = replyNum > 0
-                          ? '$replyNum'
-                          : (_replies.isNotEmpty ? '${_replies.length}' : '0');
-                      return Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '共 $totalReplies 回复',
-                            style: TextStyle(
-                              fontSize: 15.5,
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context).colorScheme.onSurface,
-                            ),
-                          ),
-                          if (_loadingReplies && _replies.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          ],
-                        ],
-                      );
-                    },
-                  ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).brightness == Brightness.dark
-                          ? const Color(0xFF1E1E1E)
-                          : Theme.of(context)
-                                .colorScheme
-                                .surfaceContainerHighest
-                                .withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    padding: const EdgeInsets.all(2.5),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _commentFilterChip('默认', 'default'),
-                        _commentFilterChip('最新', 'latest'),
-                        _commentFilterChip('热门', 'hot'),
-                        _commentFilterChip('楼主', 'author'),
-                      ],
-                    ),
-                  ),
-                ],
+      body: GlassBackgroundSource(
+        enabled: useLiquidGlass,
+        child: EasyRefresh(
+          header: reviewDefaultRefreshHeader,
+          onRefresh: _load,
+          child: filterHorizontalScrollNotifications(
+            ListView(
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(
+                0,
+                0,
+                0,
+                80 + MediaQuery.paddingOf(context).bottom,
               ),
-            ),
-            if (_loadingReplies && _replies.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(18),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_replyError != null &&
-                _replies.isEmpty &&
-                !_isCaptchaError(_replyError!))
-              _InlineRetry(message: _replyError!, onRetry: _loadReplies)
-            else if (_replies.isEmpty && _replyError == null)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 40),
-                child: Center(
-                  child: Column(
+              children: [
+                _DetailContent(
+                  api: widget.api,
+                  feed: widget.feed,
+                  detail: _detail,
+                ),
+                if (_loadingDetail)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Center(child: LinearProgressIndicator()),
+                  )
+                else if (_detailError != null &&
+                    !_isCaptchaError(_detailError!))
+                  _InlineRetry(message: _detailError!, onRetry: _loadDetail),
+                Divider(
+                  height: 16,
+                  thickness: 0.5,
+                  color: Theme.of(context).colorScheme.outlineVariant
+                      .withValues(alpha: 0.25),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Icon(
-                        Icons.chat_bubble_outline_rounded,
-                        size: 40,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant
-                            .withValues(alpha: 0.35),
+                      Builder(
+                        builder: (context) {
+                          final replyNum =
+                              int.tryParse(
+                                '${_detail?['replynum'] ?? _detail?['replyNum'] ?? widget.feed.replyCount}',
+                              ) ??
+                              _replies.length;
+                          final totalReplies = replyNum > 0
+                              ? '$replyNum'
+                              : (_replies.isNotEmpty
+                                    ? '${_replies.length}'
+                                    : '0');
+                          return Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '共 $totalReplies 回复',
+                                style: TextStyle(
+                                  fontSize: 15.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurface,
+                                ),
+                              ),
+                              if (_loadingReplies && _replies.isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                const SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          );
+                        },
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        '还没有回复哦，快来回复一下吧~',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant
-                              .withValues(alpha: 0.7),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? const Color(0xFF1E1E1E)
+                              : Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest
+                                    .withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        padding: const EdgeInsets.all(2.5),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _commentFilterChip('默认', 'default'),
+                            _commentFilterChip('最新', 'latest'),
+                            _commentFilterChip('热门', 'hot'),
+                            _commentFilterChip('楼主', 'author'),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-              )
-            else
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (var index = 0; index < _replies.length; index++)
-                    _ReplyTile(
-                      api: widget.api,
-                      reply: _replies[index],
-                      authorUid: authorUid,
-                      showDivider: index + 1 < _replies.length,
-                      onReply: () {
-                        setState(() {
-                          _replyTo = _replies[index].id;
-                        });
-                        _openCommentComposer();
-                      },
-                      liked:
-                          _replyLikes[_replies[index].id] ??
-                          _replies[index].liked,
-                      onLike: () => _toggleReplyLike(_replies[index]),
-                      onDelete:
-                          widget.api.currentUid.isNotEmpty &&
-                              widget.api.currentUid == _replies[index].uid
-                          ? () => _deleteReply(_replies[index])
-                          : null,
-                      onDetails: () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => ApiDetailPage(
-                            api: widget.api,
-                            title: '评论详情',
-                            path: '/v6/feed/replyDetail',
-                            query: {'id': _replies[index].id},
+                if (_loadingReplies && _replies.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(18),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (_replyError != null &&
+                    _replies.isEmpty &&
+                    !_isCaptchaError(_replyError!))
+                  _InlineRetry(message: _replyError!, onRetry: _loadReplies)
+                else if (_replies.isEmpty && _replyError == null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 40),
+                    child: Center(
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.chat_bubble_outline_rounded,
+                            size: 40,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant
+                                .withValues(alpha: 0.35),
                           ),
-                        ),
-                      ),
-                      onThread: () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => ApiListPage(
-                            api: widget.api,
-                            title: '楼中楼回复',
-                            path: '/v6/feed/replyList',
-                            query: {
-                              'id': _replies[index].id,
-                              'feedType': 'feed_reply',
-                            },
+                          const SizedBox(height: 10),
+                          Text(
+                            '还没有回复哦，快来回复一下吧~',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant
+                                  .withValues(alpha: 0.7),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
-                ],
-              ),
-            if (_replyError != null && !_isCaptchaError(_replyError!))
-              _InlineRetry(
-                message: _replyError!,
-                onRetry: () => _loadReplies(refresh: false),
-              ),
-            if (_loadingReplies && _replies.isNotEmpty)
-              const Padding(
-                padding: EdgeInsets.all(14),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            if (!_replyHasMore && _replies.isNotEmpty)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: Text('已经到底了')),
-              ),
-          ],
+                  )
+                else
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var index = 0; index < _replies.length; index++)
+                        _ReplyTile(
+                          api: widget.api,
+                          reply: _replies[index],
+                          authorUid: authorUid,
+                          showDivider: index + 1 < _replies.length,
+                          onReply: () {
+                            setState(() {
+                              _replyTo = _replies[index].id;
+                            });
+                            _openCommentComposer();
+                          },
+                          liked:
+                              _replyLikes[_replies[index].id] ??
+                              _replies[index].liked,
+                          onLike: () => _toggleReplyLike(_replies[index]),
+                          onDelete:
+                              widget.api.currentUid.isNotEmpty &&
+                                  widget.api.currentUid == _replies[index].uid
+                              ? () => _deleteReply(_replies[index])
+                              : null,
+                          onDetails: () => Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ApiDetailPage(
+                                api: widget.api,
+                                title: '评论详情',
+                                path: '/v6/feed/replyDetail',
+                                query: {'id': _replies[index].id},
+                              ),
+                            ),
+                          ),
+                          onThread: () =>
+                              _showReplyThread(_replies[index], authorUid),
+                        ),
+                    ],
+                  ),
+                if (_replyError != null && !_isCaptchaError(_replyError!))
+                  _InlineRetry(
+                    message: _replyError!,
+                    onRetry: () => _loadReplies(refresh: false),
+                  ),
+                if (_loadingReplies && _replies.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(14),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                if (!_replyHasMore && _replies.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(child: Text('已经到底了')),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
       bottomNavigationBar: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
+          padding: const EdgeInsets.fromLTRB(14, 4, 14, 16),
           child: Builder(
             builder: (context) {
               final scheme = Theme.of(context).colorScheme;
@@ -5764,7 +6470,9 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
                                     ? -1
                                     : 0)))
                       .clamp(0, 1 << 31);
-              final displayFavCount = displayFav > 0 ? '$displayFav' : '收藏';
+              final displayFavCount = widget.api.isAnonymous || displayFav == 0
+                  ? '收藏'
+                  : '$displayFav';
 
               final forwardNum =
                   int.tryParse(
@@ -5779,37 +6487,48 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
                   Expanded(
                     flex: 9,
                     child: Material(
-                      color: capsuleColor,
-                      elevation: 2,
+                      color: useLiquidGlass ? Colors.transparent : capsuleColor,
+                      elevation: useLiquidGlass ? 0 : 2,
                       shadowColor: Colors.black.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(24),
                       clipBehavior: Clip.antiAlias,
                       child: InkWell(
+                        key: const ValueKey('feed-detail-comment-capsule'),
                         onTap: _openCommentComposer,
                         child: Container(
                           height: 44,
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(24),
-                            border: capsuleBorder,
+                            border: useLiquidGlass ? null : capsuleBorder,
                           ),
-                          child: Row(
+                          child: Stack(
+                            fit: StackFit.expand,
                             children: [
-                              Icon(
-                                Icons.edit_outlined,
-                                size: 16,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _replyTo.isEmpty ? '写评论' : '回复中…',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 13.5,
-                                    color: scheme.onSurfaceVariant,
-                                  ),
+                              if (useLiquidGlass) _detailActionGlass(),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.edit_outlined,
+                                      size: 16,
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _replyTo.isEmpty ? '写评论' : '回复中…',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13.5,
+                                          color: scheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
@@ -5821,65 +6540,77 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
                   const SizedBox(width: 10),
                   // Right floating capsule: 赞、评、藏、转
                   Expanded(
-                    flex: 13,
+                    flex: 12,
                     child: Material(
-                      color: capsuleColor,
-                      elevation: 2,
+                      key: const ValueKey('feed-detail-actions-capsule'),
+                      color: useLiquidGlass ? Colors.transparent : capsuleColor,
+                      elevation: useLiquidGlass ? 0 : 2,
                       shadowColor: Colors.black.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(24),
                       clipBehavior: Clip.antiAlias,
                       child: Container(
                         height: 44,
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(24),
-                          border: capsuleBorder,
+                          border: useLiquidGlass ? null : capsuleBorder,
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        child: Stack(
+                          fit: StackFit.expand,
                           children: [
-                            _bottomActionItem(
-                              icon: _liked
-                                  ? Icons.thumb_up_rounded
-                                  : Icons.thumb_up_outlined,
-                              label: displayLikeCount,
-                              color: _liked
-                                  ? scheme.primary
-                                  : scheme.onSurfaceVariant,
-                              onTap: _toggleLike,
-                            ),
-                            _bottomActionItem(
-                              icon: Icons.chat_bubble_outline_rounded,
-                              label: displayReplyCount,
-                              color: scheme.onSurfaceVariant,
-                              onTap: () {
-                                if (_scroll.hasClients) {
-                                  _scroll.animateTo(
-                                    _scroll.position.maxScrollExtent.clamp(
-                                      0.0,
-                                      600.0,
-                                    ),
-                                    duration: const Duration(milliseconds: 350),
-                                    curve: Curves.easeOut,
-                                  );
-                                }
-                              },
-                            ),
-                            _bottomActionItem(
-                              icon: _favorited
-                                  ? Icons.star_rounded
-                                  : Icons.star_outline_rounded,
-                              label: displayFavCount,
-                              color: _favorited
-                                  ? Colors.amber.shade700
-                                  : scheme.onSurfaceVariant,
-                              onTap: _toggleFavorite,
-                            ),
-                            _bottomActionItem(
-                              icon: Icons.repeat_rounded,
-                              label: displayForwardCount,
-                              color: scheme.onSurfaceVariant,
-                              onTap: _forward,
+                            if (useLiquidGlass) _detailActionGlass(),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceEvenly,
+                                children: [
+                                  _bottomActionItem(
+                                    icon: _liked
+                                        ? Icons.thumb_up_rounded
+                                        : Icons.thumb_up_outlined,
+                                    label: displayLikeCount,
+                                    color: _liked
+                                        ? scheme.primary
+                                        : scheme.onSurfaceVariant,
+                                    onTap: _toggleLike,
+                                  ),
+                                  _bottomActionItem(
+                                    icon: Icons.chat_bubble_outline_rounded,
+                                    label: displayReplyCount,
+                                    color: scheme.onSurfaceVariant,
+                                    onTap: () {
+                                      if (_scroll.hasClients) {
+                                        _scroll.animateTo(
+                                          _scroll.position.maxScrollExtent
+                                              .clamp(0.0, 600.0),
+                                          duration: const Duration(
+                                            milliseconds: 350,
+                                          ),
+                                          curve: Curves.easeOut,
+                                        );
+                                      }
+                                    },
+                                  ),
+                                  _bottomActionItem(
+                                    icon: _favorited
+                                        ? Icons.star_rounded
+                                        : Icons.star_outline_rounded,
+                                    label: displayFavCount,
+                                    color: _favorited
+                                        ? Colors.amber.shade700
+                                        : scheme.onSurfaceVariant,
+                                    onTap: _toggleFavorite,
+                                  ),
+                                  _bottomActionItem(
+                                    icon: Icons.repeat_rounded,
+                                    label: displayForwardCount,
+                                    color: scheme.onSurfaceVariant,
+                                    onTap: _forward,
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
@@ -5893,7 +6624,16 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
         ),
       ),
     );
+    return useLiquidGlass ? GlassPage(child: scaffold) : scaffold;
   }
+
+  Widget _detailActionGlass() => AdaptiveGlass(
+    key: const ValueKey('feed-detail-action-glass'),
+    shape: const LiquidRoundedSuperellipse(borderRadius: 9999),
+    settings: ReviewNavigationBar.liquidGlassSettings,
+    quality: ReviewNavigationBar.liquidGlassQuality,
+    child: const SizedBox.expand(),
+  );
 
   Widget _commentFilterChip(String label, String mode) {
     final selected = _commentMode == mode;
@@ -5959,12 +6699,12 @@ class _FeedDetailPageState extends State<FeedDetailPage> {
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 20, color: color),
-            const SizedBox(height: 2),
+            Icon(icon, size: 24, color: color),
+            const SizedBox(height: 1),
             Text(
               label,
               style: TextStyle(
-                fontSize: 10.5,
+                fontSize: 9,
                 fontWeight: FontWeight.w600,
                 color: color,
               ),
@@ -6161,6 +6901,10 @@ class _DetailContent extends StatelessWidget {
               detail?['replynum'] ?? detail?['replyNum'] ?? feed.replyCount,
             ),
             pictures: _detailImages(detail!, feed.pictures),
+            pictureMetadata: {
+              ...feed.pictureMetadata,
+              ...CoolapkFeed.pictureMetadataFromJson(detail!),
+            },
             liked: feed.liked,
             favorited: feed.favorited,
             raw: detail!,
@@ -6181,6 +6925,8 @@ class _ReplyTile extends StatelessWidget {
     required this.onThread,
     this.authorUid = '',
     this.onDelete,
+    this.showSubReplies = true,
+    this.showThreadAction = true,
   });
 
   final CoolapkApi api;
@@ -6193,6 +6939,8 @@ class _ReplyTile extends StatelessWidget {
   final VoidCallback onThread;
   final String authorUid;
   final VoidCallback? onDelete;
+  final bool showSubReplies;
+  final bool showThreadAction;
 
   @override
   Widget build(BuildContext context) {
@@ -6296,7 +7044,7 @@ class _ReplyTile extends StatelessWidget {
                           color: scheme.onSurface,
                         ),
                       ),
-                    if (subReplies.isNotEmpty)
+                    if (showSubReplies && subReplies.isNotEmpty)
                       Container(
                         margin: const EdgeInsets.only(top: 8, bottom: 4),
                         padding: const EdgeInsets.all(9),
@@ -6312,7 +7060,12 @@ class _ReplyTile extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             for (final sub in subReplies.take(3)) ...[
-                              _buildSubReplyLine(sub, nameColor, scheme),
+                              _buildSubReplyLine(
+                                context,
+                                sub,
+                                nameColor,
+                                scheme,
+                              ),
                               const SizedBox(height: 4),
                             ],
                             if (totalSubCount > 3 ||
@@ -6452,10 +7205,11 @@ class _ReplyTile extends StatelessWidget {
                             }
                           },
                           itemBuilder: (context) => [
-                            const PopupMenuItem(
-                              value: 'thread',
-                              child: Text('查看楼中楼回复'),
-                            ),
+                            if (showThreadAction)
+                              const PopupMenuItem(
+                                value: 'thread',
+                                child: Text('查看楼中楼回复'),
+                              ),
                             const PopupMenuItem(
                               value: 'details',
                               child: Text('评论详情'),
@@ -6480,6 +7234,7 @@ class _ReplyTile extends StatelessWidget {
   }
 
   Widget _buildSubReplyLine(
+    BuildContext context,
     Map<String, dynamic> sub,
     Color nameColor,
     ColorScheme scheme,
@@ -6487,31 +7242,42 @@ class _ReplyTile extends StatelessWidget {
     final subUser = (sub['username'] ?? '').toString();
     final subMsg = (sub['message'] ?? '').toString();
     final ruser = (sub['rusername'] ?? '').toString();
+    final userInfo = sub['userInfo'] ?? sub['user_info'];
+    final subUid =
+        (sub['uid'] ??
+                (userInfo is Map ? userInfo['uid'] ?? userInfo['id'] : null) ??
+                '')
+            .toString();
+    final ruserUid =
+        (sub['ruid'] ?? (ruser == reply.username ? reply.uid : null) ?? '')
+            .toString();
+
+    InlineSpan userName(String name, String uid) => WidgetSpan(
+      alignment: PlaceholderAlignment.baseline,
+      baseline: TextBaseline.alphabetic,
+      child: InkWell(
+        onTap: uid.isEmpty ? null : () => _openUserSpace(context, api, uid),
+        child: Text(
+          name,
+          style: TextStyle(
+            color: nameColor,
+            fontWeight: FontWeight.bold,
+            fontSize: 12.5,
+          ),
+        ),
+      ),
+    );
 
     return RichText(
       text: TextSpan(
         children: [
-          TextSpan(
-            text: subUser,
-            style: TextStyle(
-              color: nameColor,
-              fontWeight: FontWeight.bold,
-              fontSize: 12.5,
-            ),
-          ),
+          userName(subUser, subUid),
           if (ruser.isNotEmpty) ...[
             TextSpan(
               text: ' 回复 ',
               style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
             ),
-            TextSpan(
-              text: ruser,
-              style: TextStyle(
-                color: nameColor,
-                fontWeight: FontWeight.bold,
-                fontSize: 12.5,
-              ),
-            ),
+            userName(ruser, ruserUid),
           ],
           TextSpan(
             text: ': ',
@@ -6547,18 +7313,48 @@ class _PictureGrid extends StatelessWidget {
   const _PictureGrid({
     required this.api,
     required this.urls,
+    required this.metadata,
     required this.isDetail,
   });
   final CoolapkApi api;
   final List<String> urls;
+  final Map<String, Map<String, dynamic>> metadata;
   final bool isDetail;
+
   @override
-  Widget build(BuildContext context) => NineGridView(
-    api: api,
-    pics: urls.map(GalleryImage.new).toList(growable: false),
-    statusId: '',
-    isDetail: isDetail,
-  );
+  Widget build(BuildContext context) {
+    int dimension(Map<String, dynamic> metadata, String name) {
+      final large = metadata['large'];
+      final largeMap = large is Map ? large : const <String, dynamic>{};
+      final geo = metadata['geo'];
+      final geoMap = geo is Map ? geo : const <String, dynamic>{};
+      final largeGeo = largeMap['geo'];
+      final largeGeoMap = largeGeo is Map
+          ? largeGeo
+          : const <String, dynamic>{};
+      final value =
+          metadata[name] ??
+          metadata[name == 'width' ? 'w' : 'h'] ??
+          geoMap[name] ??
+          largeMap[name] ??
+          largeGeoMap[name];
+      return value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+    }
+
+    final pics = urls
+        .map((url) {
+          final imageMetadata = metadata[url] ?? const <String, dynamic>{};
+          return GalleryImage(
+            url,
+            width: dimension(imageMetadata, 'width'),
+            height: dimension(imageMetadata, 'height'),
+            raw: imageMetadata,
+          );
+        })
+        .toList(growable: false);
+
+    return NineGridView(api: api, pics: pics, statusId: '', isDetail: isDetail);
+  }
 }
 
 class _LoadError extends StatelessWidget {

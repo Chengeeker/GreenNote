@@ -45,9 +45,9 @@ class DigitalFollowCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -97,10 +97,10 @@ class DigitalFollowCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Wrap(
-              spacing: 12,
-              runSpacing: 8,
+              spacing: 8,
+              runSpacing: 4,
               children: [
                 for (final item in effectiveItems)
                   _FollowChip(
@@ -242,9 +242,9 @@ class DigitalCategoryGridCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         child: Column(
           children: [
             Row(
@@ -262,7 +262,7 @@ class DigitalCategoryGridCard extends StatelessWidget {
                   ),
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             Row(
               children: [
                 for (var i = 5; i < 10; i++)
@@ -334,8 +334,8 @@ class _CategoryItem extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 44,
-              height: 44,
+              width: 38,
+              height: 38,
               decoration: BoxDecoration(
                 color: color.withValues(alpha: 0.18),
                 shape: BoxShape.circle,
@@ -346,8 +346,8 @@ class _CategoryItem extends StatelessWidget {
                     ? CachedNetworkImage(
                         normalizeCoolapkImageUrl(pic),
                         headers: coolapkImageHeaders(pic, api: api),
-                        width: 34,
-                        height: 34,
+                        width: 30,
+                        height: 30,
                         fit: BoxFit.contain,
                         errorBuilder: (_, _, _) => Icon(
                           iconData ?? Icons.devices_rounded,
@@ -362,7 +362,7 @@ class _CategoryItem extends StatelessWidget {
                       ),
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Text(
               title,
               maxLines: 1,
@@ -397,7 +397,7 @@ class DigitalBannerCard extends StatelessWidget {
     final effectiveUrl = imageUrl!;
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       clipBehavior: Clip.antiAlias,
       onTap: () {
         HapticFeedbackUtil.selection();
@@ -539,9 +539,9 @@ class DigitalRankGridCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -592,7 +592,7 @@ class DigitalRankGridCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -604,7 +604,7 @@ class DigitalRankGridCard extends StatelessWidget {
                   ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -665,24 +665,24 @@ class _RankProductItem extends StatelessWidget {
               clipBehavior: Clip.none,
               children: [
                 Container(
-                  height: 60,
+                  height: 50,
                   alignment: Alignment.center,
                   child: logo.isNotEmpty
                       ? CachedNetworkImage(
                           normalizeCoolapkImageUrl(logo),
                           headers: coolapkImageHeaders(logo, api: api),
-                          height: 52,
-                          width: 46,
+                          height: 44,
+                          width: 42,
                           fit: BoxFit.contain,
                           errorBuilder: (_, _, _) =>
-                              const Icon(Icons.smartphone_rounded, size: 38),
+                              const Icon(Icons.smartphone_rounded, size: 34),
                         )
-                      : const Icon(Icons.smartphone_rounded, size: 38),
+                      : const Icon(Icons.smartphone_rounded, size: 34),
                 ),
                 Positioned(left: 0, top: 0, child: RankRibbon(rank: rank)),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             SizedBox(
               height: 32,
               child: Text(
@@ -697,7 +697,7 @@ class _RankProductItem extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
             if (hot.isNotEmpty)
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -745,9 +745,9 @@ class DigitalTimelineCard extends StatelessWidget {
     if (items.isEmpty) return const SizedBox.shrink();
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -756,7 +756,7 @@ class DigitalTimelineCard extends StatelessWidget {
               style: Theme.of(context).textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.bold, fontSize: 16),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 6),
             for (final item in items) _TimelineRow(api: api, item: item),
           ],
         ),
@@ -792,7 +792,7 @@ class _TimelineRow extends StatelessWidget {
         );
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
           children: [
             if (release.isNotEmpty)
@@ -815,7 +815,7 @@ class _TimelineRow extends StatelessWidget {
                   ),
                 ),
               ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             if (logo.isNotEmpty)
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
@@ -876,13 +876,13 @@ class DigitalSectionHeaderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       onTap: () {
         HapticFeedbackUtil.selection();
         onTap?.call();
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [

@@ -826,8 +826,8 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
     HapticFeedbackUtil.light();
     if (!widget.api.hasCookie) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('关注设备需要先登录酷安账号'),
+        SnackBar(
+          content: Text(widget.api.loginRequiredMessage),
           duration: Duration(seconds: 2),
         ),
       );
@@ -1237,342 +1237,347 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
             header: reviewDefaultRefreshHeader,
             onRefresh: () async => _loadProducts(refresh: true),
             onLoad: _hasMore ? () async => _loadProducts(refresh: false) : null,
-            child: ListView(
-              padding: EdgeInsets.fromLTRB(
-                8,
-                10,
-                12,
-                24 + MediaQuery.paddingOf(context).bottom,
-              ),
-              children: [
-                if (!isHotCategory) ...[
-                  // 2.1 品牌 Header 与横向品牌卡片网格
-                  Row(
-                    children: [
-                      Text(
-                        '品牌',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (_selectedBrand != null)
-                        GestureDetector(
-                          onTap: () {
-                            HapticFeedbackUtil.selection();
-                            setState(() {
-                              _selectedBrand = null;
-                            });
-                          },
-                          child: Text(
-                            '重置品牌',
-                            style: TextStyle(fontSize: 12, color: primaryGreen),
+            child: filterHorizontalScrollNotifications(
+              ListView(
+                padding: EdgeInsets.fromLTRB(
+                  8,
+                  10,
+                  12,
+                  24 + MediaQuery.paddingOf(context).bottom,
+                ),
+                children: [
+                  if (!isHotCategory) ...[
+                    // 2.1 品牌 Header 与横向品牌卡片网格
+                    Row(
+                      children: [
+                        Text(
+                          '品牌',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
                           ),
                         ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-
-                  // 品牌 2 行横向左右可滑动列表（支持全量品牌无上限展示）
-                  SizedBox(
-                    height: 126,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      itemCount: (_brands.length + 1) ~/ 2,
-                      separatorBuilder: (_, _) => const SizedBox(width: 8),
-                      itemBuilder: (context, colIndex) {
-                        final topIndex = colIndex * 2;
-                        final bottomIndex = colIndex * 2 + 1;
-                        final topBrand = _brands[topIndex];
-                        final bottomBrand = bottomIndex < _brands.length
-                            ? _brands[bottomIndex]
-                            : null;
-
-                        return Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildBrandItem(context, topBrand, primaryGreen),
-                            const SizedBox(height: 8),
-                            if (bottomBrand != null)
-                              _buildBrandItem(
-                                context,
-                                bottomBrand,
-                                primaryGreen,
-                              )
-                            else
-                              const SizedBox(width: 66, height: 58),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // 2.2 排序规则 (热度 / 评分 / 最新)
-                  Row(
-                    children: [
-                      Text(
-                        '排序规则',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                      ),
-                      const Spacer(),
-                      _SortChip(
-                        label: '热度',
-                        selected: _sort == DigitalLibrarySort.hot,
-                        onTap: () => _selectSort(DigitalLibrarySort.hot),
-                      ),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                        label: '评分',
-                        selected: _sort == DigitalLibrarySort.score,
-                        onTap: () => _selectSort(DigitalLibrarySort.score),
-                      ),
-                      const SizedBox(width: 6),
-                      _SortChip(
-                        label: '最新',
-                        selected: _sort == DigitalLibrarySort.newest,
-                        onTap: () => _selectSort(DigitalLibrarySort.newest),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 12),
-                ],
-
-                // 2.3 3 列产品网格
-                if (_loading && _products.isEmpty)
-                  const SizedBox(
-                    height: 200,
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                else if (_products.isEmpty)
-                  SizedBox(
-                    height: 200,
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.devices_other_rounded,
-                            size: 48,
-                            color: colorScheme.outline,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            _error != null ? '加载失败: $_error' : '暂无产品数据',
-                            style: TextStyle(
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          FilledButton.tonal(
-                            onPressed: () => _loadProducts(refresh: true),
-                            child: const Text('重新加载'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          crossAxisSpacing: 8,
-                          mainAxisSpacing: 10,
-                          childAspectRatio: 0.44,
-                        ),
-                    itemCount: _products.length,
-                    itemBuilder: (context, index) {
-                      final p = _products[index];
-                      final id =
-                          (p['id'] ??
-                                  p['productId'] ??
-                                  p['entityId'] ??
-                                  'p_$index')
-                              .toString();
-                      final title = (p['title'] ?? p['name'] ?? '数码机型')
-                          .toString();
-                      final pic =
-                          (p['logo'] ??
-                                  p['pic'] ??
-                                  p['cover'] ??
-                                  p['thumb'] ??
-                                  '')
-                              .toString();
-                      final hot =
-                          (p['hot_num_txt'] ?? p['hot'] ?? p['hot_num'] ?? '')
-                              .toString();
-                      final score =
-                          (p['star_average_score'] ??
-                                  p['score'] ??
-                                  p['recent_30_days_owner_star_average_score'] ??
-                                  '')
-                              .toString();
-
-                      final isFollowed = _followedProductIds.contains(id);
-
-                      return GestureDetector(
-                        onTap: () {
-                          HapticFeedbackUtil.selection();
-                          // 点击直达官方产品详情与机主动态页
-                          Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                              builder: (_) => ProductPage(
-                                api: widget.api,
-                                id: id,
-                                title: title.replaceAll('\n', ' '),
+                        const Spacer(),
+                        if (_selectedBrand != null)
+                          GestureDetector(
+                            onTap: () {
+                              HapticFeedbackUtil.selection();
+                              setState(() {
+                                _selectedBrand = null;
+                              });
+                            },
+                            child: Text(
+                              '重置品牌',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: primaryGreen,
                               ),
                             ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+
+                    // 品牌 2 行横向左右可滑动列表（支持全量品牌无上限展示）
+                    SizedBox(
+                      height: 116,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        itemCount: (_brands.length + 1) ~/ 2,
+                        separatorBuilder: (_, _) => const SizedBox(width: 4),
+                        itemBuilder: (context, colIndex) {
+                          final topIndex = colIndex * 2;
+                          final bottomIndex = colIndex * 2 + 1;
+                          final topBrand = _brands[topIndex];
+                          final bottomBrand = bottomIndex < _brands.length
+                              ? _brands[bottomIndex]
+                              : null;
+
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _buildBrandItem(context, topBrand, primaryGreen),
+                              const SizedBox(height: 8),
+                              if (bottomBrand != null)
+                                _buildBrandItem(
+                                  context,
+                                  bottomBrand,
+                                  primaryGreen,
+                                )
+                              else
+                                const SizedBox(width: 66, height: 58),
+                            ],
                           );
                         },
-                        onLongPress: () => _showProductSpecs(context, p),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: colorScheme.surfaceContainerHigh.withValues(
-                              alpha: 0.7,
+                      ),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    // 2.2 排序规则 (热度 / 评分 / 最新)
+                    Row(
+                      children: [
+                        Text(
+                          '排序规则',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const Spacer(),
+                        _SortChip(
+                          label: '热度',
+                          selected: _sort == DigitalLibrarySort.hot,
+                          onTap: () => _selectSort(DigitalLibrarySort.hot),
+                        ),
+                        const SizedBox(width: 6),
+                        _SortChip(
+                          label: '评分',
+                          selected: _sort == DigitalLibrarySort.score,
+                          onTap: () => _selectSort(DigitalLibrarySort.score),
+                        ),
+                        const SizedBox(width: 6),
+                        _SortChip(
+                          label: '最新',
+                          selected: _sort == DigitalLibrarySort.newest,
+                          onTap: () => _selectSort(DigitalLibrarySort.newest),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 8),
+                  ],
+
+                  // 2.3 3 列产品网格
+                  if (_loading && _products.isEmpty)
+                    const SizedBox(
+                      height: 200,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (_products.isEmpty)
+                    SizedBox(
+                      height: 200,
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.devices_other_rounded,
+                              size: 48,
+                              color: colorScheme.outline,
                             ),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 8,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              // 产品图
-                              SizedBox(
-                                height: 68,
-                                child: Center(
-                                  child: pic.isNotEmpty
-                                      ? CachedNetworkImage(
-                                          normalizeCoolapkImageUrl(pic),
-                                          headers: coolapkImageHeaders(
-                                            pic,
-                                            api: widget.api,
-                                          ),
-                                          fit: BoxFit.contain,
-                                          errorBuilder: (_, _, _) => Icon(
+                            const SizedBox(height: 8),
+                            Text(
+                              _error != null ? '加载失败: $_error' : '暂无产品数据',
+                              style: TextStyle(
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            FilledButton.tonal(
+                              onPressed: () => _loadProducts(refresh: true),
+                              child: const Text('重新加载'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 6,
+                        mainAxisSpacing: 8,
+                        childAspectRatio: MediaQuery.sizeOf(context).width < 360
+                            ? 0.45
+                            : 0.50,
+                      ),
+                      itemCount: _products.length,
+                      itemBuilder: (context, index) {
+                        final p = _products[index];
+                        final id =
+                            (p['id'] ??
+                                    p['productId'] ??
+                                    p['entityId'] ??
+                                    'p_$index')
+                                .toString();
+                        final title = (p['title'] ?? p['name'] ?? '数码机型')
+                            .toString();
+                        final pic =
+                            (p['logo'] ??
+                                    p['pic'] ??
+                                    p['cover'] ??
+                                    p['thumb'] ??
+                                    '')
+                                .toString();
+                        final hot =
+                            (p['hot_num_txt'] ?? p['hot'] ?? p['hot_num'] ?? '')
+                                .toString();
+                        final score =
+                            (p['star_average_score'] ??
+                                    p['score'] ??
+                                    p['recent_30_days_owner_star_average_score'] ??
+                                    '')
+                                .toString();
+
+                        final isFollowed = _followedProductIds.contains(id);
+
+                        return GestureDetector(
+                          onTap: () {
+                            HapticFeedbackUtil.selection();
+                            // 点击直达官方产品详情与机主动态页
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => ProductPage(
+                                  api: widget.api,
+                                  id: id,
+                                  title: title.replaceAll('\n', ' '),
+                                ),
+                              ),
+                            );
+                          },
+                          onLongPress: () => _showProductSpecs(context, p),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: colorScheme.surfaceContainerHigh
+                                  .withValues(alpha: 0.7),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 4,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                // 产品图
+                                SizedBox(
+                                  height: 52,
+                                  child: Center(
+                                    child: pic.isNotEmpty
+                                        ? CachedNetworkImage(
+                                            normalizeCoolapkImageUrl(pic),
+                                            headers: coolapkImageHeaders(
+                                              pic,
+                                              api: widget.api,
+                                            ),
+                                            fit: BoxFit.contain,
+                                            errorBuilder: (_, _, _) => Icon(
+                                              Icons.phone_android_rounded,
+                                              size: 40,
+                                              color: colorScheme.outline,
+                                            ),
+                                          )
+                                        : Icon(
                                             Icons.phone_android_rounded,
                                             size: 40,
                                             color: colorScheme.outline,
                                           ),
-                                        )
-                                      : Icon(
-                                          Icons.phone_android_rounded,
-                                          size: 40,
-                                          color: colorScheme.outline,
-                                        ),
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-
-                              // 机型标题
-                              SizedBox(
-                                height: 32,
-                                child: Center(
-                                  child: Text(
-                                    title,
-                                    maxLines: 2,
-                                    textAlign: TextAlign.center,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 11.5,
-                                      fontWeight: FontWeight.bold,
-                                      height: 1.25,
-                                    ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 4),
+                                const SizedBox(height: 3),
 
-                              // 热度或评分
-                              if (_sort == DigitalLibrarySort.score &&
-                                  score.isNotEmpty)
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Icon(
-                                      Icons.star_rounded,
-                                      size: 13,
-                                      color: Colors.amber,
-                                    ),
-                                    const SizedBox(width: 2),
-                                    Text(
-                                      score,
-                                      style: TextStyle(
-                                        fontSize: 10.5,
+                                // 机型标题
+                                SizedBox(
+                                  height: 32,
+                                  child: Center(
+                                    child: Text(
+                                      title,
+                                      maxLines: 2,
+                                      textAlign: TextAlign.center,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 11.5,
                                         fontWeight: FontWeight.bold,
-                                        color: colorScheme.onSurface,
+                                        height: 1.25,
                                       ),
                                     ),
-                                  ],
-                                )
-                              else
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Text(
-                                      '🔥',
-                                      style: TextStyle(fontSize: 10),
-                                    ),
-                                    const SizedBox(width: 2),
-                                    Text(
-                                      formatDigitalHot(
-                                        hot.isEmpty ? '100.0万' : hot,
-                                      ),
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-
-                              const Spacer(),
-
-                              // 绿色胶囊关注按钮
-                              GestureDetector(
-                                onTap: () => _toggleFollow(id, title),
-                                child: Container(
-                                  width: double.infinity,
-                                  height: 24,
-                                  decoration: BoxDecoration(
-                                    color: isFollowed
-                                        ? colorScheme.surfaceContainerHighest
-                                        : primaryGreen,
-                                    borderRadius: BorderRadius.circular(12),
                                   ),
-                                  alignment: Alignment.center,
-                                  child: Text(
-                                    isFollowed ? '已关注' : '关注',
-                                    style: TextStyle(
+                                ),
+                                const SizedBox(height: 1),
+
+                                // 热度或评分
+                                if (_sort == DigitalLibrarySort.score &&
+                                    score.isNotEmpty)
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(
+                                        Icons.star_rounded,
+                                        size: 13,
+                                        color: Colors.amber,
+                                      ),
+                                      const SizedBox(width: 2),
+                                      Text(
+                                        score,
+                                        style: TextStyle(
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.bold,
+                                          color: colorScheme.onSurface,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                else
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Text(
+                                        '🔥',
+                                        style: TextStyle(fontSize: 10),
+                                      ),
+                                      const SizedBox(width: 2),
+                                      Text(
+                                        formatDigitalHot(
+                                          hot.isEmpty ? '100.0万' : hot,
+                                        ),
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+
+                                const Spacer(),
+
+                                // 绿色胶囊关注按钮
+                                GestureDetector(
+                                  onTap: () => _toggleFollow(id, title),
+                                  child: Container(
+                                    width: double.infinity,
+                                    height: 24,
+                                    decoration: BoxDecoration(
                                       color: isFollowed
-                                          ? colorScheme.onSurfaceVariant
-                                          : Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
+                                          ? colorScheme.surfaceContainerHighest
+                                          : primaryGreen,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      isFollowed ? '已关注' : '关注',
+                                      style: TextStyle(
+                                        color: isFollowed
+                                            ? colorScheme.onSurfaceVariant
+                                            : Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
-                  ),
-              ],
+                        );
+                      },
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -1585,50 +1590,15 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
       header: reviewDefaultRefreshHeader,
       onRefresh: () async => _loadProducts(refresh: true),
       onLoad: _hasMore ? () async => _loadProducts(refresh: false) : null,
-      child: ListView(
-        padding: EdgeInsets.fromLTRB(
-          10,
-          8,
-          10,
-          100 + MediaQuery.paddingOf(context).bottom,
-        ),
-        children: [
-          ReviewCard(
-            margin: const EdgeInsets.symmetric(vertical: 5),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('今日热门', style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  if (_loading && _products.isEmpty)
-                    const SizedBox(
-                      height: 140,
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else if (_products.isEmpty)
-                    _tabletEmpty(context)
-                  else
-                    GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            mainAxisExtent: 132,
-                            crossAxisSpacing: 6,
-                            mainAxisSpacing: 8,
-                          ),
-                      itemCount: _products.length > 8 ? 8 : _products.length,
-                      itemBuilder: (context, index) =>
-                          _tabletHotItem(context, index),
-                    ),
-                ],
-              ),
-            ),
+      child: filterHorizontalScrollNotifications(
+        ListView(
+          padding: EdgeInsets.fromLTRB(
+            10,
+            8,
+            10,
+            100 + MediaQuery.paddingOf(context).bottom,
           ),
-          if (_brands.isNotEmpty || _tabletBrandError != null)
+          children: [
             ReviewCard(
               margin: const EdgeInsets.symmetric(vertical: 5),
               child: Padding(
@@ -1636,84 +1606,123 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('品牌', style: Theme.of(context).textTheme.titleLarge),
+                    Text('今日热门', style: Theme.of(context).textTheme.titleLarge),
                     const SizedBox(height: 12),
-                    if (_brands.isNotEmpty)
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 10,
-                        children: [
-                          for (final brand in _brands)
-                            _buildBrandItem(context, brand, primaryGreen),
-                        ],
+                    if (_loading && _products.isEmpty)
+                      const SizedBox(
+                        height: 140,
+                        child: Center(child: CircularProgressIndicator()),
                       )
+                    else if (_products.isEmpty)
+                      _tabletEmpty(context)
                     else
-                      Row(
-                        children: [
-                          Expanded(child: Text(_tabletBrandError ?? '正在加载品牌')),
-                          TextButton(
-                            onPressed: _loadTabletBrands,
-                            child: const Text('重试'),
-                          ),
-                        ],
+                      GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 4,
+                              mainAxisExtent: 132,
+                              crossAxisSpacing: 6,
+                              mainAxisSpacing: 8,
+                            ),
+                        itemCount: _products.length > 8 ? 8 : _products.length,
+                        itemBuilder: (context, index) =>
+                            _tabletHotItem(context, index),
                       ),
                   ],
                 ),
               ),
             ),
-          ReviewCard(
-            margin: const EdgeInsets.symmetric(vertical: 5),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-              child: Column(
-                children: [
-                  Row(
+            if (_brands.isNotEmpty || _tabletBrandError != null)
+              ReviewCard(
+                margin: const EdgeInsets.symmetric(vertical: 5),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Text(
-                          '产品评分',
-                          style: Theme.of(context).textTheme.titleLarge,
+                      Text('品牌', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 12),
+                      if (_brands.isNotEmpty)
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 10,
+                          children: [
+                            for (final brand in _brands)
+                              _buildBrandItem(context, brand, primaryGreen),
+                          ],
+                        )
+                      else
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(_tabletBrandError ?? '正在加载品牌'),
+                            ),
+                            TextButton(
+                              onPressed: _loadTabletBrands,
+                              child: const Text('重试'),
+                            ),
+                          ],
                         ),
-                      ),
-                      _SortChip(
-                        label: '热度',
-                        selected: _sort == DigitalLibrarySort.hot,
-                        onTap: () => _selectSort(DigitalLibrarySort.hot),
-                      ),
-                      const SizedBox(width: 5),
-                      _SortChip(
-                        label: '评分',
-                        selected: _sort == DigitalLibrarySort.score,
-                        onTap: () => _selectSort(DigitalLibrarySort.score),
-                      ),
-                      const SizedBox(width: 5),
-                      _SortChip(
-                        label: '最新',
-                        selected: _sort == DigitalLibrarySort.newest,
-                        onTap: () => _selectSort(DigitalLibrarySort.newest),
-                      ),
                     ],
                   ),
-                  if (_products.isEmpty)
-                    _tabletEmpty(context)
-                  else
-                    for (var index = 0; index < _products.length; index++)
-                      _tabletRankRow(context, index),
-                ],
+                ),
+              ),
+            ReviewCard(
+              margin: const EdgeInsets.symmetric(vertical: 5),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '产品评分',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        _SortChip(
+                          label: '热度',
+                          selected: _sort == DigitalLibrarySort.hot,
+                          onTap: () => _selectSort(DigitalLibrarySort.hot),
+                        ),
+                        const SizedBox(width: 5),
+                        _SortChip(
+                          label: '评分',
+                          selected: _sort == DigitalLibrarySort.score,
+                          onTap: () => _selectSort(DigitalLibrarySort.score),
+                        ),
+                        const SizedBox(width: 5),
+                        _SortChip(
+                          label: '最新',
+                          selected: _sort == DigitalLibrarySort.newest,
+                          onTap: () => _selectSort(DigitalLibrarySort.newest),
+                        ),
+                      ],
+                    ),
+                    if (_products.isEmpty)
+                      _tabletEmpty(context)
+                    else
+                      for (var index = 0; index < _products.length; index++)
+                        _tabletRankRow(context, index),
+                  ],
+                ),
               ),
             ),
-          ),
-          if (_error != null && _products.isNotEmpty)
-            TextButton(
-              onPressed: () => _loadProducts(refresh: false),
-              child: Text('加载失败，点击重试：$_error'),
-            ),
-          if (_loading && _products.isNotEmpty)
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Center(child: CircularProgressIndicator()),
-            ),
-        ],
+            if (_error != null && _products.isNotEmpty)
+              TextButton(
+                onPressed: () => _loadProducts(refresh: false),
+                child: Text('加载失败，点击重试：$_error'),
+              ),
+            if (_loading && _products.isNotEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1924,12 +1933,12 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
       onTap: () => _selectBrand(b),
       child: SizedBox(
         width: 66,
-        height: 58,
+        height: 54,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              height: 36,
+              height: 34,
               width: 66,
               decoration: BoxDecoration(
                 color: Colors.white,
@@ -1965,7 +1974,7 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
                 ),
               ),
             ),
-            const SizedBox(height: 3),
+            const SizedBox(height: 2),
             Text(
               name,
               style: TextStyle(

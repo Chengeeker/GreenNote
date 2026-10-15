@@ -1,3 +1,4 @@
+import 'package:greennote/core/accounts/local_account.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -318,6 +319,9 @@ void main() {
     ) async {
       SharedPreferences.setMockInitialValues({});
       final fakeApi = _FakeCoolapkApi();
+      fakeApi.localAccount = LocalAccount(
+        await SharedPreferences.getInstance(),
+      );
       await tester.pumpWidget(
         ProviderScope(
           overrides: [coolapkApiProvider.overrideWith((ref) => fakeApi)],
@@ -335,6 +339,16 @@ void main() {
       // Tab 1 (Digital)
       await tester.tap(find.text('数码'));
       await tester.pump();
+      final firstDigitalPage = find
+          .ancestor(
+            of: find.byKey(const ValueKey(1)),
+            matching: find.byType(SlideTransition),
+          )
+          .first;
+      expect(
+        tester.widget<SlideTransition>(firstDigitalPage).position.value,
+        Offset.zero,
+      );
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('搜索动态/机型...'), findsOneWidget);
       expect(find.text('APP'), findsOneWidget);
@@ -600,6 +614,11 @@ void main() {
 }
 
 class _FakeCoolapkApi implements CoolapkApi {
+  @override
+  late final LocalAccount localAccount;
+  @override
+  bool get isAnonymous => false;
+
   _FakeCoolapkApi({this.hasCookieValue = false});
 
   final bool hasCookieValue;

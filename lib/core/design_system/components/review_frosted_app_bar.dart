@@ -30,7 +30,7 @@ class ReviewFrostedAppBar extends StatelessWidget
     this.titleSpacing,
     this.toolbarOpacity = 1,
     this.bottomOpacity = 1,
-    this.toolbarHeight,
+    this.toolbarHeight = 52,
     this.leadingWidth,
     this.toolbarTextStyle,
     this.titleTextStyle,

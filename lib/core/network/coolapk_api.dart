@@ -14,6 +14,7 @@ import 'package:html/parser.dart' as html;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'coolapk_image.dart';
+import '../accounts/local_account.dart';
 
 Future<Uint8List> loadCoolapkAuthBlob(AssetBundle bundle) async {
   try {
@@ -30,13 +31,21 @@ final coolapkApiProvider = FutureProvider<CoolapkApi>((ref) async {
 });
 
 class CoolapkApi {
-  CoolapkApi._(this._dio, this._auth, this._secureStorage, this._cookie);
+  CoolapkApi._(
+    this._dio,
+    this._auth,
+    this._secureStorage,
+    this._cookie,
+    this.localAccount,
+  );
 
   static const _apiCode = 2604201;
   static const _apiVersion = '16.2.0';
   final Dio _dio;
   final _CoolapkAuth _auth;
   final FlutterSecureStorage _secureStorage;
+  final LocalAccount localAccount;
+  final _localUsers = <String, Map<String, dynamic>>{};
   String _cookie;
   String _currentUid = '';
   String _currentUserAvatar = '';
@@ -60,7 +69,10 @@ class CoolapkApi {
         connectTimeout: const Duration(seconds: 15),
         receiveTimeout: const Duration(seconds: 20),
         headers: {
-          'User-Agent': 'CoolMarket/$_apiVersion-$_apiCode-universal',
+          // The API edge rejects a bare CoolMarket UA without the Android prefix.
+          'User-Agent':
+              'Dalvik/2.1.0 (Linux; U; Android 16) '
+              '+CoolMarket/$_apiVersion-$_apiCode-universal',
           'X-App-Id': 'com.coolapk.market',
           'X-App-Version': _apiVersion,
           'X-App-Code': '$_apiCode',
@@ -91,12 +103,17 @@ class CoolapkApi {
       auth,
       secureStorage,
       await secureStorage.read(key: 'coolapk_cookie') ?? '',
+      LocalAccount(preferences),
     );
   }
 
-  bool get hasCookie => _cookie.isNotEmpty;
-  String get currentUid => _currentUid;
-  String get currentUserAvatar => _currentUserAvatar;
+  bool get isAnonymous => localAccount.active;
+  bool get hasAccount => isAnonymous || hasCookie;
+  String get loginRequiredMessage => isAnonymous ? '当前为匿名登录，无法使用此功能' : '请先登录';
+  bool get hasCookie =>
+      !isAnonymous && localAccount.cookieEnabled && _cookie.isNotEmpty;
+  String get currentUid => isAnonymous ? '' : _currentUid;
+  String get currentUserAvatar => isAnonymous ? '' : _currentUserAvatar;
 
   Map<String, String> imageHeadersFor() {
     final headers = <String, String>{
@@ -107,7 +124,7 @@ class CoolapkApi {
       'X-App-Token': _auth.token(),
       'Referer': 'https://www.coolapk.com/',
     };
-    if (_cookie.isNotEmpty) headers['Cookie'] = _cookie;
+    if (hasCookie) headers['Cookie'] = _cookie;
     return headers;
   }
 
@@ -122,27 +139,36 @@ class CoolapkApi {
   }
 
   Future<void> validateAndSaveCookie(String cookie) async {
-    final previous = _cookie;
-    final previousUid = _currentUid;
-    await saveCookie(cookie);
-    _currentUid = '';
-    try {
-      await checkLogin();
-    } catch (_) {
-      _cookie = previous;
-      _currentUid = previousUid;
-      if (previous.isEmpty) {
-        await _secureStorage.delete(key: 'coolapk_cookie');
-      } else {
-        await _secureStorage.write(key: 'coolapk_cookie', value: previous);
-      }
-      rethrow;
+    final value = cookie.trim();
+    if (value.isEmpty || value.contains('\r') || value.contains('\n')) {
+      throw const CoolapkApiException('Cookie 格式无效');
     }
+    final candidate = CoolapkApi._(
+      _dio.clone(),
+      _auth,
+      _secureStorage,
+      value,
+      LocalAccount(await SharedPreferences.getInstance())
+        ..active = false
+        ..cookieEnabled = true,
+    );
+    await candidate.checkLogin();
+    if (candidate.currentUid.isEmpty) {
+      throw const CoolapkApiException('Cookie 未返回有效账号');
+    }
+    await saveCookie(value);
+    _currentUid = candidate.currentUid;
+    _currentUserAvatar = candidate.currentUserAvatar;
+    await localAccount.setActive(false, enableCookie: true);
   }
 
   Future<void> logout() async {
+    if (isAnonymous) {
+      await localAccount.setActive(false);
+      return;
+    }
     try {
-      if (_cookie.isNotEmpty) {
+      if (hasCookie) {
         await request('https://account.coolapk.com/auth/logout');
       }
     } finally {
@@ -178,6 +204,17 @@ class CoolapkApi {
     Map<String, dynamic> query = const {},
     Map<String, dynamic>? body,
   }) async {
+    if (isAnonymous &&
+        method.toUpperCase() != 'GET' &&
+        path != '/v6/player/getUrl') {
+      throw CoolapkApiException(loginRequiredMessage);
+    }
+    if (isAnonymous &&
+        (path.contains('/message/') ||
+            path.contains('/notification/') ||
+            path.contains('/account/'))) {
+      throw CoolapkApiException(loginRequiredMessage);
+    }
     var requestPath = path;
     var requestQuery = Map<String, dynamic>.from(query);
     if (requestPath == '/v6/product/feedList' ||
@@ -194,7 +231,7 @@ class CoolapkApi {
     }
     try {
       final headers = <String, String>{'X-App-Token': _auth.token()};
-      if (_cookie.isNotEmpty) headers['Cookie'] = _cookie;
+      if (hasCookie) headers['Cookie'] = _cookie;
       final response = await _dio.request<dynamic>(
         requestPath,
         queryParameters: requestQuery,
@@ -271,7 +308,7 @@ class CoolapkApi {
               status != null && status >= 200 && status < 400,
           headers: {
             'X-App-Token': _auth.token(),
-            if (_cookie.isNotEmpty) 'Cookie': _cookie,
+            if (hasCookie) 'Cookie': _cookie,
           },
         ),
       );
@@ -299,11 +336,19 @@ class CoolapkApi {
 
   Future<Map<String, String>> loadDiscoveryTabRoutes() async {
     final root = await (_mainInit ??= _readMainInit());
+    return parseDiscoveryTabRoutes(root);
+  }
+
+  static Map<String, String> parseDiscoveryTabRoutes(
+    Map<String, dynamic> root,
+  ) {
     final rows = root['data'];
     if (rows is! List) return const {};
     final routes = <String, String>{};
     for (final row in rows.whereType<Map>()) {
-      if (_string(row['title']) != '发现TAB配置') continue;
+      if (!const {'发现', '发现TAB配置'}.contains(_string(row['title']))) {
+        continue;
+      }
       final entities = row['entities'];
       if (entities is! List) return const {};
       for (final entity in entities.whereType<Map>()) {
@@ -390,11 +435,17 @@ class CoolapkApi {
     Map<String, dynamic> query = const {},
   }) async {
     final root = await _get(path, query);
-    final items = _extractEntities(root);
+    final followedUsers = path == '/v6/user/followList';
+    final items = followedUsers
+        ? parseUserFollowList(root)
+        : _extractEntities(root);
     return ApiPage(
       items: items,
       page: _int(root['page']) ?? _int(query['page']) ?? 1,
-      hasMore: _hasMore(root, _paginationItemCount(items)),
+      hasMore: _hasMore(
+        root,
+        followedUsers ? items.length : _paginationItemCount(items),
+      ),
       firstItem: _string(root['firstItem']).isNotEmpty
           ? _string(root['firstItem'])
           : _cursorItem(items),
@@ -460,10 +511,32 @@ class CoolapkApi {
   Future<void> likeFeed(String id, {required bool liked}) =>
       _post(liked ? '/v6/feed/unlike' : '/v6/feed/like', query: {'id': id});
 
-  Future<void> favoriteFeed(String id, {required bool favorited}) => _post(
-    favorited ? '/v6/feed/unfavorite' : '/v6/feed/favorite',
-    query: {'id': id},
-  );
+  Future<void> favoriteFeed(
+    String id, {
+    required bool favorited,
+    CoolapkFeed? feed,
+  }) async {
+    if (isAnonymous) {
+      if (feed == null) throw const CoolapkApiException('缺少本地收藏内容');
+      await localAccount.toggle('favorites', id, {
+        'id': id,
+        'uid': feed.uid,
+        'username': feed.username,
+        'userAvatar': feed.avatar,
+        'message': feed.raw['message'] is String
+            ? feed.raw['message']
+            : feed.message,
+        'pic': feed.pictures.join(','),
+        'dateline': '${feed.raw['dateline'] ?? ''}',
+        'entityType': 'feed',
+      });
+      return;
+    }
+    await _post(
+      favorited ? '/v6/feed/unfavorite' : '/v6/feed/favorite',
+      query: {'id': id},
+    );
+  }
 
   Future<void> forwardFeed(String id, String message) =>
       _post('/v6/feed/forward', body: {'id': id, 'message': message});
@@ -521,10 +594,21 @@ class CoolapkApi {
   Future<void> deleteReply(String id) =>
       _post('/v6/feed/deleteReply', query: {'id': id});
 
-  Future<void> followUser(String uid, {required bool following}) => _post(
-    following ? '/v6/user/unfollow' : '/v6/user/follow',
-    query: {'uid': uid},
-  );
+  Future<void> followUser(String uid, {required bool following}) async {
+    if (isAnonymous) {
+      await localAccount.toggle(
+        'follows',
+        uid,
+        _localUsers[uid] ??
+            {'uid': uid, 'username': '酷友 $uid', 'userAvatar': ''},
+      );
+      return;
+    }
+    await _post(
+      following ? '/v6/user/unfollow' : '/v6/user/follow',
+      query: {'uid': uid},
+    );
+  }
 
   Future<void> blockUser(String uid, {required bool blocked}) => _post(
     blocked ? '/v6/user/unblock' : '/v6/user/block',
@@ -790,8 +874,46 @@ class CoolapkApi {
   Future<Map<String, dynamic>> getReplyDetail(String replyId) =>
       _get('/v6/feed/replyDetail', {'id': replyId});
 
-  Future<ApiPage> getUserPage(String route, String uid, int page) =>
-      getList(route, query: {'uid': uid, 'page': page});
+  Future<ApiPage> getUserPage(
+    String route,
+    String uid,
+    int page, {
+    String firstItem = '',
+    String lastItem = '',
+  }) => getList(
+    route,
+    query: {
+      'uid': uid,
+      'page': page,
+      if (firstItem.isNotEmpty) 'firstItem': firstItem,
+      if (lastItem.isNotEmpty) 'lastItem': lastItem,
+    },
+  );
+
+  Future<FeedPage> getUserFeedPage(
+    String uid,
+    int page, {
+    String firstItem = '',
+    String lastItem = '',
+  }) async {
+    final root = await _get('/v6/user/feedList', {
+      'uid': uid,
+      'page': page,
+      'firstItem': firstItem,
+      'lastItem': lastItem,
+    });
+    final items = _extractFeeds(root);
+    return FeedPage(
+      items: items,
+      firstItem: _string(root['firstItem']).isNotEmpty
+          ? _string(root['firstItem'])
+          : items.firstOrNull?.id ?? '',
+      lastItem: _string(root['lastItem']).isNotEmpty
+          ? _string(root['lastItem'])
+          : items.lastOrNull?.id ?? '',
+      hasMore: _hasMore(root, items.length),
+    );
+  }
 
   Future<Map<String, dynamic>> getUserSpace(String uid) =>
       _get('/v6/user/space', {'uid': uid});
@@ -834,7 +956,27 @@ class CoolapkApi {
     Map<String, dynamic> query,
   ) async {
     final data = await request(path, query: query);
-    if (data is Map<String, dynamic>) return data;
+    if (data is Map<String, dynamic>) {
+      if (path == '/v6/user/space' || path == '/v6/user/profile') {
+        final raw = data['data'];
+        if (raw is Map) {
+          final nested = raw['userInfo'] ?? raw['user_info'];
+          final user = nested is Map ? nested : raw;
+          final uid = '${query['uid'] ?? ''}';
+          _localUsers[uid] = {
+            'uid': uid,
+            'username':
+                '${user['username'] ?? _localUsers[uid]?['username'] ?? '酷友 $uid'}',
+            'userAvatar':
+                '${user['userAvatar'] ?? user['avatar'] ?? _localUsers[uid]?['userAvatar'] ?? ''}',
+          };
+          if (_localUsers.length > 128) {
+            _localUsers.remove(_localUsers.keys.first);
+          }
+        }
+      }
+      return data;
+    }
     throw const CoolapkApiException('酷安返回了无法识别的响应');
   }
 
@@ -945,6 +1087,88 @@ class CoolapkApi {
         .toList(growable: false);
   }
 
+  static List<Map<String, dynamic>> parseUserFollowList(
+    Map<String, dynamic> root,
+  ) {
+    const containers = [
+      'data',
+      'entities',
+      'rows',
+      'list',
+      'items',
+      'cardRows',
+      'card_rows',
+      'entityList',
+      'entity_list',
+      'userInfo',
+      'user_info',
+      'user',
+      'userEntity',
+      'user_entity',
+      'followUser',
+      'follow_user',
+    ];
+    final users = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    void visit(dynamic value) {
+      if (value is List) {
+        for (final item in value) {
+          visit(item);
+        }
+        return;
+      }
+      if (value is! Map) return;
+      final user = Map<String, dynamic>.from(value);
+      final followedInfo = user['fUserInfo'];
+      if (user.containsKey('fuid') || followedInfo is Map) {
+        final followed = followedInfo is Map
+            ? Map<String, dynamic>.from(followedInfo)
+            : <String, dynamic>{};
+        final uid = _string(user['fuid'] ?? followed['uid']);
+        if (uid.isNotEmpty && seen.add(uid)) {
+          users.add({
+            ...followed,
+            'uid': uid,
+            'id': uid,
+            'username': followed['username'] ?? user['fusername'] ?? '',
+            'userAvatar': followed['userAvatar'] ?? user['fUserAvatar'] ?? '',
+            'entityType': 'user',
+          });
+        }
+        // Relationship rows use uid for the owner, fuid for the followed user.
+        return;
+      }
+      final type = _string(user['entityType'] ?? user['entity_type'])
+          .toLowerCase();
+      final uid = _string(
+        user['uid'] ??
+            user['userId'] ??
+            user['user_id'] ??
+            (type.contains('user') || type == 'contacts' ? user['id'] : null),
+      );
+      final hasUserDetails =
+          _string(user['username'] ?? user['userName'] ?? user['name'])
+              .isNotEmpty ||
+          _string(user['userAvatar'] ?? user['avatar']).isNotEmpty;
+      final hasNestedEntities = containers.any(user.containsKey);
+      if (uid.isNotEmpty &&
+          (type.contains('user') ||
+              type == 'contacts' ||
+              hasUserDetails && !hasNestedEntities) &&
+          seen.add(uid)) {
+        user['uid'] = uid;
+        user['entityType'] = 'user';
+        users.add(user);
+      }
+      for (final key in containers) {
+        if (user.containsKey(key)) visit(user[key]);
+      }
+    }
+
+    visit(root['data']);
+    return users;
+  }
+
   static bool _hasMore(Map<String, dynamic> root, int itemCount) {
     final value = root['hasMore'] ?? root['has_more'] ?? root['hasNextPage'];
     if (value is bool) return value;
@@ -1009,6 +1233,7 @@ class CoolapkFeed {
     required this.likeCount,
     required this.replyCount,
     required this.pictures,
+    this.pictureMetadata = const {},
     this.uid = '',
     this.liked = false,
     this.favorited = false,
@@ -1023,10 +1248,36 @@ class CoolapkFeed {
   final String likeCount;
   final String replyCount;
   final List<String> pictures;
+  final Map<String, Map<String, dynamic>> pictureMetadata;
   final String uid;
   final bool liked;
   final bool favorited;
   final Map<String, dynamic> raw;
+
+  static Map<String, Map<String, dynamic>> pictureMetadataFromJson(
+    Map<String, dynamic> json,
+  ) {
+    final metadataByUrl = <String, Map<String, dynamic>>{};
+    for (final key in ['picArr', 'imageUriList', 'image_uri_list']) {
+      final entries = json[key];
+      if (entries is! List) continue;
+      for (final entry in entries) {
+        if (entry is! Map) continue;
+        final metadata = Map<String, dynamic>.from(entry);
+        final url = _string(
+          metadata['url'] ?? metadata['pic'] ?? metadata['image'],
+        );
+        if (_validImageUrl(url)) {
+          metadataByUrl.update(
+            url,
+            (previous) => {...previous, ...metadata},
+            ifAbsent: () => metadata,
+          );
+        }
+      }
+    }
+    return metadataByUrl;
+  }
 
   factory CoolapkFeed.fromJson(Map<String, dynamic> json) {
     final user = json['userInfo'] ?? json['user_info'] ?? json['user'];
@@ -1115,6 +1366,7 @@ class CoolapkFeed {
             json['commentnum'],
       ),
       pictures: images.toList(growable: false),
+      pictureMetadata: pictureMetadataFromJson(json),
       liked:
           json['isLike'] == true ||
           json['is_like'] == true ||

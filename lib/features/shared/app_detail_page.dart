@@ -196,13 +196,6 @@ class _AppDetailPageState extends State<AppDetailPage> {
     setState(() {
       _itemsLoading = true;
       _itemsError = null;
-      if (refresh) {
-        _items = [];
-        _page = 0;
-        _firstItem = '';
-        _lastItem = '';
-        _hasMore = true;
-      }
     });
     try {
       final page = await widget.api.getList(
@@ -219,9 +212,13 @@ class _AppDetailPageState extends State<AppDetailPage> {
         },
       );
       if (!mounted || tab != _tab) return;
+      final nextItems = refresh
+          ? <Map<String, dynamic>>[]
+          : List<Map<String, dynamic>>.of(_items);
+      final known = nextItems.map(_itemKey).toSet();
+      nextItems.addAll(page.items.where((item) => known.add(_itemKey(item))));
       setState(() {
-        final known = _items.map(_itemKey).toSet();
-        _items.addAll(page.items.where((item) => known.add(_itemKey(item))));
+        _items = nextItems;
         _page = nextPage;
         _firstItem = page.firstItem;
         _lastItem = page.lastItem;
@@ -1006,6 +1003,14 @@ class _AppDetailPageState extends State<AppDetailPage> {
     child: Row(
       children: [
         Text('排序规则', style: TextStyle(color: scheme.onSurfaceVariant)),
+        if (_itemsLoading && _items.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ],
         const Spacer(),
         for (final entry in const {
           'lastupdate_desc': '默认',
@@ -1039,7 +1044,11 @@ class _AppDetailPageState extends State<AppDetailPage> {
         data: theme.copyWith(
           cardTheme: theme.cardTheme.copyWith(color: cardColor),
         ),
-        child: FeedCard(api: widget.api, feed: CoolapkFeed.fromJson(item)),
+        child: FeedCard(
+          key: ValueKey(_itemKey(item)),
+          api: widget.api,
+          feed: CoolapkFeed.fromJson(item),
+        ),
       );
     }
     final user = _value(item, ['username', 'userName', 'displayUsername']);

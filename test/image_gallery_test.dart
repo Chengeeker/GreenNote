@@ -13,6 +13,9 @@ import 'package:greennote/features/feed/image_gallery_page.dart';
 import 'package:greennote/features/feed/nine_grid_view.dart';
 
 class GalleryApi implements CoolapkApi {
+  @override
+  bool get isAnonymous => false;
+
   const GalleryApi();
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -376,6 +379,24 @@ void main() {
           final expectedStart = await tester.runAsync(
             () => screenshot(galleryBoundaryKey),
           );
+          Widget? pushStartShuttle;
+          Widget? pushEndShuttle;
+          if (zoom == 1.0) {
+            pushStartShuttle = imageGalleryHeroFlightShuttleBuilder(
+              sourceKey.currentContext!,
+              const AlwaysStoppedAnimation(0),
+              HeroFlightDirection.push,
+              sourceKey.currentContext!,
+              galleryKey.currentContext!,
+            );
+            pushEndShuttle = imageGalleryHeroFlightShuttleBuilder(
+              sourceKey.currentContext!,
+              const AlwaysStoppedAnimation(1),
+              HeroFlightDirection.push,
+              sourceKey.currentContext!,
+              galleryKey.currentContext!,
+            );
+          }
           final startShuttle = imageGalleryHeroFlightShuttleBuilder(
             galleryKey.currentContext!,
             const AlwaysStoppedAnimation(1),
@@ -396,7 +417,7 @@ void main() {
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 100));
           expect(
-            find.byKey(const ValueKey('gallery-return-image-plane')),
+            find.byKey(const ValueKey('gallery-image-flight-plane')),
             findsOneWidget,
           );
           await tester.pumpAndSettle();
@@ -432,6 +453,48 @@ void main() {
             expected,
             reason: 'last flight pixels must equal the rounded cover thumbnail',
           );
+          if (pushStartShuttle != null && pushEndShuttle != null) {
+            await tester.pumpWidget(
+              MaterialApp(
+                home: Center(
+                  child: RepaintBoundary(
+                    key: boundaryKey,
+                    child: SizedBox(
+                      width: 100,
+                      height: 100,
+                      child: pushStartShuttle,
+                    ),
+                  ),
+                ),
+              ),
+            );
+            await tester.pump();
+            expect(
+              await tester.runAsync(() => screenshot(boundaryKey)),
+              expected,
+              reason: 'push starts with the visible thumbnail pixels',
+            );
+            await tester.pumpWidget(
+              MaterialApp(
+                home: Center(
+                  child: RepaintBoundary(
+                    key: boundaryKey,
+                    child: SizedBox(
+                      width: 300,
+                      height: 400,
+                      child: pushEndShuttle,
+                    ),
+                  ),
+                ),
+              ),
+            );
+            await tester.pump();
+            expect(
+              await tester.runAsync(() => screenshot(boundaryKey)),
+              expectedStart,
+              reason: 'push ends with the fullscreen contain-fit image',
+            );
+          }
           await tester.pumpWidget(const SizedBox());
           image.dispose();
           expect(tester.takeException(), isNull);

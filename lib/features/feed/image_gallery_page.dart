@@ -149,12 +149,7 @@ class ImageGalleryHeroTag {
       Object.hash(identityHashCode(scope), index, mediaIdentity);
 }
 
-/// Keeps the gallery image as the flying widget in both directions.
-///
-/// Flutter's default Hero shuttle always uses the destination child's layout.
-/// On pop that is the small feed thumbnail, which can briefly replace the
-/// fullscreen image before the reverse flight starts. Use the fullscreen
-/// destination on push and the fullscreen source on pop instead.
+/// Keeps the image pixels in flight while their fitted geometry changes.
 Widget imageGalleryHeroFlightShuttleBuilder(
   BuildContext flightContext,
   Animation<double> animation,
@@ -163,14 +158,9 @@ Widget imageGalleryHeroFlightShuttleBuilder(
   BuildContext toHeroContext,
 ) {
   final fromHero = fromHeroContext.widget as Hero;
-  final toHero = toHeroContext.widget as Hero;
-  if (flightDirection != HeroFlightDirection.pop) return toHero.child;
-
   final tag = fromHero.tag;
   final targetRenderObject = toHeroContext.findRenderObject();
-  if (tag is! ImageGalleryHeroTag ||
-      !tag.thumbnailUsesCover ||
-      targetRenderObject is! RenderBox ||
+  if (targetRenderObject is! RenderBox ||
       !targetRenderObject.hasSize ||
       targetRenderObject.size.width <= 0 ||
       targetRenderObject.size.height <= 0) {
@@ -178,13 +168,22 @@ Widget imageGalleryHeroFlightShuttleBuilder(
   }
 
   final source = _HeroImageGeometry.capture(fromHeroContext);
-  final target = _HeroImageGeometry.capture(toHeroContext);
-  if (source == null || target == null) return fromHero.child;
-  return _HeroReturnImageMorph(
+  if (source == null) return fromHero.child;
+
+  final isPop = flightDirection == HeroFlightDirection.pop;
+  if (isPop && (tag is! ImageGalleryHeroTag || !tag.thumbnailUsesCover)) {
+    return fromHero.child;
+  }
+  final target = isPop
+      ? _HeroImageGeometry.capture(toHeroContext)
+      : _HeroImageGeometry.fitContain(source.image, targetRenderObject);
+  if (target == null) return fromHero.child;
+  return _HeroImageFlightMorph(
     animation: animation,
     image: source.image.clone(),
     source: source,
     target: target,
+    reverse: isPop,
   );
 }
 
@@ -265,28 +264,41 @@ class _HeroImageGeometry {
     visit(root);
     return result;
   }
+
+  static _HeroImageGeometry? fitContain(ui.Image image, RenderBox target) {
+    if (!target.hasSize || target.size.isEmpty) return null;
+    final pixels = Size(image.width.toDouble(), image.height.toDouble());
+    final fitted = applyBoxFit(BoxFit.contain, pixels, target.size).destination;
+    return _HeroImageGeometry(
+      image,
+      Alignment.center.inscribe(fitted, Offset.zero & target.size),
+      BorderRadius.zero,
+    );
+  }
 }
 
 /// Freeze the decoded image, then move its edges and the clipping viewport
 /// independently. Re-layout of a gesture image during flight changes its crop.
-class _HeroReturnImageMorph extends StatefulWidget {
-  const _HeroReturnImageMorph({
+class _HeroImageFlightMorph extends StatefulWidget {
+  const _HeroImageFlightMorph({
     required this.animation,
     required this.image,
     required this.source,
     required this.target,
+    required this.reverse,
   });
 
   final Animation<double> animation;
   final ui.Image image;
   final _HeroImageGeometry source;
   final _HeroImageGeometry target;
+  final bool reverse;
 
   @override
-  State<_HeroReturnImageMorph> createState() => _HeroReturnImageMorphState();
+  State<_HeroImageFlightMorph> createState() => _HeroImageFlightMorphState();
 }
 
-class _HeroReturnImageMorphState extends State<_HeroReturnImageMorph> {
+class _HeroImageFlightMorphState extends State<_HeroImageFlightMorph> {
   @override
   void dispose() {
     widget.image.dispose();
@@ -295,28 +307,36 @@ class _HeroReturnImageMorphState extends State<_HeroReturnImageMorph> {
 
   @override
   Widget build(BuildContext context) => CustomPaint(
-    key: const ValueKey('gallery-return-image-plane'),
-    painter: _HeroReturnPainter(
+    key: const ValueKey('gallery-image-flight-plane'),
+    painter: _HeroImageFlightPainter(
       widget.image,
       widget.animation,
       widget.source,
       widget.target,
+      widget.reverse,
     ),
     child: const SizedBox.expand(),
   );
 }
 
-class _HeroReturnPainter extends CustomPainter {
-  _HeroReturnPainter(this.image, this.animation, this.source, this.target)
-    : super(repaint: animation);
+class _HeroImageFlightPainter extends CustomPainter {
+  _HeroImageFlightPainter(
+    this.image,
+    this.animation,
+    this.source,
+    this.target,
+    this.reverse,
+  ) : super(repaint: animation);
   final ui.Image image;
   final Animation<double> animation;
   final _HeroImageGeometry source;
   final _HeroImageGeometry target;
+  final bool reverse;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final t = (1 - animation.value).clamp(0.0, 1.0);
+    final progress = reverse ? 1 - animation.value : animation.value;
+    final t = progress.clamp(0.0, 1.0);
     final rect = Rect.lerp(source.rect, target.rect, t)!;
     final radius = BorderRadius.lerp(source.radius, target.radius, t)!;
     canvas.save();
@@ -331,11 +351,12 @@ class _HeroReturnPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _HeroReturnPainter oldDelegate) =>
+  bool shouldRepaint(covariant _HeroImageFlightPainter oldDelegate) =>
       oldDelegate.image != image ||
       oldDelegate.source != source ||
       oldDelegate.target != target ||
-      oldDelegate.animation != animation;
+      oldDelegate.animation != animation ||
+      oldDelegate.reverse != reverse;
 }
 
 /// Wraps a tapped source thumbnail with the same tag used by [ImageGalleryPage].
@@ -1407,7 +1428,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          _GalleryIconButton(
+                          _GalleryGlassIconButton(
                             tooltip: '返回',
                             opacity: controlsOpacity,
                             opacityKey: const ValueKey(
@@ -1445,7 +1466,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                             ),
                           ),
 
-                          _GalleryIconButton(
+                          _GalleryGlassIconButton(
                             tooltip: '保存高清大图到相册',
                             opacity: controlsOpacity,
                             opacityKey: const ValueKey(
@@ -1479,8 +1500,8 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   }
 }
 
-class _GalleryIconButton extends StatelessWidget {
-  const _GalleryIconButton({
+class _GalleryGlassIconButton extends StatefulWidget {
+  const _GalleryGlassIconButton({
     required this.icon,
     required this.tooltip,
     required this.onPressed,
@@ -1495,22 +1516,110 @@ class _GalleryIconButton extends StatelessWidget {
   final Key opacityKey;
 
   @override
+  State<_GalleryGlassIconButton> createState() =>
+      _GalleryGlassIconButtonState();
+}
+
+class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
+  static Future<ui.FragmentProgram>? _programFuture;
+  ui.FragmentShader? _shader;
+
+  @override
+  void initState() {
+    super.initState();
+    if (ui.ImageFilter.isShaderFilterSupported) _loadShader();
+  }
+
+  Future<void> _loadShader() async {
+    try {
+      final program = await (_programFuture ??= ui.FragmentProgram.fromAsset(
+        'shaders/gallery_glass_button.frag',
+      ));
+      if (mounted) setState(() => _shader = program.fragmentShader());
+    } catch (_) {
+      // Keep the glass surface usable when shader filters are unavailable.
+    }
+  }
+
+  @override
+  void dispose() {
+    _shader?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final opacity = widget.opacity;
+    final blur = ui.ImageFilter.blur(
+      sigmaX: 2.5 * opacity,
+      sigmaY: 2.5 * opacity,
+    );
+    final shader = _shader;
+    final filter = shader == null || opacity < 1
+        ? blur
+        : ui.ImageFilter.compose(
+            outer: ui.ImageFilter.shader(shader),
+            inner: blur,
+          );
     return SizedBox(
       width: 48,
       height: 48,
       child: Stack(
         alignment: Alignment.center,
         children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: const Color(0xFF303030).withValues(alpha: opacity),
-              shape: BoxShape.circle,
+          SizedBox(
+            width: 44,
+            height: 44,
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.20 * opacity),
+                    blurRadius: 7,
+                    offset: const Offset(0, 2),
+                  ),
+                  BoxShadow(
+                    color: Colors.white.withValues(alpha: 0.08 * opacity),
+                    blurRadius: 5,
+                    offset: const Offset(0, -1),
+                  ),
+                ],
+              ),
+              child: ClipOval(
+                clipBehavior: Clip.antiAlias,
+                child: BackdropFilter(
+                  filter: filter,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.grey.shade200.withValues(
+                            alpha: 0.30 * opacity,
+                          ),
+                          Colors.grey.shade500.withValues(
+                            alpha: 0.20 * opacity,
+                          ),
+                          Colors.grey.shade800.withValues(
+                            alpha: 0.36 * opacity,
+                          ),
+                        ],
+                      ),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.34 * opacity),
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
-            child: const SizedBox(width: 44, height: 44),
           ),
           IconButton(
-            tooltip: tooltip,
+            tooltip: widget.tooltip,
             style: IconButton.styleFrom(
               fixedSize: const Size.square(48),
               padding: EdgeInsets.zero,
@@ -1518,8 +1627,12 @@ class _GalleryIconButton extends StatelessWidget {
               backgroundColor: Colors.transparent,
               shape: const CircleBorder(),
             ),
-            onPressed: onPressed,
-            icon: Opacity(key: opacityKey, opacity: opacity, child: icon),
+            onPressed: widget.onPressed,
+            icon: Opacity(
+              key: widget.opacityKey,
+              opacity: opacity,
+              child: widget.icon,
+            ),
           ),
         ],
       ),

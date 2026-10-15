@@ -9,11 +9,27 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var avatarResult: MethodChannel.Result? = null
     private var mediaChannel: MethodChannel? = null
     private val mediaExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var uiChannel: MethodChannel? = null
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/avatar")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "pick") { result.notImplemented(); return@setMethodCallHandler }
+                if (avatarResult != null) { result.error("busy", "Picker is open", null); return@setMethodCallHandler }
+                avatarResult = result
+                try {
+                    startActivityForResult(android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
+                        type = "image/*"
+                        addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                    }, 7401)
+                } catch (_: Exception) {
+                    avatarResult = null
+                    result.error("picker", "Cannot open image picker", null)
+                }
+            }
         configureMediaChannel(flutterEngine)
         uiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/ui")
         uiChannel?.setMethodCallHandler { call, result ->
@@ -32,6 +48,50 @@ class MainActivity : FlutterActivity() {
                     )
                 )
                 else -> result.notImplemented()
+            }
+        }
+    }
+
+    @Deprecated("Activity result bridge for Flutter avatar picker")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 7401) return
+        val result = avatarResult ?: return
+        avatarResult = null
+        val uri = data?.data
+        if (resultCode != android.app.Activity.RESULT_OK || uri == null) { result.success(null); return }
+        mediaExecutor.execute {
+            try {
+                val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                    val output = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    var count = input.read(buffer)
+                    while (count != -1) {
+                        if (output.size() + count > 16 * 1024 * 1024) throw IllegalArgumentException("Image is too large")
+                        output.write(buffer, 0, count)
+                        count = input.read(buffer)
+                    }
+                    output.toByteArray()
+                } ?: throw IllegalArgumentException("Image unavailable")
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalArgumentException("Invalid image")
+                val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = 1 }
+                while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > 512) options.inSampleSize *= 2
+                val source = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                    ?: throw IllegalArgumentException("Invalid image")
+                val edge = minOf(source.width, source.height)
+                val cropped = android.graphics.Bitmap.createBitmap(source, (source.width - edge) / 2, (source.height - edge) / 2, edge, edge)
+                val scaled = android.graphics.Bitmap.createScaledBitmap(cropped, 192, 192, true)
+                val output = java.io.ByteArrayOutputStream()
+                scaled.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+                val png = output.toByteArray()
+                if (scaled !== cropped) scaled.recycle()
+                if (cropped !== source) cropped.recycle()
+                source.recycle()
+                runOnUiThread { result.success(png) }
+            } catch (_: Exception) {
+                runOnUiThread { result.error("image", "Cannot decode selected image", null) }
             }
         }
     }
@@ -256,6 +316,8 @@ class MainActivity : FlutterActivity() {
         uiChannel?.invokeMethod("onFontWeightAdjustmentChanged", getSystemFontWeightAdjustment())
     }
     override fun onDestroy() {
+        avatarResult?.error("cancelled", "Activity closed", null)
+        avatarResult = null
         mediaExecutor.shutdown()
         super.onDestroy()
     }

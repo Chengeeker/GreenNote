@@ -36,8 +36,107 @@ class ComparisonProduct {
   Map<String, Map<String, String>> specs;
   bool loading;
 
+  static bool _isChipString(String text) {
+    final lower = text.toLowerCase();
+    return text.contains('骁龙') ||
+        text.contains('天玑') ||
+        text.contains('麒麟') ||
+        text.contains('苹果') ||
+        text.contains('仿生') ||
+        text.contains('玄戒') ||
+        text.contains('猎户座') ||
+        lower.contains('snapdragon') ||
+        lower.contains('dimensity') ||
+        lower.contains('bionic') ||
+        lower.contains('kirin') ||
+        lower.contains('exynos') ||
+        lower.contains('tensor') ||
+        RegExp(r'\b[aA]\d{2}\b').hasMatch(text) ||
+        lower.contains('gen') ||
+        lower.contains('cpu');
+  }
+
+  static String? _findInSpecs(
+    Map<String, Map<String, String>> map,
+    List<String> candidateKeys,
+  ) {
+    for (final key in candidateKeys) {
+      for (final group in map.values) {
+        if (group.containsKey(key)) {
+          final val = group[key]!.trim();
+          if (val.isNotEmpty && val != '-') return val;
+        }
+      }
+    }
+    return null;
+  }
+
   String getSpec(String group, String key) {
-    return specs[group]?[key] ?? '-';
+    // 1. Direct group and key lookup
+    final direct = specs[group]?[key]?.trim();
+    if (direct != null && direct.isNotEmpty && direct != '-') {
+      return direct;
+    }
+
+    // 2. Synonyms and alias mapping for default core specs
+    if (key == '芯片' || key == '处理器') {
+      final v = _findInSpecs(specs, ['CPU型号', '处理器', '芯片', 'SoC型号', 'SoC', 'CPU']) ??
+          (rawDetail['chip'] ?? rawDetail['soc'] ?? rawDetail['processor'])?.toString().trim();
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    } else if (key == 'RAM & ROM' || key == '存储') {
+      final v = _findInSpecs(specs, ['RAM容量', '运行内存']);
+      final r = _findInSpecs(specs, ['ROM容量', '机身存储', '存储容量']);
+      if (v != null && r != null) return '$v + $r';
+      if (rawDetail['ram'] != null && rawDetail['rom'] != null) {
+        return '${rawDetail['ram']} + ${rawDetail['rom']}';
+      }
+      if (selectedConfigName.isNotEmpty) return selectedConfigName;
+    } else if (key == '屏幕') {
+      final v = _findInSpecs(specs, ['屏幕尺寸', '主屏尺寸']) ??
+          rawDetail['screen_size']?.toString().trim();
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    } else if (key == '影像联名') {
+      final v = _findInSpecs(specs, ['影像品牌', '影像联名', '镜头品牌', '联名品牌']) ??
+          rawDetail['camera_brand']?.toString().trim();
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    } else if (key == '后置主摄' || key == '主摄') {
+      final v = _findInSpecs(specs, ['后置摄像头', '后置主摄', '后置摄像头像素']) ??
+          (rawDetail['main_camera'] ?? rawDetail['camera'])?.toString().trim();
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    } else if (key == '电池') {
+      final v = _findInSpecs(specs, ['电池容量', '电池']) ??
+          rawDetail['battery']?.toString().trim();
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    } else if (key == '充电') {
+      final v = _findInSpecs(specs, ['有线充电', '充电', '快充', '有线快充', '闪充']) ??
+          rawDetail['charging']?.toString().trim();
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    } else if (key == '机身规格') {
+      final v = _findInSpecs(specs, ['机身尺寸', '手机尺寸']) ??
+          (rawDetail['thickness'] != null
+              ? '${rawDetail['thickness']} / ${rawDetail['weight'] ?? ''}'
+              : null);
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    } else if (key == '特色功能') {
+      final v = _findInSpecs(specs, ['特色功能', '功能特点', '其他功能', '特殊功能']);
+      if (v != null && v.isNotEmpty && v != '-') return v;
+    }
+
+    // 3. Search key across all groups
+    for (final g in specs.values) {
+      if (g.containsKey(key)) {
+        final val = g[key]!.trim();
+        if (val.isNotEmpty && val != '-') return val;
+      }
+    }
+
+    // 4. Fallback to rawDetail
+    if (rawDetail.containsKey(key)) {
+      final val = '${rawDetail[key] ?? ''}'.trim();
+      if (val.isNotEmpty && val != '-') return val;
+    }
+
+    return '-';
   }
 
   static ComparisonProduct fromDetail({
@@ -94,26 +193,85 @@ class ComparisonProduct {
   }
 
   void populateDefaultSpecs() {
-    final chip = (rawDetail['chip'] ?? '骁龙8至尊版 Gen5').toString();
+    // 1. Direct rawDetail properties
+    var chip = (rawDetail['chip'] ?? rawDetail['soc'] ?? rawDetail['processor'] ?? '').toString().trim();
+    var ram = (rawDetail['ram'] ?? '').toString().trim();
+    var rom = (rawDetail['rom'] ?? '').toString().trim();
+    var screenSize = (rawDetail['screen_size'] ?? rawDetail['screen'] ?? '').toString().trim();
+    var refreshRate = (rawDetail['screen_refresh_rate'] ?? '').toString().trim();
+    var resolution = (rawDetail['screen_resolution'] ?? '').toString().trim();
+    var screenType = (rawDetail['screen_type'] ?? '').toString().trim();
+    var cameraBrand = (rawDetail['camera_brand'] ?? '').toString().trim();
+    var mainCamera = (rawDetail['main_camera'] ?? rawDetail['camera'] ?? '').toString().trim();
+    var battery = (rawDetail['battery'] ?? '').toString().trim();
+    var charging = (rawDetail['charging'] ?? '').toString().trim();
+    var thickness = (rawDetail['thickness'] ?? '').toString().trim();
+    var weight = (rawDetail['weight'] ?? '').toString().trim();
+
+    // 2. Parse from `specs` string and `tags` (especially for items from ProductSelectorPage)
+    final rawSpecsStr = (rawDetail['specs'] ?? '').toString().trim();
+    if (rawSpecsStr.isNotEmpty) {
+      final parts = rawSpecsStr.split(RegExp(r'\s*[|/]\s*'));
+      for (final part in parts) {
+        final p = part.trim();
+        if (p.isEmpty) continue;
+        if (chip.isEmpty && _isChipString(p)) {
+          chip = p;
+        } else if (battery.isEmpty && (p.contains('mAh') || p.contains('毫安'))) {
+          battery = p;
+        } else if (charging.isEmpty && (p.contains('W') || p.contains('快充') || p.contains('闪充'))) {
+          charging = p;
+        } else if (screenSize.isEmpty && (p.contains('英寸') || p.contains('"') || p.contains('寸'))) {
+          screenSize = p;
+        } else if (mainCamera.isEmpty && (p.contains('万') || p.contains('像素') || p.contains('MP'))) {
+          mainCamera = p;
+        } else if (ram.isEmpty && RegExp(r'\d+GB|\d+TB').hasMatch(p)) {
+          if (p.contains('+')) {
+            final ramRomParts = p.split('+');
+            ram = ramRomParts[0].trim();
+            if (ramRomParts.length > 1) rom = ramRomParts[1].trim();
+          } else {
+            ram = p;
+          }
+        }
+      }
+    }
+
+    if (rawDetail['tags'] is List) {
+      for (final t in (rawDetail['tags'] as List).map((e) => '$e'.trim())) {
+        if (t.contains('Hz') && refreshRate.isEmpty) refreshRate = t;
+        if ((t.contains('W快充') || t.contains('W有线') || t.contains('W闪充')) && charging.isEmpty) {
+          charging = t;
+        }
+      }
+    }
+
+    // Default fallbacks if completely empty
+    if (chip.isEmpty) chip = '骁龙8至尊版 Gen5';
+    if (screenSize.isEmpty) screenSize = '6.9英寸';
+    if (refreshRate.isEmpty) refreshRate = '185Hz';
+    if (resolution.isEmpty) resolution = '2608x1200px';
+    if (screenType.isEmpty) screenType = 'OLED\n居中单挖孔，直屏';
+    if (cameraBrand.isEmpty) cameraBrand = '-';
+    if (mainCamera.isEmpty) mainCamera = '三星HP5 1/1.56英寸\n2亿像素\n光学防抖';
+    if (battery.isEmpty) battery = '5500mAh';
+    if (charging.isEmpty) charging = '120W 有线快充';
+    if (thickness.isEmpty) thickness = '8.2mm';
+    if (weight.isEmpty) weight = '210g';
+
     final ramRom = selectedConfigName.isNotEmpty
         ? '$selectedConfigName\nLPDDR5X + UFS4.1'
-        : (rawDetail['ram'] != null
-            ? '${rawDetail['ram']} + ${rawDetail['rom']}\nLPDDR5X + UFS4.1'
-            : '12GB + 256GB\nLPDDR5X + UFS4.1');
+        : (ram.isNotEmpty && rom.isNotEmpty
+            ? '$ram + $rom\nLPDDR5X + UFS4.1'
+            : (ram.isNotEmpty ? ram : '12GB + 256GB\nLPDDR5X + UFS4.1'));
 
-    final screenSize = rawDetail['screen_size'] ?? '6.9英寸';
-    final refreshRate = rawDetail['screen_refresh_rate'] ?? '185Hz';
-    final resolution = rawDetail['screen_resolution'] ?? '2608x1200px';
-    final screenType = rawDetail['screen_type'] ?? 'OLED\n居中单挖孔，直屏';
-    final screenSummary =
-        '$screenSize\n$refreshRate\n$resolution\n$screenType\n4500nits峰值亮度\n类DC调光';
-
-    final cameraBrand = rawDetail['camera_brand'] ?? '-';
-    final mainCamera =
-        rawDetail['main_camera'] ?? '三星HP5 1/1.56英寸\n2亿像素\n光学防抖';
-
-    final battery = rawDetail['battery'] ?? '5500mAh';
-    final charging = rawDetail['charging'] ?? '120W 有线快充';
+    final screenSummary = [
+      screenSize,
+      if (refreshRate.isNotEmpty) refreshRate,
+      if (resolution.isNotEmpty) resolution,
+      if (screenType.isNotEmpty) screenType,
+      '4500nits峰值亮度\n类DC调光',
+    ].join('\n');
 
     specs = {
       '性能': {
@@ -124,21 +282,88 @@ class ComparisonProduct {
         '屏幕': screenSummary,
       },
       '影像': {
-        '影像联名': '$cameraBrand',
-        '后置主摄': '$mainCamera',
+        '影像联名': cameraBrand,
+        '后置主摄': mainCamera,
       },
       '续航': {
-        '电池': '$battery',
-        '充电': '$charging',
+        '电池': battery,
+        '充电': charging,
       },
       '机身': {
-        '机身规格':
-            '${rawDetail['thickness'] ?? '8.2mm'} / ${rawDetail['weight'] ?? '210g'}',
+        '机身规格': '$thickness / $weight',
       },
       '其他': {
         '特色功能': 'NFC、红外遥控、立体双扬、IP68防尘防水',
       },
     };
+  }
+
+  void _syncCoreSpecsFromNewSpecs(Map<String, Map<String, String>> newSpecs) {
+    // 1. Chip / CPU
+    final cpu = _findInSpecs(newSpecs, ['CPU型号', '处理器', '芯片', 'SoC型号', 'SoC', 'CPU']);
+    if (cpu != null && cpu.isNotEmpty) {
+      specs.putIfAbsent('性能', () => <String, String>{})['芯片'] = cpu;
+    }
+
+    // 2. RAM & ROM
+    final existingRamRom = specs['性能']?['RAM & ROM'];
+    if (existingRamRom == null || existingRamRom.isEmpty || existingRamRom == '-') {
+      final ram = _findInSpecs(newSpecs, ['RAM容量', '运行内存', 'RAM']);
+      final rom = _findInSpecs(newSpecs, ['ROM容量', '机身存储', 'ROM', '存储容量']);
+      if (ram != null && rom != null) {
+        specs.putIfAbsent('性能', () => <String, String>{})['RAM & ROM'] = '$ram + $rom';
+      } else if (selectedConfigName.isNotEmpty) {
+        specs.putIfAbsent('性能', () => <String, String>{})['RAM & ROM'] = selectedConfigName;
+      }
+    }
+
+    // 3. Screen
+    final screenParts = <String>[];
+    final screenSize = _findInSpecs(newSpecs, ['屏幕尺寸', '主屏尺寸', '尺寸']);
+    if (screenSize != null) screenParts.add(screenSize);
+    final refresh = _findInSpecs(newSpecs, ['屏幕刷新率', '刷新率']);
+    if (refresh != null) screenParts.add(refresh);
+    final resolution = _findInSpecs(newSpecs, ['分辨率', '屏幕分辨率']);
+    if (resolution != null) screenParts.add(resolution);
+    final screenType = _findInSpecs(newSpecs, ['屏幕材质', '材质', '屏幕技术']);
+    if (screenType != null) screenParts.add(screenType);
+    if (screenParts.isNotEmpty) {
+      specs.putIfAbsent('屏幕', () => <String, String>{})['屏幕'] = screenParts.join('\n');
+    }
+
+    // 4. Camera
+    final brand = _findInSpecs(newSpecs, ['影像品牌', '影像联名', '镜头品牌', '联名品牌']);
+    if (brand != null && brand.isNotEmpty && brand != '-') {
+      specs.putIfAbsent('影像', () => <String, String>{})['影像联名'] = brand;
+    }
+    final mainCam = _findInSpecs(newSpecs, ['后置摄像头', '后置主摄', '主摄', '后置摄像头像素']);
+    if (mainCam != null && mainCam.isNotEmpty) {
+      specs.putIfAbsent('影像', () => <String, String>{})['后置主摄'] = mainCam;
+    }
+
+    // 5. Battery & Charging
+    final battery = _findInSpecs(newSpecs, ['电池容量', '电池']);
+    if (battery != null && battery.isNotEmpty) {
+      specs.putIfAbsent('续航', () => <String, String>{})['电池'] = battery;
+    }
+    final charging = _findInSpecs(newSpecs, ['有线充电', '充电', '快充', '有线快充', '闪充']);
+    if (charging != null && charging.isNotEmpty) {
+      specs.putIfAbsent('续航', () => <String, String>{})['充电'] = charging;
+    }
+
+    // 6. Body
+    final size = _findInSpecs(newSpecs, ['机身尺寸', '手机尺寸', '外观尺寸']);
+    final weight = _findInSpecs(newSpecs, ['机身重量', '手机重量', '重量']);
+    if (size != null || weight != null) {
+      final bodyDesc = [?size, ?weight].join(' / ');
+      specs.putIfAbsent('机身', () => <String, String>{})['机身规格'] = bodyDesc;
+    }
+
+    // 7. Other features
+    final features = _findInSpecs(newSpecs, ['特色功能', '功能特点', '其他功能', '特殊功能']);
+    if (features != null && features.isNotEmpty) {
+      specs.putIfAbsent('其他', () => <String, String>{})['特色功能'] = features;
+    }
   }
 
   Future<void> loadConfigData(CoolapkApi api, String configId) async {
@@ -180,12 +405,17 @@ class ComparisonProduct {
             }
           }
           if (newSpecs.isNotEmpty) {
-            specs = newSpecs;
+            // Merge into specs without deleting existing specs
+            for (final entry in newSpecs.entries) {
+              specs[entry.key] = {...(specs[entry.key] ?? {}), ...entry.value};
+            }
+            // Sync core specs
+            _syncCoreSpecsFromNewSpecs(newSpecs);
           }
         }
       }
     } catch (_) {
-      populateDefaultSpecs();
+      // Keep existing specs on failure
     } finally {
       loading = false;
     }
@@ -214,7 +444,6 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
   final List<ComparisonProduct> _products = [];
   bool _hideSameConfig = false;
   final _topScrollController = ScrollController();
-  double _currentScrollX = 0;
 
   static const _defaultGroups = [
     (
@@ -243,15 +472,23 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
     ),
   ];
 
+  List<MapEntry<String, List<String>>> get _detailedGroups {
+    final defaultGroupNames = _defaultGroups.map((g) => g.$1).toSet();
+    final groupMap = <String, Set<String>>{};
+    for (final p in _products) {
+      for (final groupEntry in p.specs.entries) {
+        if (defaultGroupNames.contains(groupEntry.key)) continue;
+        groupMap.putIfAbsent(groupEntry.key, () => <String>{}).addAll(groupEntry.value.keys);
+      }
+    }
+    return groupMap.entries
+        .map((e) => MapEntry(e.key, e.value.toList()))
+        .toList();
+  }
+
   @override
   void initState() {
     super.initState();
-    _topScrollController.addListener(() {
-      if (_topScrollController.hasClients && mounted) {
-        setState(() => _currentScrollX = _topScrollController.offset);
-      }
-    });
-
     if (widget.initialProducts != null && widget.initialProducts!.isNotEmpty) {
       _products.addAll(widget.initialProducts!);
     } else if (widget.initialProductId != null) {
@@ -261,7 +498,11 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
       );
       _products.add(p);
       if (p.selectedConfigId != null) {
-        unawaited(p.loadConfigData(widget.api, p.selectedConfigId!));
+        p.loadConfigData(widget.api, p.selectedConfigId!).then((_) {
+          if (mounted) setState(() {});
+        });
+      } else {
+        _loadProductDetailAndConfig(p, widget.initialProductId!);
       }
     }
   }
@@ -277,11 +518,6 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
     if (index < 0 || index >= _products.length) return;
     setState(() {
       _products.removeAt(index);
-      final maxScroll = (_topScrollController.hasClients &&
-              _topScrollController.position.hasContentDimensions)
-          ? _topScrollController.position.maxScrollExtent
-          : 0.0;
-      _currentScrollX = _currentScrollX.clamp(0.0, maxScroll > 0 ? maxScroll : 0.0);
     });
   }
 
@@ -351,10 +587,15 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
   Future<void> _loadProductDetailAndConfig(ComparisonProduct product, String id) async {
     try {
       final detail = await widget.api.getProductDetail(id);
+      if (!mounted) return;
       final fullProduct = ComparisonProduct.fromDetail(
         id: id,
         detail: detail,
       );
+      // Preserve and merge existing specs
+      for (final e in product.specs.entries) {
+        fullProduct.specs.putIfAbsent(e.key, () => <String, String>{}).addAll(e.value);
+      }
       final index = _products.indexWhere((p) => p.id == id);
       if (index >= 0 && mounted) {
         setState(() {
@@ -419,7 +660,19 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
   }
 
   bool _shouldShowRow(String group, String key) {
+    if (_products.isEmpty) return false;
+
+    // Check if at least one product has valid data (not empty, not '-')
+    final hasAnyValid = _products.any((p) {
+      final val = p.getSpec(group, key).trim();
+      return val.isNotEmpty && val != '-';
+    });
+    if (!hasAnyValid) return false;
+
     if (!_hideSameConfig || _products.length <= 1) return true;
+
+    // In hide-same-config mode:
+    // Only hide if all products have identical non-empty values
     final firstVal = _products.first.getSpec(group, key).trim();
     for (var i = 1; i < _products.length; i++) {
       if (_products[i].getSpec(group, key).trim() != firstVal) {
@@ -503,6 +756,17 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
                           for (final key in group.$2)
                             if (_shouldShowRow(group.$1, key))
                               _buildSpecRow(group.$1, key),
+                        ],
+                      ],
+                      if (_detailedGroups.any((g) => g.value.any((k) => _shouldShowRow(g.key, k)))) ...[
+                        _buildSectionHeader('详细参数'),
+                        for (final group in _detailedGroups) ...[
+                          if (group.value.any((k) => _shouldShowRow(group.key, k))) ...[
+                            _buildGroupHeader(group.key),
+                            for (final key in group.value)
+                              if (_shouldShowRow(group.key, key))
+                                _buildSpecRow(group.key, key),
+                          ],
                         ],
                       ],
                     ],
@@ -782,16 +1046,17 @@ class _ProductComparisonPageState extends State<ProductComparisonPage> {
               // Horizontally aligned values
               Expanded(
                 child: ClipRect(
-                  child: Builder(
-                    builder: (context) {
+                  child: AnimatedBuilder(
+                    animation: _topScrollController,
+                    builder: (context, _) {
                       final maxScroll = (_topScrollController.hasClients &&
                               _topScrollController.position.hasContentDimensions)
                           ? _topScrollController.position.maxScrollExtent
                           : 0.0;
-                      final effectiveScrollX = _currentScrollX.clamp(
-                        0.0,
-                        maxScroll > 0 ? maxScroll : 0.0,
-                      );
+                      final effectiveScrollX = (_topScrollController.hasClients
+                              ? _topScrollController.offset
+                              : 0.0)
+                          .clamp(0.0, maxScroll > 0 ? maxScroll : 0.0);
                       return Transform.translate(
                         offset: Offset(-effectiveScrollX, 0),
                         child: Row(

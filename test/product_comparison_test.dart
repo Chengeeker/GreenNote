@@ -260,5 +260,140 @@ void main() {
       expect(find.text('一加 13'), findsNothing);
       expect(find.text('点击上方“添加对比”选择机型'), findsOneWidget);
     });
+
+    test('Selector item with pipe specs string parses correctly without losing parameters', () {
+      final selectorItem = {
+        'id': '9999',
+        'title': '小米 15',
+        'pic': 'http://image.coolapk.com/mi15.png',
+        'specs': '骁龙8至尊版 | 6.36英寸 | 5000万像素 | 5400mAh | 90W快充',
+        'price': '4499',
+        'tags': ['120Hz', 'IP68', '新品'],
+      };
+
+      final product = ComparisonProduct.fromDetail(id: '9999', detail: selectorItem);
+
+      expect(product.id, '9999');
+      expect(product.title, '小米 15');
+      expect(product.getSpec('性能', '芯片'), '骁龙8至尊版');
+      expect(product.getSpec('续航', '电池'), '5400mAh');
+      expect(product.getSpec('续航', '充电'), '90W快充');
+      expect(product.getSpec('影像', '后置主摄'), '5000万像素');
+      expect(product.getSpec('屏幕', '屏幕'), contains('6.36英寸'));
+      expect(product.getSpec('屏幕', '屏幕'), contains('120Hz'));
+    });
+
+    test('loadConfigData with real server categories maps core specs and retains detailed specs', () async {
+      final api = _MockComparisonApi();
+      api.mockConfigResponse = {
+        'data': {
+          'id': '201',
+          'price': '4499',
+          'config_data': {
+            '基本参数': {
+              '上市时间': '2024年10月',
+              '机身尺寸': '152.3*71.2*8.08mm',
+              '机身重量': '191g',
+            },
+            '处理器': {
+              'CPU型号': '骁龙8至尊版',
+              'CPU主频': '4.32GHz',
+            },
+            '屏幕与显示': {
+              '屏幕尺寸': '6.36英寸',
+              '屏幕刷新率': '120Hz',
+              '分辨率': '2670x1200',
+              '屏幕材质': 'OLED',
+            },
+            '摄像头': {
+              '影像品牌': '徕卡',
+              '后置摄像头': '5000万像素光影猎人900',
+            },
+            '电池与续航': {
+              '电池容量': '5400mAh',
+              '有线充电': '90W小米澎湃有线秒充',
+            },
+          },
+        },
+      };
+
+      final product = ComparisonProduct.fromDetail(
+        id: '2001',
+        detail: {
+          'id': '2001',
+          'title': 'Xiaomi 15',
+          'configRows': [
+            {'id': '201', 'title': '12GB + 256GB', 'price': '4499'},
+          ],
+        },
+      );
+
+      await product.loadConfigData(api, '201');
+
+      // Core specs are mapped from server categories:
+      expect(product.getSpec('性能', '芯片'), '骁龙8至尊版');
+      expect(product.getSpec('续航', '电池'), '5400mAh');
+      expect(product.getSpec('续航', '充电'), '90W小米澎湃有线秒充');
+      expect(product.getSpec('影像', '影像联名'), '徕卡');
+      expect(product.getSpec('影像', '后置主摄'), '5000万像素光影猎人900');
+      expect(product.getSpec('机身', '机身规格'), contains('152.3*71.2*8.08mm'));
+      expect(product.getSpec('屏幕', '屏幕'), contains('6.36英寸'));
+
+      // Raw server detailed specs are also preserved directly:
+      expect(product.getSpec('基本参数', '上市时间'), '2024年10月');
+      expect(product.getSpec('处理器', 'CPU主频'), '4.32GHz');
+      expect(product.getSpec('屏幕与显示', '分辨率'), '2670x1200');
+    });
+
+    testWidgets('Adding second product preserves all parameters on screen', (
+      tester,
+    ) async {
+      final api = _MockComparisonApi();
+      final p1 = ComparisonProduct(
+        id: '101',
+        title: '手机 A',
+        logo: '',
+        price: '3999',
+        selectedConfigName: '12GB + 256GB',
+        specs: {
+          '性能': {'芯片': '骁龙 8 至尊版', 'RAM & ROM': '12GB + 256GB'},
+          '续航': {'电池': '6000mAh', '充电': '100W'},
+        },
+      );
+
+      final p2 = ComparisonProduct(
+        id: '102',
+        title: '手机 B',
+        logo: '',
+        price: '4499',
+        selectedConfigName: '16GB + 512GB',
+        specs: {
+          '性能': {'芯片': '天玑 9400', 'RAM & ROM': '16GB + 512GB'},
+          '续航': {'电池': '5800mAh', '充电': '90W'},
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProductComparisonPage(
+            api: api,
+            initialProducts: [p1, p2],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Both phones are displayed
+      expect(find.text('手机 A'), findsOneWidget);
+      expect(find.text('手机 B'), findsOneWidget);
+
+      // Verify specs are displayed and NOT missing / replaced with '-'
+      expect(find.text('骁龙 8 至尊版'), findsOneWidget);
+      expect(find.text('天玑 9400'), findsOneWidget);
+      expect(find.text('6000mAh'), findsOneWidget);
+      expect(find.text('5800mAh'), findsOneWidget);
+      expect(find.text('100W'), findsOneWidget);
+      expect(find.text('90W'), findsOneWidget);
+    });
   });
 }

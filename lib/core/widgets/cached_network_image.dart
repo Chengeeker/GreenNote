@@ -27,10 +27,15 @@ class CachedNetworkImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 2.5;
+    final screenWidth = MediaQuery.maybeSizeOf(context)?.width ?? 400.0;
+    final maxPixelWidth = (screenWidth * dpr).clamp(720.0, 1440.0).round();
+
     final effectiveCacheWidth = cacheWidth ??
         (width != null && width! > 0 && width!.isFinite
             ? (width! * dpr).round()
-            : null);
+            : (height != null && height! > 0 && height!.isFinite
+                ? null
+                : maxPixelWidth));
     final effectiveCacheHeight = cacheHeight ??
         (height != null && height! > 0 && height!.isFinite
             ? (height! * dpr).round()

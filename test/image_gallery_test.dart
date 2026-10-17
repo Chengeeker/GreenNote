@@ -1,4 +1,5 @@
 // ignore_for_file: unnecessary_underscores, unnecessary_const
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -40,6 +41,86 @@ class RecordingNavigatorObserver extends NavigatorObserver {
 }
 
 void main() {
+  for (final finishDecode in [false, true]) {
+    testWidgets('Hero keeps preview until original decodes ($finishDecode)', (
+      tester,
+    ) async {
+      final recorder = ui.PictureRecorder();
+      Canvas(recorder).drawColor(Colors.blue, BlendMode.src);
+      final picture = recorder.endRecording();
+      final pixels = (await tester.runAsync(() => picture.toImage(40, 80)))!;
+      picture.dispose();
+      final original = Completer<ImageInfo>();
+      final provider = ExtendedImage.network(
+        galleryTestPic.originalUrl,
+        cache: true,
+        headers: coolapkImageHeaders(galleryTestPic.originalUrl),
+      ).image;
+      final key = await provider.obtainKey(ImageConfiguration.empty);
+      tester.binding.imageCache.putIfAbsent(
+        key,
+        () => OneFrameImageStreamCompleter(original.future),
+      );
+      final scope = Object();
+      final nav = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: nav,
+          home: Scaffold(
+            body: Center(
+              child: ImageGalleryHeroThumbnail(
+                scope: scope,
+                index: 0,
+                pic: galleryTestPic,
+                child: SizedBox(
+                  width: 80,
+                  height: 80,
+                  child: RawImage(image: pixels, fit: BoxFit.cover),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      nav.currentState!.push<void>(
+        PageRouteBuilder<void>(
+          transitionDuration: const Duration(milliseconds: 220),
+          pageBuilder: (_, __, ___) => ImageGalleryPage(
+            api: const GalleryApi(),
+            pics: const [galleryTestPic],
+            initialIndex: 0,
+            statusId: 'delayed-original',
+            heroScope: scope,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pump();
+      final preview = find.byKey(const ValueKey('gallery-opening-preview'));
+      expect(preview, findsOneWidget);
+      expect(tester.widget<RawImage>(preview).image!.isCloneOf(pixels), isTrue);
+      expect(
+        find.byKey(const ValueKey('gallery-image-flight-plane')),
+        findsNothing,
+      );
+      if (finishDecode) {
+        original.complete(ImageInfo(image: pixels.clone()));
+        await tester.pump();
+        await tester.pump();
+        expect(preview, findsNothing);
+        expect(find.byType(ExtendedImageGesture), findsOneWidget);
+      }
+      nav.currentState!.pop();
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      tester.binding.imageCache.evict(key);
+      pixels.dispose();
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('gallery pairs its fullscreen image with the source thumbnail', (
     tester,
   ) async {

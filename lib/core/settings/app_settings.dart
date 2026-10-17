@@ -7,8 +7,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/cache_service.dart';
 import '../utils/haptic_feedback_util.dart';
 import '../theme/app_theme.dart';
+
+const defaultWebDavDirectory = 'GreenNote';
 
 class AppSettingsState {
   const AppSettingsState({
@@ -23,6 +26,9 @@ class AppSettingsState {
     this.customFontWeightDelta = 0,
     this.systemFontWeightAdjustment = 0,
     this.fontScale = 1.0,
+    this.autoClearCacheThresholdMb = 200,
+    this.imageSavePathType = 0,
+    this.videoSavePathType = 0,
   });
 
   final ThemeMode themeMode;
@@ -36,6 +42,9 @@ class AppSettingsState {
   final int customFontWeightDelta;
   final int systemFontWeightAdjustment;
   final double fontScale;
+  final int autoClearCacheThresholdMb;
+  final int imageSavePathType;
+  final int videoSavePathType;
   int get effectiveFontWeightAdjustment =>
       useCustomFontWeight ? customFontWeightDelta : systemFontWeightAdjustment;
   int get themeColorIndex => AppTheme.themeColors.indexWhere(
@@ -54,6 +63,9 @@ class AppSettingsState {
     int? customFontWeightDelta,
     int? systemFontWeightAdjustment,
     double? fontScale,
+    int? autoClearCacheThresholdMb,
+    int? imageSavePathType,
+    int? videoSavePathType,
   }) => AppSettingsState(
     themeMode: themeMode ?? this.themeMode,
     useDynamicColor: useDynamicColor ?? this.useDynamicColor,
@@ -67,6 +79,10 @@ class AppSettingsState {
     systemFontWeightAdjustment:
         systemFontWeightAdjustment ?? this.systemFontWeightAdjustment,
     fontScale: fontScale ?? this.fontScale,
+    autoClearCacheThresholdMb:
+        autoClearCacheThresholdMb ?? this.autoClearCacheThresholdMb,
+    imageSavePathType: imageSavePathType ?? this.imageSavePathType,
+    videoSavePathType: videoSavePathType ?? this.videoSavePathType,
   );
 }
 
@@ -87,15 +103,20 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
   static const _floatingKey = 'greennote.floating_nav';
   static const _liquidGlassNavKey = 'greennote.liquid_glass_nav';
   static const _hapticsKey = 'greennote.enable_haptics';
+  static const _autoClearCacheThresholdKey =
+      'greennote.auto_clear_cache_threshold_mb';
   static const _webDavUrlKey = 'greennote.webdav.url';
   static const _webDavUsernameKey = 'greennote.webdav.username';
   static const _webDavDirectoryKey = 'greennote.webdav.directory';
+  static const _imageSavePathTypeKey = 'greennote.image_save_path_type';
+  static const _videoSavePathTypeKey = 'greennote.video_save_path_type';
 
   late final Future<void> _ready;
 
   Future<void> _load() async {
     final preferences = await SharedPreferences.getInstance();
     final modeIndex = preferences.getInt(_themeModeKey) ?? 0;
+    final thresholdMb = preferences.getInt(_autoClearCacheThresholdKey) ?? 200;
     final loaded = AppSettingsState(
       themeMode: switch (modeIndex) {
         1 => ThemeMode.light,
@@ -114,9 +135,15 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
       customFontWeightDelta: preferences.getInt(_fontDeltaKey) ?? 0,
       systemFontWeightAdjustment: state.systemFontWeightAdjustment,
       fontScale: preferences.getDouble(_fontScaleKey) ?? 1.0,
+      autoClearCacheThresholdMb: thresholdMb,
+      imageSavePathType: preferences.getInt(_imageSavePathTypeKey) ?? 0,
+      videoSavePathType: preferences.getInt(_videoSavePathTypeKey) ?? 0,
     );
     HapticFeedbackUtil.isEnabled = loaded.enableHaptics;
     state = loaded;
+    if (thresholdMb > 0) {
+      unawaited(CacheService.checkAndAutoClearCache(thresholdMb));
+    }
   }
 
   Future<SharedPreferences> get _preferences => SharedPreferences.getInstance();
@@ -234,12 +261,37 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     state = state.copyWith(enableHaptics: value);
   }
 
+  Future<void> setImageSavePathType(int value) async {
+    await _ready;
+    final prefs = await _preferences;
+    await prefs.setInt(_imageSavePathTypeKey, value);
+    state = state.copyWith(imageSavePathType: value);
+  }
+
+  Future<void> setVideoSavePathType(int value) async {
+    await _ready;
+    final prefs = await _preferences;
+    await prefs.setInt(_videoSavePathTypeKey, value);
+    state = state.copyWith(videoSavePathType: value);
+  }
+
+  Future<void> setAutoClearCacheThresholdMb(int value) async {
+    await _ready;
+    final prefs = await _preferences;
+    await prefs.setInt(_autoClearCacheThresholdKey, value);
+    state = state.copyWith(autoClearCacheThresholdMb: value);
+    if (value > 0) {
+      unawaited(CacheService.checkAndAutoClearCache(value));
+    }
+  }
+
   Future<Map<String, String>> loadWebDavConfig() async {
     final prefs = await _preferences;
     return {
       'url': prefs.getString(_webDavUrlKey) ?? '',
       'username': prefs.getString(_webDavUsernameKey) ?? '',
-      'directory': prefs.getString(_webDavDirectoryKey) ?? 'Greennote',
+      'directory':
+          prefs.getString(_webDavDirectoryKey) ?? defaultWebDavDirectory,
     };
   }
 
@@ -279,6 +331,9 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
         'pureBlackDark': state.isPureBlackDark,
         'useCustomFontWeight': state.useCustomFontWeight,
         'customFontWeightDelta': state.customFontWeightDelta,
+        'autoClearCacheThresholdMb': state.autoClearCacheThresholdMb,
+        'imageSavePathType': state.imageSavePathType,
+        'videoSavePathType': state.videoSavePathType,
         'webDavUrl': webDavUrl,
         'webDavUsername': webDavUsername,
         'webDavDirectory': webDavDirectory,
@@ -335,7 +390,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
         : 0;
     final url = values['webDavUrl'] ?? '';
     final username = values['webDavUsername'] ?? '';
-    final directory = values['webDavDirectory'] ?? 'Greennote';
+    final directory = values['webDavDirectory'] ?? defaultWebDavDirectory;
     if (mode is! int ||
         mode < 0 ||
         mode > 2 ||
@@ -375,6 +430,15 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     await prefs.setString(_webDavUrlKey, url);
     await prefs.setString(_webDavUsernameKey, username);
     await prefs.setString(_webDavDirectoryKey, directory);
+    final autoClear = values['autoClearCacheThresholdMb'];
+    final autoClearMb = autoClear is int && autoClear >= 0 ? autoClear : 200;
+    await prefs.setInt(_autoClearCacheThresholdKey, autoClearMb);
+    final rawImgType = values['imageSavePathType'];
+    final imgType = rawImgType is int && [0, 1, 2].contains(rawImgType) ? rawImgType : 0;
+    await prefs.setInt(_imageSavePathTypeKey, imgType);
+    final rawVidType = values['videoSavePathType'];
+    final vidType = rawVidType is int && [0, 1, 2].contains(rawVidType) ? rawVidType : 0;
+    await prefs.setInt(_videoSavePathTypeKey, vidType);
     final restored = state.copyWith(
       themeMode: switch (mode) {
         1 => ThemeMode.light,
@@ -389,6 +453,9 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
       isPureBlackDark: pureBlack,
       useCustomFontWeight: customFont,
       customFontWeightDelta: fontDelta,
+      autoClearCacheThresholdMb: autoClearMb,
+      imageSavePathType: imgType,
+      videoSavePathType: vidType,
     );
     HapticFeedbackUtil.isEnabled = haptics;
     state = restored;

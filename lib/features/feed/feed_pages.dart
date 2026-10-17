@@ -21,16 +21,23 @@ import '../../core/utils/haptic_feedback_util.dart';
 import '../../core/design_system/components/review_frosted_app_bar.dart';
 
 import 'image_gallery_page.dart';
+import '../shared/activity_pages.dart';
 import 'nine_grid_view.dart';
+import 'feed_vote.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:html/parser.dart' as html;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
+import '../../core/network/product_price.dart';
 import '../../core/widgets/coolapk_rich_text.dart';
+import '../digital/utils/digital_system_helper.dart';
 import '../shared/api_list_page.dart';
+import '../shared/home_destination_page.dart';
 import '../shell/main_pages.dart' show ComposeFeedPage;
 
 class _HomeChannel {
@@ -617,11 +624,13 @@ class _FeedListPageState extends State<_FeedListPage>
         _banners.isNotEmpty;
     return EasyRefresh(
       header: reviewDefaultRefreshHeader,
+      triggerAxis: Axis.vertical,
       onRefresh: () => _load(refresh: true),
       child: filterHorizontalScrollNotifications(
         ListView.builder(
           controller: _scrollController,
           physics: const AlwaysScrollableScrollPhysics(),
+          scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
           padding: EdgeInsets.fromLTRB(
             0,
             6,
@@ -1033,6 +1042,7 @@ class _LocalFollowTimelineState extends State<_LocalFollowTimeline> {
       ListView.builder(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
+        scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
         padding: EdgeInsets.only(
           bottom: 20 + MediaQuery.paddingOf(context).bottom,
         ),
@@ -1429,44 +1439,46 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
                 }
                 return false;
               },
-              child: PageView.builder(
-                controller: _controller,
-                physics: const PageScrollPhysics(
-                  parent: ClampingScrollPhysics(),
-                ),
-                itemCount: totalCount,
-                onPageChanged: (index) {
-                  final newPage = index % _items.length;
-                  if (newPage != _page) {
-                    setState(() => _page = newPage);
-                  }
-                },
-                itemBuilder: (context, index) {
-                  final item = _items[index % _items.length];
-                  final image = _image(item);
-                  return ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: InkWell(
-                      onTap: () {
-                        HapticFeedbackUtil.selection();
-                        openHeadlineTarget(context, widget.api, item);
-                      },
-                      child: CachedNetworkImage(
-                        normalizeCoolapkImageUrl(image),
-                        headers: coolapkImageHeaders(image, api: widget.api),
-                        width: double.infinity,
-                        height: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => const ColoredBox(
-                          color: Colors.black12,
-                          child: Center(
-                            child: Icon(Icons.broken_image_outlined),
+              child: protectHorizontalDragFromVerticalRefresh(
+                PageView.builder(
+                  controller: _controller,
+                  physics: const PageScrollPhysics(
+                    parent: ClampingScrollPhysics(),
+                  ),
+                  itemCount: totalCount,
+                  onPageChanged: (index) {
+                    final newPage = index % _items.length;
+                    if (newPage != _page) {
+                      setState(() => _page = newPage);
+                    }
+                  },
+                  itemBuilder: (context, index) {
+                    final item = _items[index % _items.length];
+                    final image = _image(item);
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        onTap: () {
+                          HapticFeedbackUtil.selection();
+                          openHeadlineTarget(context, widget.api, item);
+                        },
+                        child: CachedNetworkImage(
+                          normalizeCoolapkImageUrl(image),
+                          headers: coolapkImageHeaders(image, api: widget.api),
+                          width: double.infinity,
+                          height: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const ColoredBox(
+                            color: Colors.black12,
+                            child: Center(
+                              child: Icon(Icons.broken_image_outlined),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
             ),
             if (isLoop)
@@ -1519,16 +1531,22 @@ const List<Map<String, dynamic>> _defaultHeadlineCards = [
     'entityTemplate': 'iconLinkGridCard',
     'entityType': 'card',
     'entities': [
-      {'title': '值得看', 'url': '/page?url=V9_FIND_RECOMMEND'},
-      {'title': '热闻', 'url': '/page?url=V9_HOME_TAB_HOT_NEWS'},
-      {'title': '活动', 'url': '/page?url=V9_ACTIVITY_LIST'},
+      {'title': '值得看', 'url': '/page?url=V8_ZHUANTI_20180327'},
+      {'title': '热闻', 'url': '/page?url=V8_JINRI_NEWS'},
+      {'title': '活动', 'url': '/page?url=V11_ACTIVITIES'},
       {'title': 'AI', 'url': '/page?url=V9_AI_ZONE'},
-      {'title': '人像摄影', 'url': '/page?url=V9_PORTRAIT_PHOTO'},
-      {'title': '选机中心', 'url': '/page?url=V9_DEVICE_SELECTOR'},
-      {'title': '玩机大神', 'url': '/page?url=V9_FEED_HOT_USER'},
-      {'title': '投票', 'url': '/page?url=V9_VOTE_LIST'},
-      {'title': '头条榜', 'url': '/page?url=V9_HEADLINE_RANK'},
-      {'title': '官方频道', 'url': '/page?url=V9_OFFICIAL_CHANNEL'},
+      {'title': '人像摄影', 'url': '/t/人像摄影'},
+      {
+        'title': '选机中心',
+        'url': 'https://m.coolapk.com/mp/productSelector/configSearch?callFunction=indexSearch',
+      },
+      {'title': '玩机大神', 'url': '/page?url=V8_RECOMMEND_USER'},
+      {'title': '投票', 'url': '#/feed/digestList?type=16&message_status=all'},
+      {'title': '头条榜', 'url': '/page?url=V9_LISHITOUTIAO_NEW'},
+      {
+        'title': '官方频道',
+        'url': '/page?url=V11_ZHUANTI_EDITORIALDEPARTMENT_20211117',
+      },
     ],
   },
   {
@@ -1940,24 +1958,26 @@ class _ChannelIconGridCardTwoPageState
         children: [
           SizedBox(
             height: 78,
-            child: filterHorizontalScrollNotifications(
-              PageView.builder(
-                itemCount: pageCount,
-                onPageChanged: (page) => setState(() => _currentPage = page),
-                itemBuilder: (context, pageIndex) {
-                  final start = pageIndex * 5;
-                  final end = (start + 5).clamp(0, items.length);
-                  final pageItems = items.sublist(start, end);
+            child: protectHorizontalDragFromVerticalRefresh(
+              filterHorizontalScrollNotifications(
+                PageView.builder(
+                  itemCount: pageCount,
+                  onPageChanged: (page) => setState(() => _currentPage = page),
+                  itemBuilder: (context, pageIndex) {
+                    final start = pageIndex * 5;
+                    final end = (start + 5).clamp(0, items.length);
+                    final pageItems = items.sublist(start, end);
 
-                  return Row(
-                    children: [
-                      for (final item in pageItems)
-                        Expanded(child: _buildGridItem(context, item)),
-                      for (var i = 0; i < 5 - pageItems.length; i++)
-                        const Expanded(child: SizedBox.shrink()),
-                    ],
-                  );
-                },
+                    return Row(
+                      children: [
+                        for (final item in pageItems)
+                          Expanded(child: _buildGridItem(context, item)),
+                        for (var i = 0; i < 5 - pageItems.length; i++)
+                          const Expanded(child: SizedBox.shrink()),
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -2217,75 +2237,79 @@ class _ChannelMiniScrollCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: SizedBox(
         height: 36,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          itemCount: items.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 8),
-          itemBuilder: (context, index) {
-            final item = items[index];
-            final title = (item['title'] ?? '').toString();
-            final pic = (item['pic'] ?? item['icon'] ?? item['logo'] ?? '')
-                .toString();
+        child: protectHorizontalDragFromVerticalRefresh(
+          ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            itemCount: items.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final item = items[index];
+              final title = (item['title'] ?? '').toString();
+              final pic = (item['pic'] ?? item['icon'] ?? item['logo'] ?? '')
+                  .toString();
 
-            return InkWell(
-              borderRadius: BorderRadius.circular(18),
-              onTap: () {
-                HapticFeedbackUtil.selection();
-                openHeadlineTarget(context, api, item);
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: scheme.outlineVariant.withValues(alpha: 0.25),
-                    width: 0.6,
+              return InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: () {
+                  HapticFeedbackUtil.selection();
+                  openHeadlineTarget(context, api, item);
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest.withValues(
+                      alpha: 0.45,
+                    ),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: scheme.outlineVariant.withValues(alpha: 0.25),
+                      width: 0.6,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (pic.isNotEmpty)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: CachedNetworkImage(
+                            normalizeCoolapkImageUrl(pic),
+                            headers: coolapkImageHeaders(pic, api: api),
+                            width: 16,
+                            height: 16,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Icon(
+                              Icons.phone_android_rounded,
+                              size: 14,
+                              color: scheme.primary,
+                            ),
+                          ),
+                        )
+                      else
+                        Icon(
+                          Icons.phone_android_rounded,
+                          size: 14,
+                          color: scheme.primary,
+                        ),
+                      const SizedBox(width: 6),
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurface,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (pic.isNotEmpty)
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: CachedNetworkImage(
-                          normalizeCoolapkImageUrl(pic),
-                          headers: coolapkImageHeaders(pic, api: api),
-                          width: 16,
-                          height: 16,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => Icon(
-                            Icons.phone_android_rounded,
-                            size: 14,
-                            color: scheme.primary,
-                          ),
-                        ),
-                      )
-                    else
-                      Icon(
-                        Icons.phone_android_rounded,
-                        size: 14,
-                        color: scheme.primary,
-                      ),
-                    const SizedBox(width: 6),
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: scheme.onSurface,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -2733,45 +2757,47 @@ class _HotSearchCapsuleCard extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final item in items)
-                InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () {
-                    HapticFeedbackUtil.selection();
-                    final query = (item['title'] ?? '').toString();
-                    Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            SearchPage(api: api, initialQuery: query),
+          child: protectHorizontalDragFromVerticalRefresh(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final item in items)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () {
+                      HapticFeedbackUtil.selection();
+                      final query = (item['title'] ?? '').toString();
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              SearchPage(api: api, initialQuery: query),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
                       ),
-                    );
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: scheme.surfaceContainerHighest.withValues(
-                        alpha: 0.5,
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest.withValues(
+                          alpha: 0.5,
+                        ),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Text(
-                      (item['title'] ?? '').toString(),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: scheme.onSurface,
-                        fontWeight: FontWeight.w400,
+                      child: Text(
+                        (item['title'] ?? '').toString(),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurface,
+                          fontWeight: FontWeight.w400,
+                        ),
                       ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -2804,54 +2830,58 @@ class _ChannelSelectorLinkCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: SizedBox(
         height: 38,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          itemCount: entities.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 8),
-          itemBuilder: (context, index) {
-            final item = entities[index];
-            final title = (item['title'] ?? '').toString();
-            final isSelected = index == activeIndex;
+        child: protectHorizontalDragFromVerticalRefresh(
+          ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            itemCount: entities.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final item = entities[index];
+              final title = (item['title'] ?? '').toString();
+              final isSelected = index == activeIndex;
 
-            return InkWell(
-              borderRadius: BorderRadius.circular(19),
-              onTap: () {
-                HapticFeedbackUtil.selection();
-                onSelect(item, index);
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? scheme.primary
-                      : scheme.surfaceContainerHighest.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(19),
-                  border: isSelected
-                      ? null
-                      : Border.all(
-                          color: scheme.outlineVariant.withValues(alpha: 0.2),
-                          width: 0.6,
-                        ),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: isSelected
-                        ? FontWeight.bold
-                        : FontWeight.normal,
-                    color: isSelected ? scheme.onPrimary : scheme.onSurface,
+              return InkWell(
+                borderRadius: BorderRadius.circular(19),
+                onTap: () {
+                  HapticFeedbackUtil.selection();
+                  onSelect(item, index);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? scheme.primary
+                        : scheme.surfaceContainerHighest.withValues(
+                            alpha: 0.35,
+                          ),
+                    borderRadius: BorderRadius.circular(19),
+                    border: isSelected
+                        ? null
+                        : Border.all(
+                            color: scheme.outlineVariant.withValues(alpha: 0.2),
+                            width: 0.6,
+                          ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: isSelected
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                      color: isSelected ? scheme.onPrimary : scheme.onSurface,
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -3105,7 +3135,14 @@ void openHeadlineTarget(
               '')
           .toString()
           .trim();
-  final value = (item['url'] ?? item['href'] ?? '').toString().trim();
+  final value =
+      (item['url'] ??
+              item['href'] ??
+              item['goods_url'] ??
+              item['goods_buy_url'] ??
+              '')
+          .toString()
+          .trim();
   if (title.isEmpty && value.contains('/t/')) {
     final sub = value
         .substring(value.indexOf('/t/') + 3)
@@ -3138,6 +3175,27 @@ void openHeadlineTarget(
           .toString()
           .trim();
 
+  if (openHomeDestination(context, api, title, value)) return;
+  if (title == '人像摄影' || value.contains('V9_PORTRAIT_PHOTO')) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => TopicPage(api: api, tag: '人像摄影', initialTitle: '人像摄影'),
+      ),
+    );
+    return;
+  }
+
+  final activityUri = activityGoodsUrl(item) ?? Uri.tryParse(value);
+  if (activityUri != null && isOfficialActivityDocument(activityUri)) {
+    openActivityDocument(
+      context,
+      api,
+      activityUri,
+      title: title.isEmpty ? '活动详情' : title,
+    );
+    return;
+  }
+
   if (value.isEmpty) {
     if (title.isNotEmpty) {
       Navigator.of(context).push<void>(
@@ -3163,6 +3221,22 @@ void openHeadlineTarget(
     return;
   }
 
+  if (value.startsWith('#/') &&
+      !value.contains('/rankList') &&
+      !value.contains('coolPictureRankList')) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ApiListPage(
+          api: api,
+          title: title.isEmpty ? '酷安内容' : title,
+          path: '/v6/page/dataList',
+          query: {'url': value},
+        ),
+      ),
+    );
+    return;
+  }
+
   var route = value;
   if (route.startsWith('#')) {
     route = route.substring(1);
@@ -3179,23 +3253,7 @@ void openHeadlineTarget(
       route.contains('V9_NEWS_');
 
   if (isTopic) {
-    var tag = (item['tag'] ?? '').toString().trim();
-    if (tag.isEmpty && route.contains('tag=')) {
-      final parsed = Uri.tryParse(
-        route.startsWith('/') ? 'https://coolapk.com$route' : route,
-      );
-      tag = parsed?.queryParameters['tag'] ?? '';
-    }
-    if (tag.isEmpty && route.contains('/t/')) {
-      var sub = route.substring(route.indexOf('/t/') + 3);
-      if (sub.contains('?')) sub = sub.substring(0, sub.indexOf('?'));
-      if (sub.contains('/')) sub = sub.substring(0, sub.indexOf('/'));
-      try {
-        tag = Uri.decodeComponent(sub);
-      } catch (_) {
-        tag = sub;
-      }
-    }
+    var tag = ApiEntityCard.extractTopicTag({...item, 'url': route});
     if (tag.isEmpty) {
       tag = title.replaceAll('#', '').trim();
     }
@@ -3206,7 +3264,7 @@ void openHeadlineTarget(
           builder: (_) => TopicPage(
             api: api,
             tag: tag,
-            initialTitle: title.isNotEmpty ? title : tag,
+            initialTitle: tag,
             initialLogo: pic.isNotEmpty ? pic : null,
           ),
         ),
@@ -3274,6 +3332,26 @@ void openHeadlineTarget(
   if (uri == null) return;
 
   final path = uri.path;
+
+  if (path.startsWith('/clickUrl/')) {
+    launchUrl(
+      uri.replace(scheme: 'https', host: 'api.coolapk.com'),
+      mode: LaunchMode.externalApplication,
+    );
+    return;
+  }
+
+  if (path.startsWith('/event/')) {
+    final id = path.substring('/event/'.length).split('/').first;
+    if (int.tryParse(id) != null) {
+      Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => EventDetailPage(api: api, id: id),
+        ),
+      );
+      return;
+    }
+  }
 
   if (path == '/feed/headline' || path == '/v6/main/headline') {
     Navigator.of(context).push<void>(
@@ -3573,6 +3651,7 @@ class _SearchPageState extends State<SearchPage>
         ListView.builder(
           controller: _scrollController,
           physics: const AlwaysScrollableScrollPhysics(),
+          scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
           padding: EdgeInsets.fromLTRB(
             0,
             6,
@@ -3605,6 +3684,73 @@ class _SearchPageState extends State<SearchPage>
   }
 }
 
+class _OfficialFeedMessage extends StatelessWidget {
+  const _OfficialFeedMessage({
+    required this.api,
+    required this.text,
+    required this.style,
+    required this.lines,
+    required this.onMore,
+  });
+  final CoolapkApi api;
+  final String text;
+  final TextStyle style;
+  final int lines;
+  final VoidCallback onMore;
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final scaler = MediaQuery.textScalerOf(context);
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: Directionality.of(context),
+        textScaler: scaler,
+        maxLines: lines,
+      )..layout(maxWidth: constraints.maxWidth);
+      if (!painter.didExceedMaxLines) {
+        painter.dispose();
+        return CoolapkRichText(api: api, text: text, style: style);
+      }
+      final linkStyle = style.copyWith(color: const Color(0xFF009688));
+      final link = TextPainter(
+        text: TextSpan(text: '…查看更多', style: linkStyle),
+        textDirection: Directionality.of(context),
+        textScaler: scaler,
+      )..layout();
+      final last = painter.computeLineMetrics().last;
+      final end = painter
+          .getPositionForOffset(
+            Offset(
+              (constraints.maxWidth - link.width).clamp(
+                0,
+                constraints.maxWidth,
+              ),
+              last.baseline - last.ascent / 2,
+            ),
+          )
+          .offset
+          .clamp(0, text.length);
+      painter.dispose();
+      link.dispose();
+      return CoolapkRichText(
+        api: api,
+        text: text.substring(0, end).trimRight(),
+        style: style,
+        suffixSpans: [
+          WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: InkWell(
+              onTap: onMore,
+              child: Text('…查看更多', style: linkStyle),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
 class FeedCard extends StatefulWidget {
   const FeedCard({
     required this.api,
@@ -3612,6 +3758,12 @@ class FeedCard extends StatefulWidget {
     this.isDetail = false,
     this.rankNumber,
     this.isHeadline = false,
+    this.officialLayout = false,
+    this.articleLayout = false,
+    this.editorialCover = false,
+    this.picturesBeforeText = false,
+    this.authorHeader,
+    this.body,
     super.key,
   });
   final CoolapkApi api;
@@ -3619,6 +3771,12 @@ class FeedCard extends StatefulWidget {
   final bool isDetail;
   final int? rankNumber;
   final bool isHeadline;
+  final bool officialLayout;
+  final bool articleLayout;
+  final bool editorialCover;
+  final bool picturesBeforeText;
+  final Widget? authorHeader;
+  final Widget? body;
   @override
   State<FeedCard> createState() => _FeedCardState();
 }
@@ -3626,13 +3784,79 @@ class FeedCard extends StatefulWidget {
 class _FeedCardState extends State<FeedCard> {
   late bool _liked = widget.feed.liked;
   late int _likes = int.tryParse(widget.feed.likeCount) ?? 0;
+  late bool _favorited = _extractFavorited(widget.api, widget.feed);
   bool _working = false;
+
+  static bool _extractFavorited(CoolapkApi api, CoolapkFeed feed) {
+    try {
+      if (api.isAnonymous) {
+        return api.localAccount.favorites.containsKey(feed.id);
+      }
+    } catch (_) {}
+    return feed.favorited;
+  }
+
+  static String _extractArticleCover(CoolapkFeed feed) {
+    for (final key in [
+      'message_cover',
+      'cover',
+      'coverPic',
+      'cover_pic',
+      'extra_pic',
+      'header_image',
+      'pic',
+    ]) {
+      final rawVal = feed.raw[key];
+      if (rawVal != null) {
+        final s = rawVal.toString().trim();
+        if (s.isNotEmpty) {
+          final first = s.split(',').first.trim();
+          if (first.isNotEmpty &&
+              (first.startsWith('http://') ||
+                  first.startsWith('https://') ||
+                  first.startsWith('//') ||
+                  first.startsWith('/'))) {
+            return first;
+          }
+        }
+      }
+    }
+    if (feed.pictures.isNotEmpty) {
+      return feed.pictures.first;
+    }
+    return '';
+  }
+
+  static String _extractArticleSummary(CoolapkFeed feed) {
+    final feedTitle = (feed.raw['title'] ?? '').toString().trim();
+    for (final key in ['description', 'subTitle', 'intro', 'summary']) {
+      final val = feed.raw[key];
+      if (val != null) {
+        var s = val.toString().trim();
+        if (s.isNotEmpty && s != feedTitle) {
+          s = html.parse(s).body?.text.trim() ?? s;
+          if (feedTitle.isNotEmpty && s.startsWith(feedTitle)) {
+            s = s.substring(feedTitle.length).trim();
+          }
+          if (s.isNotEmpty) return s;
+        }
+      }
+    }
+    var msg = feed.message.trim();
+    if (feedTitle.isNotEmpty && msg.startsWith(feedTitle)) {
+      msg = msg.substring(feedTitle.length).trim();
+    }
+    msg = msg.replaceAll(RegExp(r'^#+\s*.*?\n'), '').trim();
+    return msg;
+  }
+
   @override
   void didUpdateWidget(covariant FeedCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.feed != widget.feed) {
       _liked = widget.feed.liked;
       _likes = int.tryParse(widget.feed.likeCount) ?? 0;
+      _favorited = _extractFavorited(widget.api, widget.feed);
     }
   }
 
@@ -3694,6 +3918,372 @@ class _FeedCardState extends State<FeedCard> {
     } finally {
       if (mounted) setState(() => _working = false);
     }
+  }
+
+  Future<void> _toggleFavorite() async {
+    if (_working) return;
+    setState(() => _working = true);
+    try {
+      await widget.api.favoriteFeed(
+        widget.feed.id,
+        favorited: _favorited,
+        feed: widget.feed,
+      );
+      if (mounted) {
+        setState(() => _favorited = !_favorited);
+        AppToast.show(context, _favorited ? '已添加至收藏' : '已取消收藏');
+      }
+    } catch (error) {
+      if (mounted) AppToast.show(context, error.toString());
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  void _showFeedMoreActions() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final feedId = widget.feed.id;
+    final shareUrl = 'https://www.coolapk.com/feed/$feedId';
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 10),
+                    Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withValues(alpha: 0.2)
+                            : Colors.black.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    // 第一行：灰底圆形按钮 [收藏, 屏蔽, 举报]
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        children: [
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-favorite'),
+                            isDark: isDark,
+                            isGreen: false,
+                            icon: _favorited
+                                ? Icons.star_rounded
+                                : Icons.star_outline_rounded,
+                            iconColor: _favorited
+                                ? Colors.amber
+                                : (isDark
+                                    ? Colors.white.withValues(alpha: 0.85)
+                                    : const Color(0xFF333333)),
+                            label: _favorited ? '已收藏' : '收藏',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              _toggleFavorite();
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-block'),
+                            isDark: isDark,
+                            isGreen: false,
+                            icon: Icons.visibility_off_outlined,
+                            label: '屏蔽',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              AppToast.show(context, '已屏蔽该动态，减少类似推荐');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-report'),
+                            isDark: isDark,
+                            isGreen: false,
+                            icon: Icons.crisis_alert_outlined,
+                            label: '举报',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              AppToast.show(context, '已收到举报，我们将尽快核实处理');
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    // 第二行：绿底圆形按钮 [推荐上头条]
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        children: [
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-recommend-headline'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.military_tech_outlined,
+                            iconSize: 26,
+                            label: '推荐上头条',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              AppToast.show(context, '已推荐上头条');
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    // 第三行：绿底横向滑动 [动态, 私信, 生成分享图, 看看号, 微信, 朋友圈, QQ, 复制链接, 更多]
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Row(
+                        children: [
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-feed'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.edit_note_rounded,
+                            iconSize: 26,
+                            label: '动态',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              _forward();
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-message'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.mail_outline_rounded,
+                            label: '私信',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              AppToast.show(context, '请在消息列表中选择要分享的好友');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-poster'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.image_outlined,
+                            label: '生成分享图',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              AppToast.show(context, '正在生成卡片分享图...');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-kankan'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.podcasts_outlined,
+                            label: '看看号',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              AppToast.show(context, '已分享至看看号');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-wechat'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.chat_bubble_rounded,
+                            label: '微信',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              unawaited(
+                                Clipboard.setData(
+                                  ClipboardData(text: shareUrl),
+                                ),
+                              );
+                              AppToast.show(context, '已复制动态链接，可前往微信粘贴分享');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-moments'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.motion_photos_on_outlined,
+                            label: '朋友圈',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              unawaited(
+                                Clipboard.setData(
+                                  ClipboardData(text: shareUrl),
+                                ),
+                              );
+                              AppToast.show(context, '已复制动态链接，可前往朋友圈粘贴分享');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-qq'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.forum_outlined,
+                            label: 'QQ',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              unawaited(
+                                Clipboard.setData(
+                                  ClipboardData(text: shareUrl),
+                                ),
+                              );
+                              AppToast.show(context, '已复制动态链接，可前往QQ粘贴分享');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-copy-link'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.link_rounded,
+                            label: '复制链接',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              unawaited(
+                                Clipboard.setData(
+                                  ClipboardData(text: shareUrl),
+                                ),
+                              );
+                              AppToast.show(context, '动态链接已复制到剪贴板');
+                            },
+                          ),
+                          const SizedBox(width: 20),
+                          _buildSheetCircleAction(
+                            key: const ValueKey('action-share-more'),
+                            isDark: isDark,
+                            isGreen: true,
+                            icon: Icons.more_horiz_rounded,
+                            label: '更多',
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              unawaited(
+                                Clipboard.setData(
+                                  ClipboardData(text: shareUrl),
+                                ),
+                              );
+                              AppToast.show(context, '已复制动态链接');
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    // 底部取消按钮
+                    InkWell(
+                      key: const ValueKey('action-sheet-cancel'),
+                      onTap: () => Navigator.pop(sheetContext),
+                      child: Container(
+                        width: double.infinity,
+                        height: 50,
+                        alignment: Alignment.center,
+                        child: Text(
+                          '取消',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.normal,
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.85)
+                                : const Color(0xFF333333),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildSheetCircleAction({
+    Key? key,
+    required bool isDark,
+    required bool isGreen,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color? iconColor,
+    double iconSize = 24,
+  }) {
+    final bgColor = isGreen
+        ? (isDark ? const Color(0xFF1B3D2F) : const Color(0xFFE2F7EB))
+        : (isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF0F0F2));
+    final defaultIconColor = isGreen
+        ? const Color(0xFF00C06D)
+        : (isDark
+            ? Colors.white.withValues(alpha: 0.85)
+            : const Color(0xFF333333));
+    final textColor = isDark
+        ? Colors.white.withValues(alpha: 0.75)
+        : const Color(0xFF555555);
+
+    return InkWell(
+      key: key,
+      borderRadius: BorderRadius.circular(28),
+      onTap: onTap,
+      child: SizedBox(
+        width: 60,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: bgColor,
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                icon,
+                size: iconSize,
+                color: iconColor ?? defaultIconColor,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                color: textColor,
+                height: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildQuickCommentBar(BuildContext context) {
@@ -3824,237 +4414,722 @@ class _FeedCardState extends State<FeedCard> {
     final feed = widget.feed;
     final scheme = Theme.of(context).colorScheme;
     final isDetail = widget.isDetail;
+    final rawEntityType =
+        (feed.raw['entityType'] ?? feed.raw['entity_type'] ?? '')
+            .toString()
+            .toLowerCase();
+    final rawFeedType = (feed.raw['feedType'] ?? feed.raw['feed_type'] ?? '')
+        .toString()
+        .toLowerCase();
+    final rawEntityTemplate =
+        (feed.raw['entityTemplate'] ?? feed.raw['entity_template'] ?? '')
+            .toString()
+            .toLowerCase();
+    final articleCover = _extractArticleCover(feed);
+    final feedTitle = (feed.raw['title'] ?? '').toString().trim();
+    final isGenericFeedTitle =
+        feedTitle.contains('动态') ||
+        feedTitle.contains('图文') ||
+        feedTitle == feed.username ||
+        feedTitle.startsWith('${feed.username}的');
+
+    final productPrice = '${feed.raw['tsubid']}' == '6'
+        ? ProductPrice.tryParse(feed.raw['tsubdata'])
+        : null;
+
+    final isArticle = widget.articleLayout ||
+        feed.isArticle ||
+        rawEntityType == 'article' ||
+        rawEntityType == 'feedarticle' ||
+        rawEntityType == 'feed_article' ||
+        rawEntityType == 'dyharticle' ||
+        rawEntityType == 'news' ||
+        rawFeedType == 'feedarticle' ||
+        rawFeedType == 'feed_article' ||
+        rawFeedType == 'article' ||
+        rawFeedType == 'dyharticle' ||
+        rawEntityTemplate == 'feedarticle' ||
+        rawEntityTemplate == 'feed_article' ||
+        rawEntityTemplate == 'article' ||
+        rawEntityTemplate == 'dyharticle' ||
+        (feedTitle.isNotEmpty &&
+            !isGenericFeedTitle &&
+            articleCover.isNotEmpty &&
+            productPrice == null &&
+            feed.raw['vote'] == null);
+
+    final compactLayout =
+        widget.officialLayout || widget.articleLayout || isArticle;
+    final rawLevel = (feed.raw['user_level'] ??
+            feed.raw['userInfo']?['level'] ??
+            feed.raw['user_info']?['level'] ??
+            feed.raw['level'] ??
+            '')
+        .toString()
+        .trim();
+    final device = (feed.raw['device_title'] ?? feed.raw['device_name'] ?? '')
+        .toString()
+        .trim();
     final innerContent = Padding(
       padding: isDetail
           ? const EdgeInsets.symmetric(horizontal: 14, vertical: 6)
-          : const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          : EdgeInsets.fromLTRB(
+              productPrice == null ? 12 : 14,
+              12,
+              productPrice == null ? 12 : 14,
+              8,
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isDetail) ...[
-            Row(
-              children: [
-                InkWell(
-                  borderRadius: BorderRadius.circular(20),
-                  onTap: feed.uid.isEmpty
-                      ? null
-                      : () => _openUserSpace(context, widget.api, feed.uid),
-                  child: AppAvatar(
-                    api: widget.api,
-                    url: feed.avatar,
-                    size: 42,
-                    name: feed.username,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(8),
+            if (widget.authorHeader != null)
+              widget.authorHeader!
+            else
+              Row(
+                children: [
+                  InkWell(
+                    borderRadius: BorderRadius.circular(20),
                     onTap: feed.uid.isEmpty
                         ? null
                         : () => _openUserSpace(context, widget.api, feed.uid),
+                    child: AppAvatar(
+                      api: widget.api,
+                      url: feed.avatar,
+                      size: (widget.articleLayout || isArticle)
+                          ? 38
+                          : widget.officialLayout
+                          ? 32
+                          : productPrice != null
+                          ? 38
+                          : 42,
+                      name: feed.username,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                feed.username.isEmpty ? '酷安用户' : feed.username,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: context.adjustWeight(
-                                    FontWeight.bold,
+                        InkWell(
+                          key: const ValueKey('feed-author-link'),
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: feed.uid.isEmpty
+                              ? null
+                              : () => _openUserSpace(
+                                  context,
+                                  widget.api,
+                                  feed.uid,
+                                ),
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  feed.username.isEmpty
+                                      ? '酷安用户'
+                                      : feed.username,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: productPrice != null ? 16 : 15,
+                                    fontWeight: context.adjustWeight(
+                                      FontWeight.bold,
+                                    ),
+                                    color: scheme.onSurface,
                                   ),
-                                  color: scheme.onSurface,
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              Icons.keyboard_arrow_down_rounded,
-                              size: 16,
-                              color: scheme.onSurfaceVariant.withValues(
-                                alpha: 0.6,
-                              ),
-                            ),
-                          ],
+                              if (rawLevel.isNotEmpty) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: scheme.primary.withValues(
+                                      alpha: 0.12,
+                                    ),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    rawLevel.toLowerCase().startsWith('lv.')
+                                        ? rawLevel
+                                        : 'Lv.$rawLevel',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      color: scheme.primary,
+                                      height: 1.1,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 2),
-                        Builder(
-                          builder: (context) {
-                            final device =
-                                (feed.raw['device_title'] ??
-                                        feed.raw['device_name'] ??
-                                        '')
-                                    .toString()
-                                    .trim();
-                            return Row(
-                              children: [
-                                Text(
-                                  feed.date,
-                                  style: TextStyle(
-                                    fontSize: 11.5,
-                                    color: scheme.onSurfaceVariant,
+                        Row(
+                          children: [
+                            Text(
+                              feed.date,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            if (device.isNotEmpty)
+                              Flexible(
+                                child: InkWell(
+                                  key: const ValueKey('feed-device-link'),
+                                  borderRadius: BorderRadius.circular(8),
+                                  onTap: () => _openDeviceDiscussion(
+                                    context,
+                                    widget.api,
+                                    device,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.smartphone_rounded,
+                                          size: 12,
+                                          color: scheme.onSurfaceVariant
+                                              .withValues(alpha: 0.8),
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Flexible(
+                                          child: Text(
+                                            device,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 11.5,
+                                              color: scheme.onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                                if (device.isNotEmpty) ...[
-                                  const SizedBox(width: 6),
-                                  Icon(
-                                    Icons.smartphone_rounded,
-                                    size: 12,
-                                    color: scheme.onSurfaceVariant.withValues(
-                                      alpha: 0.8,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 2),
-                                  Flexible(
-                                    child: Text(
-                                      device,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 11.5,
-                                        color: scheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            );
-                          },
+                              ),
+                          ],
                         ),
                       ],
                     ),
                   ),
-                ),
-                if (widget.rankNumber != null && widget.rankNumber! > 0) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: widget.rankNumber! <= 3
-                          ? const Color(0xFFFF5252).withValues(alpha: 0.15)
-                          : scheme.surfaceContainerHighest.withValues(
-                              alpha: 0.6,
-                            ),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.trending_up_rounded,
-                          size: 15,
-                          color: widget.rankNumber! <= 3
-                              ? const Color(0xFFFF5252)
-                              : scheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          widget.rankNumber! < 10
-                              ? '0${widget.rankNumber}'
-                              : '${widget.rankNumber}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                            fontStyle: FontStyle.italic,
+                  if (widget.rankNumber != null && widget.rankNumber! > 0) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: widget.rankNumber! <= 3
+                            ? const Color(0xFFFF5252).withValues(alpha: 0.15)
+                            : scheme.surfaceContainerHighest.withValues(
+                                alpha: 0.6,
+                              ),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.trending_up_rounded,
+                            size: 15,
                             color: widget.rankNumber! <= 3
                                 ? const Color(0xFFFF5252)
                                 : scheme.onSurfaceVariant,
                           ),
+                          const SizedBox(width: 3),
+                          Text(
+                            widget.rankNumber! < 10
+                                ? '0${widget.rankNumber}'
+                                : '${widget.rankNumber}',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w900,
+                              fontStyle: FontStyle.italic,
+                              color: widget.rankNumber! <= 3
+                                  ? const Color(0xFFFF5252)
+                                  : scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 4),
+                  InkWell(
+                    key: const ValueKey('feed-more-actions-btn'),
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: _showFeedMoreActions,
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 20,
+                        color: scheme.onSurfaceVariant.withValues(
+                          alpha: 0.7,
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ],
-              ],
-            ),
+              ),
             const SizedBox(height: 8),
           ],
-          Builder(
-            builder: (context) {
-              final feedTitle = (feed.raw['title'] ?? '').toString().trim();
-              final isGenericFeedTitle =
-                  feedTitle.contains('动态') ||
-                  feedTitle.contains('图文') ||
-                  feedTitle == feed.username ||
-                  feedTitle.startsWith('${feed.username}的');
-              if (feedTitle.isNotEmpty &&
-                  feedTitle != feed.message &&
-                  !isGenericFeedTitle) {
+          if (widget.body != null)
+            widget.body!
+          else if (isArticle && !isDetail) ...[
+            if (feedTitle.isNotEmpty && !isGenericFeedTitle)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  feedTitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 17.5,
+                    fontWeight: context.adjustWeight(FontWeight.bold),
+                    color: scheme.onSurface,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            if (articleCover.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 2.0,
+                    child: CachedNetworkImage(
+                      normalizeCoolapkImageUrl(articleCover),
+                      headers: coolapkImageHeaders(
+                        articleCover,
+                        api: widget.api,
+                      ),
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => Container(
+                        color: scheme.surfaceContainerHighest.withValues(
+                          alpha: 0.4,
+                        ),
+                        child: Icon(
+                          Icons.broken_image_outlined,
+                          size: 32,
+                          color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            Builder(
+              builder: (context) {
+                final summary = _extractArticleSummary(feed);
+                if (summary.isEmpty) return const SizedBox.shrink();
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(
-                    feedTitle,
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: CoolapkRichText(
+                    api: widget.api,
+                    text: summary,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                      color: scheme.onSurface,
-                      height: 1.4,
+                      fontSize: 14.5,
+                      height: 1.45,
+                      letterSpacing: 0.1,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ),
                 );
-              }
-              return const SizedBox.shrink();
-            },
-          ),
-          if (feed.message.isNotEmpty)
-            if (isDetail)
-              SelectionArea(
-                child: CoolapkRichText(
+              },
+            ),
+            _FeedTargetOrTagRow(
+              api: widget.api,
+              feed: feed,
+              isDetail: isDetail,
+            ),
+          ] else ...[
+            Builder(
+              builder: (context) {
+                final feedTitle = (feed.raw['title'] ?? '').toString().trim();
+                final isGenericFeedTitle =
+                    feedTitle.contains('动态') ||
+                    feedTitle.contains('图文') ||
+                    feedTitle == feed.username ||
+                    feedTitle.startsWith('${feed.username}的');
+                if (feedTitle.isNotEmpty &&
+                    feedTitle != feed.message &&
+                    !isGenericFeedTitle) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          if (feed.raw['vote'] is Map)
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 5,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange,
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                  child: const Text(
+                                    '投票',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.normal,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          TextSpan(text: feedTitle),
+                        ],
+                      ),
+                      style: TextStyle(
+                        fontSize: widget.articleLayout
+                            ? 18
+                            : widget.officialLayout
+                            ? 16
+                            : 17,
+                        fontWeight: widget.articleLayout
+                            ? FontWeight.bold
+                            : widget.officialLayout
+                            ? FontWeight.w500
+                            : FontWeight.bold,
+                        color: scheme.onSurface,
+                        height: 1.4,
+                      ),
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+            if (isArticle && isDetail && articleCover.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 10),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 2.0,
+                    child: CachedNetworkImage(
+                      normalizeCoolapkImageUrl(articleCover),
+                      headers: coolapkImageHeaders(
+                        articleCover,
+                        api: widget.api,
+                      ),
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              ),
+            if (productPrice != null)
+              Padding(
+                key: const ValueKey('feed-product-price'),
+                padding: const EdgeInsets.only(top: 12, bottom: 8),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: const Color(0xFFFF9800)),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            color: const Color(0xFFFF9800),
+                            padding: const EdgeInsets.all(2),
+                            child: Container(
+                              width: 13,
+                              height: 13,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white),
+                              ),
+                              child: const Text(
+                                '¥',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  height: 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 3),
+                            child: Text(
+                              '到手价',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFFFF9800),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      '¥${productPrice.formatted}',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFFF9800),
+                      ),
+                    ),
+                    if (productPrice.config.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? const Color(0xFF2C2C2C)
+                              : scheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          productPrice.config,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            if (widget.picturesBeforeText && feed.pictures.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 10),
+                child: _PictureGrid(
                   api: widget.api,
-                  text: feed.message,
+                  urls: feed.pictures,
+                  metadata: feed.pictureMetadata,
+                  isDetail: isDetail,
+                  joinedImages: true,
+                ),
+              ),
+            if (feed.message.isNotEmpty && !widget.editorialCover)
+              if (isDetail)
+                SelectionArea(
+                  child: CoolapkRichText(
+                    api: widget.api,
+                    text: feed.message,
+                    style: TextStyle(
+                      fontSize: 15.5,
+                      height: 1.65,
+                      letterSpacing: 0.15,
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                )
+              else if (widget.articleLayout)
+                CoolapkRichText(
+                  api: widget.api,
+                  text: _extractArticleSummary(feed),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 15.5,
-                    height: 1.65,
-                    letterSpacing: 0.15,
+                    fontSize: 14.5,
+                    height: 1.45,
+                    letterSpacing: 0.1,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                )
+              else if (widget.officialLayout)
+                _OfficialFeedMessage(
+                  api: widget.api,
+                  text: feed.message.trimRight(),
+                  style: TextStyle(
+                    fontSize: 16,
+                    height: 1.4,
+                    color: scheme.onSurface,
+                  ),
+                  lines: 6,
+                  onMore: _openDetail,
+                )
+              else
+                CoolapkRichText(
+                  api: widget.api,
+                  prefixSpans: productPrice == null
+                      ? const []
+                      : [
+                          WidgetSpan(
+                            alignment: PlaceholderAlignment.middle,
+                            child: Container(
+                              width: 15,
+                              height: 15,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: const Color(0xFF009688),
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: const Text(
+                                '¥',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  height: 1,
+                                  color: Color(0xFF009688),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const TextSpan(
+                            text: ' 到手价 | ',
+                            style: TextStyle(color: Color(0xFF009688)),
+                          ),
+                        ],
+                  text: feed.message.trimRight(),
+                  maxLines: 8,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: productPrice != null ? 17.5 : 16,
+                    height: productPrice != null ? 1.4 : 1.3,
                     color: scheme.onSurface,
                   ),
                 ),
-              )
-            else
-              CoolapkRichText(
-                api: widget.api,
-                text: feed.message.trimRight(),
-                maxLines: 8,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 16,
-                  height: 1.3,
-                  color: scheme.onSurface,
+            Builder(
+              builder: (context) {
+                if (widget.picturesBeforeText && feed.pictures.isNotEmpty) {
+                  return const SizedBox.shrink();
+                }
+                if (widget.editorialCover) {
+                  final cover =
+                      (feed.raw['message_cover'] ??
+                              feed.raw['pic'] ??
+                              feed.pictures.firstOrNull ??
+                              '')
+                          .toString();
+                  if (cover.isNotEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Stack(
+                          children: [
+                            AspectRatio(
+                              aspectRatio: 20 / 9,
+                              child: CachedNetworkImage(
+                                normalizeCoolapkImageUrl(cover),
+                                headers: coolapkImageHeaders(
+                                  cover,
+                                  api: widget.api,
+                                ),
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                            Positioned(
+                              top: 8,
+                              left: 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFD84124),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: const Text(
+                                  '◇ 编辑精选',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                }
+                final video = _extractFeedVideo(feed);
+                if (video != null) {
+                  return _FeedVideoPreview(
+                    api: widget.api,
+                    feed: feed,
+                    video: video,
+                  );
+                }
+                final effectivePictures =
+                    isArticle && isDetail && articleCover.isNotEmpty
+                        ? feed.pictures
+                            .where((url) => url != articleCover)
+                            .toList()
+                        : feed.pictures;
+                if (effectivePictures.isNotEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: _PictureGrid(
+                      api: widget.api,
+                      urls: effectivePictures,
+                      metadata: feed.pictureMetadata,
+                      isDetail: widget.isDetail,
+                      joinedImages:
+                          !isDetail && (productPrice != null || compactLayout),
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+            if (widget.editorialCover && feed.message.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: _OfficialFeedMessage(
+                  api: widget.api,
+                  text: feed.message,
+                  lines: 3,
+                  onMore: _openDetail,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.4,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ),
-          Builder(
-            builder: (context) {
-              final video = _extractFeedVideo(feed);
-              if (video != null) {
-                return _FeedVideoPreview(
-                  api: widget.api,
-                  feed: feed,
-                  video: video,
-                );
-              }
-              if (feed.pictures.isNotEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: _PictureGrid(
-                    api: widget.api,
-                    urls: feed.pictures,
-                    metadata: feed.pictureMetadata,
-                    isDetail: widget.isDetail,
-                  ),
-                );
-              }
-              return const SizedBox.shrink();
-            },
-          ),
-          _FeedTargetOrTagRow(api: widget.api, feed: feed, isDetail: isDetail),
+            if (feed.raw['vote'] is Map)
+              FeedVote(
+                api: widget.api,
+                feedId: feed.id,
+                vote: Map<String, dynamic>.from(feed.raw['vote'] as Map),
+              ),
+            if (productPrice == null || isDetail)
+              _FeedTargetOrTagRow(
+                api: widget.api,
+                feed: feed,
+                isDetail: isDetail,
+              ),
+          ],
           if (widget.isHeadline && !isDetail) _buildQuickCommentBar(context),
           if (isDetail)
             Builder(
@@ -4105,7 +5180,8 @@ class _FeedCardState extends State<FeedCard> {
                 );
               },
             ),
-          if (!isDetail) ...[
+          if (!isDetail &&
+              !(widget.officialLayout && feed.raw['vote'] is Map)) ...[
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -4128,9 +5204,13 @@ class _FeedCardState extends State<FeedCard> {
                 ),
                 _buildActionBtn(
                   icon: Icons.share_outlined,
-                  count: int.tryParse('${feed.raw['forwardnum'] ?? 0}') ?? 0,
+                  count:
+                      (int.tryParse('${feed.raw['forwardnum'] ?? 0}') ?? 0) +
+                      (compactLayout
+                          ? int.tryParse('${feed.raw['share_num'] ?? 0}') ?? 0
+                          : 0),
                   color: scheme.onSurfaceVariant,
-                  onTap: _forward,
+                  onTap: _showFeedMoreActions,
                   label: '分享',
                 ),
               ],
@@ -4144,20 +5224,29 @@ class _FeedCardState extends State<FeedCard> {
       return innerContent;
     }
 
-    return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      elevation: 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide.none,
+    return RepaintBoundary(
+      child: ReviewCard(
+        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        elevation: compactLayout || productPrice != null ? 0 : 1,
+        color:
+            (compactLayout || productPrice != null) &&
+                Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF1E1E1E)
+            : null,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(
+            compactLayout || productPrice != null ? 14 : 20,
+          ),
+          side: BorderSide.none,
+        ),
+        enableFeedback: false,
+        splashFactory: NoSplash.splashFactory,
+        onTap: () {
+          HapticFeedbackUtil.light();
+          _openDetail();
+        },
+        child: innerContent,
       ),
-      enableFeedback: false,
-      splashFactory: NoSplash.splashFactory,
-      onTap: () {
-        HapticFeedbackUtil.light();
-        _openDetail();
-      },
-      child: innerContent,
     );
   }
 
@@ -4963,10 +6052,7 @@ class _FeedTargetOrTagRow extends StatelessWidget {
     // 3. Fallback: check relationRows
     final relationRows = raw['relationRows'];
     if (relationRows is List && relationRows.isNotEmpty) {
-      final firstRel = relationRows.firstWhere(
-        (e) => e is Map,
-        orElse: () => null,
-      );
+      final firstRel = relationRows.whereType<Map>().firstOrNull;
       if (firstRel is Map && firstRel['title'] != null) {
         final relTitle = firstRel['title'].toString().trim();
         final relLogo = (firstRel['logo'] ?? '').toString().trim();
@@ -5250,19 +6336,25 @@ class _TargetFollowPill extends StatefulWidget {
 }
 
 class _TargetFollowPillState extends State<_TargetFollowPill> {
-  late bool _following = widget.initialFollowing;
+  late bool _following = widget.api.isAnonymous && widget.isProduct
+      ? widget.api.localAccount.productFollows.containsKey(widget.productId)
+      : widget.initialFollowing;
   bool _busy = false;
 
   Future<void> _toggle() async {
     if (_busy) return;
-    if (!widget.api.hasCookie) {
+    if (!(widget.isProduct ? widget.api.hasAccount : widget.api.hasCookie)) {
       AppToast.show(context, widget.api.loginRequiredMessage);
       return;
     }
     setState(() => _busy = true);
     try {
       if (widget.isProduct && widget.productId.isNotEmpty) {
-        await widget.api.followProduct(widget.productId, following: _following);
+        await widget.api.followProduct(
+          widget.productId,
+          following: _following,
+          product: {'id': widget.productId, 'title': widget.tag},
+        );
       } else {
         final cleanTag = widget.tag.replaceAll('#', '').trim();
         await widget.api.followTopic(cleanTag, following: _following);
@@ -5559,7 +6651,6 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   final _replyController = TextEditingController();
   Map<String, dynamic>? _detail;
   final _replies = <CoolapkFeed>[];
-  String? _detailError;
   String? _replyError;
   bool _loadingDetail = true;
   bool _loadingReplies = false;
@@ -5572,7 +6663,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   String _replyTo = '';
   final _replyPicture = TextEditingController();
   bool _replyAndForward = false;
-  String _commentMode = 'default';
+  String _commentMode = 'hot';
   int _replyPage = 0;
 
   @override
@@ -5582,6 +6673,10 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     _favorited = widget.api.isAnonymous
         ? widget.api.localAccount.favorites.containsKey(widget.feed.id)
         : widget.feed.favorited;
+    final initialEmbedded = _extractEmbeddedReplies();
+    if (initialEmbedded.isNotEmpty) {
+      _replies.addAll(initialEmbedded);
+    }
     _scroll.addListener(_onScroll);
     _load();
   }
@@ -5594,8 +6689,50 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     super.dispose();
   }
 
+  List<CoolapkFeed> _extractEmbeddedReplies() {
+    final embedded = <Map<String, dynamic>>[];
+    for (final source in [_detail, widget.feed.raw]) {
+      if (source == null) continue;
+      for (final key in [
+        'topReplyRows',
+        'top_reply_rows',
+        'replyMeRows',
+        'reply_me_rows',
+        'replyRows',
+        'reply_rows',
+      ]) {
+        final list = source[key];
+        if (list is List) {
+          for (final item in list) {
+            if (item is Map) {
+              embedded.add(Map<String, dynamic>.from(item));
+            }
+          }
+        }
+      }
+    }
+    if (embedded.isEmpty) return const [];
+    final seen = <String>{};
+    return embedded.map(CoolapkFeed.fromJson).where((reply) {
+      final type =
+          (reply.raw['entityType'] ??
+                  reply.raw['entity_type'] ??
+                  reply.raw['type'] ??
+                  '')
+              .toString()
+              .toLowerCase();
+      return type != 'feed_detail_reply_sponsor_card' &&
+          reply.message.trim().toUpperCase() !=
+              'FEED_DETAIL_REPLY_SPONSOR_CARD' &&
+          reply.id.isNotEmpty &&
+          seen.add(reply.id);
+    }).toList();
+  }
+
   void _onScroll() {
-    if (_scroll.hasClients && _scroll.position.extentAfter < 420) {
+    if (_replyError == null &&
+        _scroll.hasClients &&
+        _scroll.position.extentAfter < 420) {
       _loadReplies(refresh: false);
     }
   }
@@ -5607,32 +6744,57 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   Future<void> _loadDetail() async {
     setState(() {
       _loadingDetail = true;
-      _detailError = null;
     });
     try {
       final result = await widget.api.getFeedDetail(widget.feed.id);
-      if (mounted) setState(() => _detail = result);
-    } catch (error) {
-      if (mounted) setState(() => _detailError = error.toString());
+      if (mounted) {
+        setState(() {
+          _detail = result;
+          if (_replies.isEmpty) {
+            final embedded = _extractEmbeddedReplies();
+            if (embedded.isNotEmpty) {
+              _replies.addAll(embedded);
+            }
+          }
+        });
+      }
+    } catch (_) {
+      // 动态基本内容由 widget.feed 完整提供；详情接口若因未登录风控受限或失败，静默使用已有内容，无需中断展示或弹出多余的错误与重试
     } finally {
       if (mounted) setState(() => _loadingDetail = false);
     }
   }
 
   Future<void> _loadReplies({bool refresh = true}) async {
-    if (_loadingReplies || (!refresh && !_replyHasMore)) return;
+    if (_loadingReplies || (!refresh && !_replyHasMore)) {
+      return;
+    }
+    final next = refresh ? 1 : _replyPage + 1;
     setState(() {
       _loadingReplies = true;
       _replyError = null;
     });
+
+    final rawFeedType =
+        (_detail?['feedType'] ??
+                _detail?['feed_type'] ??
+                widget.feed.raw['feedType'] ??
+                widget.feed.raw['feed_type'] ??
+                'feed')
+            .toString()
+            .trim();
+    // Coolapk /v6/feed/replyList strictly expects 'feed' for posts and 'feed_reply' for sub-replies.
+    // Unrecognized values like 'user_feed', 'feed_article' cause API restriction ("访问受限").
+    final feedType = rawFeedType == 'feed_reply' ? 'feed_reply' : 'feed';
+
     try {
-      final next = refresh ? 1 : _replyPage + 1;
-      final result = switch (_commentMode) {
+      var result = switch (_commentMode) {
         'hot' => await widget.api.getHotReplyPage(widget.feed.id, next),
         'latest' => await widget.api.getReplyPage(
           widget.feed.id,
           next,
           listType: 'dateline_desc',
+          feedType: feedType,
           firstItem: refresh ? null : _replies.firstOrNull?.id,
           lastItem: refresh ? null : _replies.lastOrNull?.id,
         ),
@@ -5640,6 +6802,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
           widget.feed.id,
           next,
           fromFeedAuthor: true,
+          feedType: feedType,
           firstItem: refresh ? null : _replies.firstOrNull?.id,
           lastItem: refresh ? null : _replies.lastOrNull?.id,
         ),
@@ -5647,38 +6810,188 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
           widget.feed.id,
           next,
           listType: 'lastupdate_desc',
+          feedType: feedType,
           firstItem: refresh ? null : _replies.firstOrNull?.id,
           lastItem: refresh ? null : _replies.lastOrNull?.id,
         ),
       };
+
+      // 当热门或普通评论返回空列表时（例如个人主页自发动态、冷门动态、头条部分评论），
+      // 深度提取冷门评论：尝试从 recent_reply_ids 拉取具体回复（该接口未受未登录风控限制）
+      if (result.items.isEmpty && refresh) {
+        if (_detail == null && _loadingDetail) {
+          try {
+            final res = await widget.api.getFeedDetail(widget.feed.id);
+            if (mounted) _detail = res;
+          } catch (_) {}
+        }
+        final recentIdsRaw =
+            (_detail?['recent_reply_ids'] ??
+                    widget.feed.raw['recent_reply_ids'])
+                ?.toString() ??
+            '';
+        final recentIds = recentIdsRaw
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+
+        if (recentIds.isNotEmpty) {
+          final futures = recentIds.take(15).map((rid) async {
+            try {
+              final res = await widget.api.getReplyDetail(rid);
+              final data = res['data'];
+              if (data is Map<String, dynamic> && data['id'] != null) {
+                return CoolapkFeed.fromJson(data);
+              }
+            } catch (_) {}
+            return null;
+          });
+          final fetched = (await Future.wait(futures))
+              .whereType<CoolapkFeed>()
+              .toList();
+          if (fetched.isNotEmpty) {
+            result = ApiPage(
+              items: fetched.map((r) => r.raw).toList(),
+              page: 1,
+              firstItem: fetched.firstOrNull?.id ?? '',
+              lastItem: fetched.lastOrNull?.id ?? '',
+              hasMore: false,
+            );
+          }
+        }
+
+        // 如果依然为空且处于 hot 模式，尝试普通排序请求（针对登录用户或免风控节点）
+        if (result.items.isEmpty && _commentMode == 'hot') {
+          try {
+            final regularResult = await widget.api.getReplyPage(
+              widget.feed.id,
+              1,
+              listType: 'lastupdate_desc',
+              feedType: feedType,
+            );
+            if (regularResult.items.isNotEmpty) {
+              result = regularResult;
+            }
+          } catch (_) {}
+        }
+      }
+
       if (mounted) {
-        setState(() {
-          if (refresh) _replies.clear();
-          final ids = _replies.map((reply) => reply.id).toSet();
-          _replies.addAll(
-            result.items.map(CoolapkFeed.fromJson).where((reply) {
-              final type =
-                  (reply.raw['entityType'] ??
-                          reply.raw['entity_type'] ??
-                          reply.raw['type'] ??
-                          '')
-                      .toString()
-                      .toLowerCase();
-              return type != 'feed_detail_reply_sponsor_card' &&
-                  reply.message.trim().toUpperCase() !=
-                      'FEED_DETAIL_REPLY_SPONSOR_CARD' &&
-                  (reply.id.isEmpty || ids.add(reply.id));
-            }),
-          );
-          _replyPage = next;
-          _replyHasMore = result.hasMore && result.items.isNotEmpty;
-        });
+        _applyReplyPage(result, refresh: refresh, page: next);
       }
     } catch (error) {
-      if (mounted) setState(() => _replyError = error.toString());
+      if (mounted) {
+        // 彻底去除评论区报错与重试条，非致命风控错误静默降级展示
+        _replyError = null;
+        if (_commentMode != 'hot') {
+          try {
+            final fallback = await widget.api.getHotReplyPage(
+              widget.feed.id,
+              1,
+            );
+            if (mounted && fallback.items.isNotEmpty) {
+              setState(() => _commentMode = 'hot');
+              _applyReplyPage(fallback, refresh: true, page: 1);
+              return;
+            }
+          } catch (_) {}
+        }
+
+        if (_detail == null && _loadingDetail) {
+          try {
+            final res = await widget.api.getFeedDetail(widget.feed.id);
+            if (mounted) _detail = res;
+          } catch (_) {}
+        }
+
+        final recentIdsRaw =
+            (_detail?['recent_reply_ids'] ??
+                    widget.feed.raw['recent_reply_ids'])
+                ?.toString() ??
+            '';
+        final recentIds = recentIdsRaw
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        if (recentIds.isNotEmpty && _replies.isEmpty) {
+          try {
+            final futures = recentIds.take(15).map((rid) async {
+              try {
+                final res = await widget.api.getReplyDetail(rid);
+                final data = res['data'];
+                if (data is Map<String, dynamic> && data['id'] != null) {
+                  return CoolapkFeed.fromJson(data);
+                }
+              } catch (_) {}
+              return null;
+            });
+            final fetched = (await Future.wait(futures))
+                .whereType<CoolapkFeed>()
+                .toList();
+            if (mounted && fetched.isNotEmpty) {
+              setState(() {
+                final ids = _replies.map((r) => r.id).toSet();
+                for (final r in fetched) {
+                  if (ids.add(r.id)) _replies.add(r);
+                }
+              });
+            }
+          } catch (_) {}
+        }
+
+        if (mounted && _replies.isEmpty) {
+          final embedded = _extractEmbeddedReplies();
+          if (embedded.isNotEmpty) {
+            setState(() {
+              _replies.addAll(embedded);
+            });
+          }
+        }
+      }
     } finally {
       if (mounted) setState(() => _loadingReplies = false);
     }
+  }
+
+  void _applyReplyPage(
+    ApiPage result, {
+    required bool refresh,
+    required int page,
+  }) {
+    setState(() {
+      // 仅在获取到了新数据时清空旧数据，防止冷门帖子因空响应误清空已有的内嵌或保底评论
+      if (refresh && result.items.isNotEmpty) {
+        _replies.clear();
+      }
+      final ids = _replies.map((reply) => reply.id).toSet();
+      _replies.addAll(
+        result.items.map(CoolapkFeed.fromJson).where((reply) {
+          final type =
+              (reply.raw['entityType'] ??
+                      reply.raw['entity_type'] ??
+                      reply.raw['type'] ??
+                      '')
+                  .toString()
+                  .toLowerCase();
+          return type != 'feed_detail_reply_sponsor_card' &&
+              reply.message.trim().toUpperCase() !=
+                  'FEED_DETAIL_REPLY_SPONSOR_CARD' &&
+              (reply.id.isEmpty || ids.add(reply.id));
+        }),
+      );
+      if (_replies.isEmpty) {
+        final embedded = _extractEmbeddedReplies();
+        for (final reply in embedded) {
+          if (ids.add(reply.id)) {
+            _replies.add(reply);
+          }
+        }
+      }
+      _replyPage = page;
+      _replyHasMore = result.hasMore && result.items.isNotEmpty;
+    });
   }
 
   Future<void> _toggleLike() async {
@@ -5772,11 +7085,18 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
       builder: (sheetContext, setSheetState) {
         final theme = Theme.of(sheetContext);
         final isDark = theme.brightness == Brightness.dark;
+        final rawSubReplies = reply.raw['replyRows'] ?? reply.raw['reply_rows'];
+        final initialSubReplies = (rawSubReplies is List)
+            ? rawSubReplies
+                  .whereType<Map>()
+                  .map(Map<String, dynamic>.from)
+                  .toList()
+            : <Map<String, dynamic>>[];
         final replyCount =
             int.tryParse(
               '${reply.raw['replyRowsMore'] ?? reply.raw['replynum'] ?? reply.replyCount}',
             ) ??
-            0;
+            initialSubReplies.length;
         return SizedBox(
           height: MediaQuery.sizeOf(sheetContext).height * 0.64,
           child: Material(
@@ -5829,7 +7149,13 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                     api: widget.api,
                     title: '',
                     path: '/v6/feed/replyList',
-                    query: {'id': reply.id, 'feedType': 'feed_reply'},
+                    query: {
+                      'id': reply.id,
+                      'feedType': 'feed_reply',
+                      'discussMode': 1,
+                      'listType': 'lastupdate_desc',
+                    },
+                    initialItems: initialSubReplies,
                     showAppBar: false,
                     header: ColoredBox(
                       color: isDark
@@ -6227,6 +7553,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
             ListView(
               controller: _scroll,
               physics: const AlwaysScrollableScrollPhysics(),
+              scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
               padding: EdgeInsets.fromLTRB(
                 0,
                 0,
@@ -6239,14 +7566,13 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                   feed: widget.feed,
                   detail: _detail,
                 ),
-                if (_loadingDetail)
+                if (_loadingDetail &&
+                    widget.feed.message.isEmpty &&
+                    _detail == null)
                   const Padding(
                     padding: EdgeInsets.all(12),
                     child: Center(child: LinearProgressIndicator()),
-                  )
-                else if (_detailError != null &&
-                    !_isCaptchaError(_detailError!))
-                  _InlineRetry(message: _detailError!, onRetry: _loadDetail),
+                  ),
                 Divider(
                   height: 16,
                   thickness: 0.5,
@@ -6326,11 +7652,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                     padding: EdgeInsets.all(18),
                     child: Center(child: CircularProgressIndicator()),
                   )
-                else if (_replyError != null &&
-                    _replies.isEmpty &&
-                    !_isCaptchaError(_replyError!))
-                  _InlineRetry(message: _replyError!, onRetry: _loadReplies)
-                else if (_replies.isEmpty && _replyError == null)
+                else if (_replies.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 40),
                     child: Center(
@@ -6398,11 +7720,6 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                               _showReplyThread(_replies[index], authorUid),
                         ),
                     ],
-                  ),
-                if (_replyError != null && !_isCaptchaError(_replyError!))
-                  _InlineRetry(
-                    message: _replyError!,
-                    onRetry: () => _loadReplies(refresh: false),
                   ),
                 if (_loadingReplies && _replies.isNotEmpty)
                   const Padding(
@@ -6966,7 +8283,8 @@ class _ReplyTile extends StatelessWidget {
         ? const Color(0xFF26A69A)
         : const Color(0xFF00897B);
 
-    return Padding(
+    return RepaintBoundary(
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -7044,7 +8362,17 @@ class _ReplyTile extends StatelessWidget {
                           color: scheme.onSurface,
                         ),
                       ),
-                    if (showSubReplies && subReplies.isNotEmpty)
+                    if (reply.pictures.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _PictureGrid(
+                        api: api,
+                        urls: reply.pictures,
+                        metadata: reply.pictureMetadata,
+                        isDetail: true,
+                      ),
+                    ],
+                    if (showSubReplies &&
+                        (subReplies.isNotEmpty || totalSubCount > 0))
                       Container(
                         margin: const EdgeInsets.only(top: 8, bottom: 4),
                         padding: const EdgeInsets.all(9),
@@ -7068,20 +8396,22 @@ class _ReplyTile extends StatelessWidget {
                               ),
                               const SizedBox(height: 4),
                             ],
-                            if (totalSubCount > 3 ||
-                                (reply.raw['replyRowsMore'] != null &&
-                                    int.tryParse(
-                                          '${reply.raw['replyRowsMore']}',
-                                        ) !=
-                                        null &&
-                                    int.parse('${reply.raw['replyRowsMore']}') >
-                                        0))
+                            if (totalSubCount > 0)
                               InkWell(
                                 onTap: onThread,
                                 child: Padding(
                                   padding: const EdgeInsets.only(top: 2),
                                   child: Text(
-                                    '共 $totalSubCount 条回复 >',
+                                    subReplies.isEmpty
+                                        ? '共 $totalSubCount 条回复 >'
+                                        : (totalSubCount > 3 ||
+                                              ((int.tryParse(
+                                                        '${reply.raw['replyRowsMore']}',
+                                                      ) ??
+                                                      0) >
+                                                  0))
+                                        ? '共 $totalSubCount 条回复 >'
+                                        : '查看对话 >',
                                     style: TextStyle(
                                       color: nameColor,
                                       fontSize: 12,
@@ -7230,8 +8560,9 @@ class _ReplyTile extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildSubReplyLine(
     BuildContext context,
@@ -7242,6 +8573,7 @@ class _ReplyTile extends StatelessWidget {
     final subUser = (sub['username'] ?? '').toString();
     final subMsg = (sub['message'] ?? '').toString();
     final ruser = (sub['rusername'] ?? '').toString();
+    final subFeed = CoolapkFeed.fromJson(sub);
     final userInfo = sub['userInfo'] ?? sub['user_info'];
     final subUid =
         (sub['uid'] ??
@@ -7268,35 +8600,50 @@ class _ReplyTile extends StatelessWidget {
       ),
     );
 
-    return RichText(
-      text: TextSpan(
-        children: [
-          userName(subUser, subUid),
-          if (ruser.isNotEmpty) ...[
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CoolapkRichText(
+          api: api,
+          text: subMsg,
+          style: TextStyle(
+            color: scheme.onSurface,
+            fontSize: 12.5,
+            height: 1.35,
+          ),
+          prefixSpans: [
+            userName(subUser, subUid),
+            if (ruser.isNotEmpty) ...[
+              TextSpan(
+                text: ' 回复 ',
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 12.5,
+                ),
+              ),
+              userName(ruser, ruserUid),
+            ],
             TextSpan(
-              text: ' 回复 ',
-              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12.5),
+              text: ': ',
+              style: TextStyle(
+                color: scheme.onSurface,
+                fontWeight: FontWeight.bold,
+                fontSize: 12.5,
+              ),
             ),
-            userName(ruser, ruserUid),
           ],
-          TextSpan(
-            text: ': ',
-            style: TextStyle(
-              color: scheme.onSurface,
-              fontWeight: FontWeight.bold,
-              fontSize: 12.5,
+        ),
+        if (subFeed.pictures.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: _PictureGrid(
+              api: api,
+              urls: subFeed.pictures,
+              metadata: subFeed.pictureMetadata,
+              isDetail: true,
             ),
           ),
-          TextSpan(
-            text: subMsg,
-            style: TextStyle(
-              color: scheme.onSurface,
-              fontSize: 12.5,
-              height: 1.35,
-            ),
-          ),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -7309,17 +8656,45 @@ void _openUserSpace(BuildContext context, CoolapkApi api, String uid) {
   );
 }
 
+Future<void> _openDeviceDiscussion(
+  BuildContext context,
+  CoolapkApi api,
+  String deviceName,
+) async {
+  final product = await DigitalSystemHelper.resolveDeviceProduct(
+    api,
+    deviceName,
+  );
+  if (!context.mounted) return;
+  final productId = product.productId?.trim() ?? '';
+  if (productId.isEmpty) {
+    AppToast.show(context, '暂时无法找到“$deviceName”的机型讨论区');
+    return;
+  }
+  Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => ProductPage(
+        api: api,
+        id: productId,
+        title: product.title ?? deviceName,
+      ),
+    ),
+  );
+}
+
 class _PictureGrid extends StatelessWidget {
   const _PictureGrid({
     required this.api,
     required this.urls,
     required this.metadata,
     required this.isDetail,
+    this.joinedImages = false,
   });
   final CoolapkApi api;
   final List<String> urls;
   final Map<String, Map<String, dynamic>> metadata;
   final bool isDetail;
+  final bool joinedImages;
 
   @override
   Widget build(BuildContext context) {
@@ -7353,7 +8728,13 @@ class _PictureGrid extends StatelessWidget {
         })
         .toList(growable: false);
 
-    return NineGridView(api: api, pics: pics, statusId: '', isDetail: isDetail);
+    return NineGridView(
+      api: api,
+      pics: pics,
+      statusId: '',
+      isDetail: isDetail,
+      joinedImages: joinedImages,
+    );
   }
 }
 
@@ -7387,30 +8768,12 @@ class _LoadError extends StatelessWidget {
   }
 }
 
-class _InlineRetry extends StatelessWidget {
-  const _InlineRetry({required this.message, required this.onRetry});
-
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        children: [
-          Text(message, textAlign: TextAlign.center),
-          TextButton(onPressed: onRetry, child: const Text('重试')),
-        ],
-      ),
-    );
-  }
-}
-
 String _text(dynamic value) => value == null ? '' : value.toString().trim();
 
-bool _isCaptchaError(String message) =>
-    message.toLowerCase().contains('captcha') || message.contains('验证码');
+bool _isCaptchaError(String message) {
+  final lower = message.toLowerCase();
+  return lower.contains('captcha') || lower.contains('验证码');
+}
 
 List<String> _detailImages(Map<String, dynamic> detail, List<String> fallback) {
   final isDetailHdr =

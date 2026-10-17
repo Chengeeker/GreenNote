@@ -24,7 +24,9 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
   final _urlController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _directoryController = TextEditingController(text: 'Greennote');
+  final _directoryController = TextEditingController(
+    text: defaultWebDavDirectory,
+  );
   final _secureStorage = const FlutterSecureStorage();
   final _service = WebDavService();
   String? _status;
@@ -52,7 +54,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       if (!mounted) return;
       _urlController.text = config['url'] ?? '';
       _usernameController.text = config['username'] ?? '';
-      _directoryController.text = config['directory'] ?? 'Greennote';
+      _directoryController.text = config['directory'] ?? defaultWebDavDirectory;
       _passwordController.text = password ?? '';
     } catch (_) {
       _status = '无法读取本机 WebDAV 配置，请重新填写。';
@@ -235,7 +237,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       if (!mounted) return;
       _urlController.text = restoredUrl;
       _usernameController.text = restoredUsername;
-      _directoryController.text = config['directory'] ?? 'Greennote';
+      _directoryController.text = config['directory'] ?? defaultWebDavDirectory;
       if (credentialsChanged) {
         _passwordController.clear();
       }
@@ -398,7 +400,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
                       },
                       decoration: const InputDecoration(
                         labelText: '备份文件夹名称',
-                        hintText: '默认: Greennote',
+                        hintText: '默认: GreenNote',
                         prefixIcon: Icon(Icons.folder_outlined),
                         border: OutlineInputBorder(),
                         isDense: true,

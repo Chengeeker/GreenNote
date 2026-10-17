@@ -47,8 +47,10 @@ class CoolapkApi {
   final LocalAccount localAccount;
   final _localUsers = <String, Map<String, dynamic>>{};
   String _cookie;
+  String? guestSessionCookie;
   String _currentUid = '';
   String _currentUserAvatar = '';
+  String _currentUserNickname = '';
   Future<Map<String, String>>? _homeTabRoutes;
   Future<Map<String, dynamic>>? _mainInit;
 
@@ -114,6 +116,10 @@ class CoolapkApi {
       !isAnonymous && localAccount.cookieEnabled && _cookie.isNotEmpty;
   String get currentUid => isAnonymous ? '' : _currentUid;
   String get currentUserAvatar => isAnonymous ? '' : _currentUserAvatar;
+  String get currentUserNickname => isAnonymous
+      ? (localAccount.publicIdentity?['username'] as String? ?? localAccount.name)
+      : _currentUserNickname;
+  String token() => _auth.token();
 
   Map<String, String> imageHeadersFor() {
     final headers = <String, String>{
@@ -131,7 +137,7 @@ class CoolapkApi {
   Future<void> saveCookie(String cookie) async {
     final value = cookie.trim();
     if (value.isEmpty) throw const CoolapkApiException('Cookie 不能为空');
-    if (value.contains('\r') || value.contains('\n')) {
+    if (value.contains('\r') || value.contains('\r\n')) {
       throw const CoolapkApiException('Cookie 格式无效');
     }
     await _secureStorage.write(key: 'coolapk_cookie', value: value);
@@ -140,7 +146,7 @@ class CoolapkApi {
 
   Future<void> validateAndSaveCookie(String cookie) async {
     final value = cookie.trim();
-    if (value.isEmpty || value.contains('\r') || value.contains('\n')) {
+    if (value.isEmpty || value.contains('\r') || value.contains('\r\n')) {
       throw const CoolapkApiException('Cookie 格式无效');
     }
     final candidate = CoolapkApi._(
@@ -159,6 +165,7 @@ class CoolapkApi {
     await saveCookie(value);
     _currentUid = candidate.currentUid;
     _currentUserAvatar = candidate.currentUserAvatar;
+    _currentUserNickname = candidate.currentUserNickname;
     await localAccount.setActive(false, enableCookie: true);
   }
 
@@ -175,6 +182,7 @@ class CoolapkApi {
       _cookie = '';
       _currentUid = '';
       _currentUserAvatar = '';
+      _currentUserNickname = '';
       await _secureStorage.delete(key: 'coolapk_cookie');
     }
   }
@@ -194,6 +202,11 @@ class CoolapkApi {
       result['userAvatar'] ??
           result['avatar'] ??
           (user is Map ? user['userAvatar'] ?? user['avatar'] : null),
+    );
+    _currentUserNickname = _string(
+      result['username'] ??
+          result['userName'] ??
+          (user is Map ? user['username'] ?? user['userName'] : null),
     );
     return response;
   }
@@ -229,9 +242,19 @@ class CoolapkApi {
         requestQuery['type'] = 'trade';
       }
     }
+    final uri = Uri.parse(_dio.options.baseUrl).resolve(requestPath);
+    final guestRequest =
+        !hasCookie &&
+        uri.scheme == 'https' &&
+        const ['api.coolapk.com', 'api2.coolapk.com'].contains(uri.host);
+    final requestSession = guestRequest ? guestSessionCookie : null;
     try {
       final headers = <String, String>{'X-App-Token': _auth.token()};
-      if (hasCookie) headers['Cookie'] = _cookie;
+      if (hasCookie) {
+        headers['Cookie'] = _cookie;
+      } else if (requestSession != null) {
+        headers['Cookie'] = requestSession;
+      }
       final response = await _dio.request<dynamic>(
         requestPath,
         queryParameters: requestQuery,
@@ -242,6 +265,9 @@ class CoolapkApi {
           contentType: body == null ? null : Headers.formUrlEncodedContentType,
         ),
       );
+      if (guestRequest) {
+        _rememberGuestSession(response, requestSession);
+      }
       final data = response.data;
       if (data is Map) {
         final root = Map<String, dynamic>.from(data);
@@ -265,7 +291,11 @@ class CoolapkApi {
       throw const CoolapkApiException('酷安返回了无法识别的响应');
     } on DioException catch (error) {
       final body = error.response?.data;
+      if (guestRequest && error.response != null) {
+        _rememberGuestSession(error.response!, requestSession);
+      }
       if (body is Map) {
+        _checkBusinessStatus(Map<String, dynamic>.from(body));
         final message = _string(body['message']);
         if (message.isNotEmpty) throw CoolapkApiException(message);
       }
@@ -541,6 +571,30 @@ class CoolapkApi {
   Future<void> forwardFeed(String id, String message) =>
       _post('/v6/feed/forward', body: {'id': id, 'message': message});
 
+  Future<Map<String, dynamic>> submitVote(
+    String id,
+    List<String> optionIds, {
+    bool anonymous = false,
+  }) async {
+    if (!hasCookie) throw CoolapkApiException(loginRequiredMessage);
+    if (id.trim().isEmpty ||
+        optionIds.isEmpty ||
+        optionIds.any((value) => value.trim().isEmpty)) {
+      throw const CoolapkApiException('请选择有效的投票选项');
+    }
+    final result = await request(
+      '/v6/vote/createUserVote',
+      method: 'POST',
+      body: {
+        'id': id,
+        'anonymous_status': anonymous ? 1 : 0,
+        for (var i = 0; i < optionIds.length; i++)
+          'select_option[$i]': optionIds[i],
+      },
+    );
+    return result is Map<String, dynamic> ? result : const {};
+  }
+
   Future<void> deleteFeed(String id) =>
       _post('/v6/feed/deleteFeed', body: {'id': id});
 
@@ -620,11 +674,31 @@ class CoolapkApi {
     query: {'tag': tag},
   );
 
-  Future<void> followProduct(String productId, {required bool following}) =>
-      _post(
-        '/v6/product/changeFollowStatus',
-        query: {'id': productId, 'status': following ? 0 : 1},
-      );
+  Future<void> followProduct(
+    String productId, {
+    required bool following,
+    Map<String, dynamic>? product,
+  }) async {
+    if (isAnonymous) {
+      await localAccount.toggle('productFollows', productId, {
+        'id': productId,
+        for (final key in const [
+          'title',
+          'pic',
+          'logo',
+          'cover',
+          'hot_num',
+          'votenum',
+        ])
+          if (product?[key] != null) key: product![key].toString(),
+      });
+      return;
+    }
+    await _post(
+      '/v6/product/changeFollowStatus',
+      query: {'id': productId, 'status': following ? 0 : 1},
+    );
+  }
 
   Future<Map<String, dynamic>> getProductDetail(String productId) async {
     final response = await _get('/v6/product/detail', {'id': productId});
@@ -851,25 +925,39 @@ class CoolapkApi {
     String? lastItem,
     String feedType = 'feed',
     bool fromFeedAuthor = false,
-  }) => getList(
-    '/v6/feed/replyList',
-    query: {
+  }) async {
+    final query = {
       'id': feedId,
       'listType': listType,
       'page': page,
       'discussMode': 1,
-      'feedType': feedType,
+      'feedType': feedType.isEmpty ? 'feed' : feedType,
       'blockStatus': 0,
       'fromFeedAuthor': fromFeedAuthor ? 1 : 0,
       if (firstItem != null && firstItem.isNotEmpty) 'firstItem': firstItem,
       if (lastItem != null && lastItem.isNotEmpty) 'lastItem': lastItem,
-    },
-  );
+    };
+    try {
+      return await getList(
+        'https://api2.coolapk.com/v6/feed/replyList',
+        query: query,
+      );
+    } catch (_) {
+      return await getList('/v6/feed/replyList', query: query);
+    }
+  }
 
-  Future<ApiPage> getHotReplyPage(String feedId, int page) => getList(
-    '/v6/feed/hotReplyList',
-    query: {'id': feedId, 'page': page, 'discussMode': 1},
-  );
+  Future<ApiPage> getHotReplyPage(String feedId, int page) async {
+    final query = {'id': feedId, 'page': page, 'discussMode': 1};
+    try {
+      return await getList(
+        'https://api2.coolapk.com/v6/feed/hotReplyList',
+        query: query,
+      );
+    } catch (_) {
+      return await getList('/v6/feed/hotReplyList', query: query);
+    }
+  }
 
   Future<Map<String, dynamic>> getReplyDetail(String replyId) =>
       _get('/v6/feed/replyDetail', {'id': replyId});
@@ -980,6 +1068,31 @@ class CoolapkApi {
     throw const CoolapkApiException('酷安返回了无法识别的响应');
   }
 
+  String? _rememberGuestSession(Response<dynamic> response, String? previous) {
+    final uri = response.realUri;
+    if (uri.scheme != 'https' ||
+        !const ['api.coolapk.com', 'api2.coolapk.com'].contains(uri.host)) {
+      return previous;
+    }
+    for (final value in response.headers['set-cookie'] ?? const <String>[]) {
+      try {
+        final cookie = Cookie.fromSetCookieValue(value);
+        if (cookie.name != 'SESSID') continue;
+        final expired =
+            cookie.maxAge == 0 ||
+            (cookie.expires?.isBefore(DateTime.now().toUtc()) ?? false);
+        final session = expired || cookie.value.isEmpty
+            ? null
+            : 'SESSID=${cookie.value}';
+        if (guestSessionCookie == previous) guestSessionCookie = session;
+        return session;
+      } on FormatException {
+        // Ignore malformed server cookies; never import account cookies here.
+      }
+    }
+    return previous;
+  }
+
   void _checkBusinessStatus(Map<String, dynamic> root) {
     final status = _int(root['status']);
     final code = _int(root['code']);
@@ -1079,10 +1192,7 @@ class CoolapkApi {
     final seen = <String>{};
     return rows
         .where((item) {
-          final id = _string(item['id'] ?? item['uid'] ?? item['url']);
-          final type = _string(item['entityType'] ?? item['entity_type']);
-          final key = '$type:$id:${_string(item['title'])}';
-          return seen.add(key);
+          return seen.add(coolapkEntityKey(item));
         })
         .toList(growable: false);
   }
@@ -1254,6 +1364,63 @@ class CoolapkFeed {
   final bool favorited;
   final Map<String, dynamic> raw;
 
+  bool get isArticle {
+    final entityType = (raw['entityType'] ?? raw['entity_type'] ?? '')
+        .toString()
+        .toLowerCase();
+    final feedType = (raw['feedType'] ?? raw['feed_type'] ?? '')
+        .toString()
+        .toLowerCase();
+    final entityTemplate =
+        (raw['entityTemplate'] ?? raw['entity_template'] ?? '')
+            .toString()
+            .toLowerCase();
+    return entityType == 'article' ||
+        entityType == 'feedarticle' ||
+        entityType == 'feed_article' ||
+        entityType == 'dyharticle' ||
+        entityType == 'news' ||
+        feedType == 'feedarticle' ||
+        feedType == 'feed_article' ||
+        feedType == 'article' ||
+        feedType == 'dyharticle' ||
+        entityTemplate == 'feedarticle' ||
+        entityTemplate == 'feed_article' ||
+        entityTemplate == 'article' ||
+        entityTemplate == 'dyharticle';
+  }
+
+  String get coverUrl {
+    for (final key in [
+      'message_cover',
+      'cover',
+      'coverPic',
+      'cover_pic',
+      'extra_pic',
+      'header_image',
+      'pic',
+    ]) {
+      final rawVal = raw[key];
+      if (rawVal != null) {
+        final s = rawVal.toString().trim();
+        if (s.isNotEmpty) {
+          final first = s.split(',').first.trim();
+          if (first.isNotEmpty &&
+              (first.startsWith('http://') ||
+                  first.startsWith('https://') ||
+                  first.startsWith('//') ||
+                  first.startsWith('/'))) {
+            return first;
+          }
+        }
+      }
+    }
+    if (pictures.isNotEmpty) {
+      return pictures.first;
+    }
+    return '';
+  }
+
   static Map<String, Map<String, dynamic>> pictureMetadataFromJson(
     Map<String, dynamic> json,
   ) {
@@ -1314,7 +1481,15 @@ class CoolapkFeed {
         }
       }
     }
-    final single = _string(json['pic'] ?? json['cover'] ?? json['coverPic']);
+    final single = _string(
+      json['message_cover'] ??
+          json['cover'] ??
+          json['coverPic'] ??
+          json['cover_pic'] ??
+          json['pic'] ??
+          json['extra_pic'] ??
+          json['header_image'],
+    );
     if (images.isEmpty && single.isNotEmpty) {
       for (final value
           in single
@@ -1510,6 +1685,22 @@ String _newUuid() {
       .join();
   return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
       '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+}
+
+String coolapkEntityKey(Map<String, dynamic> value) {
+  String identity(Map row) {
+    for (final key in ['id', 'uid', 'entityId', 'entity_id', 'url', 'pic']) {
+      final candidate = _string(row[key]);
+      if (candidate.isNotEmpty && candidate != '0') return candidate;
+    }
+    return _string(row['title']);
+  }
+
+  var id = identity(value);
+  if (id.isEmpty && value['entities'] is List) {
+    id = (value['entities'] as List).whereType<Map>().map(identity).join('|');
+  }
+  return '${_string(value['entityType'] ?? value['entity_type'])}:${_string(value['entityTemplate'] ?? value['entity_template'])}:$id:${_string(value['title'])}';
 }
 
 String _string(dynamic value) => value == null ? '' : value.toString().trim();

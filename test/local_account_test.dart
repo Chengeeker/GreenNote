@@ -50,10 +50,22 @@ void main() {
       expect(loaded.active, false);
       expect(loaded.follows.keys, ['12']);
       expect(loaded.favorites['34']['message'], '收藏内容');
+      expect(loaded.productFollows, isEmpty);
       await loaded.toggle('follows', '12', {});
       expect(loaded.follows, isEmpty);
     },
   );
+
+  test('old local backups without product follows remain readable', () {
+    final restored = LocalAccount.validate({
+      'version': 1,
+      'name': '旧账户',
+      'avatar': '',
+      'follows': <String, dynamic>{},
+      'favorites': <String, dynamic>{},
+    });
+    expect(restored['productFollows'], isEmpty);
+  });
 
   test(
     'public identity survives backup restore and validates its UID',
@@ -109,6 +121,16 @@ void main() {
     expect(local.publicIdentity, isNull);
     expect(local.follows.keys, ['12']);
   });
+
+  test(
+    'local product follows are exposed from the persisted account snapshot',
+    () async {
+      final local = await account();
+      await local.toggle('productFollows', '56', {'id': '56', 'title': '测试机型'});
+      expect(local.productFollows['56'], {'id': '56', 'title': '测试机型'});
+      expect((await account()).productFollows.keys, contains('56'));
+    },
+  );
 
   test(
     'restore validates before changing data and preserves rollback snapshot',
@@ -218,6 +240,29 @@ void main() {
     expect(api.hasAccount, true);
     expect(api.currentUid, isEmpty);
     expect(api.imageHeadersFor().containsKey('Cookie'), false);
+    await api.localAccount.setPublicIdentity(
+      uid: '24680',
+      username: '公开主页',
+      userAvatar: '',
+    );
+    await api.followProduct(
+      '34001',
+      following: false,
+      product: {
+        'id': '34001',
+        'title': '本地机型',
+        'logo': 'https://example.com/product.png',
+        'hot_num': 9000,
+      },
+    );
+    expect(api.localAccount.productFollows['34001'], {
+      'id': '34001',
+      'title': '本地机型',
+      'logo': 'https://example.com/product.png',
+      'hot_num': '9000',
+    });
+    await api.followProduct('34001', following: true);
+    expect(api.localAccount.productFollows, isEmpty);
     await api.followUser('12', following: false);
     await api.favoriteFeed(
       '34',

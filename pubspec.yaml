@@ -1,7 +1,7 @@
 name: greennote
 description: "GreenNote is an independent Coolapk client."
 publish_to: 'none'
-version: 1.2.0+75
+version: 1.2.2+106
 
 environment:
   sdk: ^3.13.1
@@ -21,9 +21,11 @@ dependencies:
   html: ^0.15.7
   shared_preferences: ^2.3.2
   flutter_secure_storage: 11.2.0
+  path_provider: ^2.1.2
   url_launcher: 6.3.3
   video_player: ^2.9.2
   liquid_glass_widgets: 1.13.0
+  webview_flutter: ^4.14.1
 
 dev_dependencies:
   flutter_test:

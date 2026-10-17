@@ -109,58 +109,63 @@ void main() {
   });
 
   group('SearchResultsPage & Official Alignment Tests', () {
-    testWidgets('SearchResultsPage renders official AppBar search capsule, 7 tabs, and auto-preloads Page 2 feeds', (tester) async {
-      final mockApi = _MockCoolapkApi();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SearchResultsPage(
-            api: mockApi,
-            query: 'hdr照片',
-            initialType: 'all',
+    testWidgets(
+      'SearchResultsPage renders official AppBar search capsule, 7 tabs, and auto-preloads Page 2 feeds',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: SearchResultsPage(
+              api: mockApi,
+              query: 'hdr照片',
+              initialType: 'all',
+            ),
           ),
-        ),
-      );
-      await tester.pump();
-      // Pump frame callback for auto-preload of page 2
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pump(const Duration(milliseconds: 300));
+        );
+        await tester.pump();
+        // Pump frame callback for auto-preload of page 2
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(milliseconds: 300));
 
-      // 1. Verify Search TextField has query and search icon
-      expect(find.text('hdr照片'), findsWidgets);
-      expect(find.byIcon(Icons.search_rounded), findsOneWidget);
+        // 1. Verify Search TextField has query and search icon
+        expect(find.text('hdr照片'), findsWidgets);
+        expect(find.byIcon(Icons.search_rounded), findsOneWidget);
 
-      // 2. Verify all 7 official tabs exist in exact order
-      expect(find.text('综合'), findsWidgets);
-      expect(find.text('数码'), findsOneWidget);
-      expect(find.text('动态'), findsWidgets);
-      expect(find.text('话题'), findsOneWidget);
-      expect(find.text('用户'), findsWidgets);
-      expect(find.text('二手'), findsOneWidget);
-      expect(find.text('应用'), findsOneWidget);
+        // 2. Verify all 7 official tabs exist in exact order
+        expect(find.text('综合'), findsWidgets);
+        expect(find.text('数码'), findsOneWidget);
+        expect(find.text('动态'), findsWidgets);
+        expect(find.text('话题'), findsOneWidget);
+        expect(find.text('用户'), findsWidgets);
+        expect(find.text('二手'), findsOneWidget);
+        expect(find.text('应用'), findsOneWidget);
 
-      // 3. Verify User Card in '综合' tab has '更多相关用户'
-      expect(find.text('更多相关用户'), findsOneWidget);
+        // 3. Verify User Card in '综合' tab has '更多相关用户'
+        expect(find.text('更多相关用户'), findsOneWidget);
 
-      // 4. Verify sort capsule in '综合' tab has 5 options
-      expect(find.text('实时'), findsOneWidget);
-      expect(find.text('热度'), findsOneWidget);
-      expect(find.text('评论'), findsOneWidget);
-      expect(find.text('精确'), findsOneWidget);
+        // 4. Verify sort capsule in '综合' tab has 5 options
+        expect(find.text('实时'), findsOneWidget);
+        expect(find.text('热度'), findsOneWidget);
+        expect(find.text('评论'), findsOneWidget);
+        expect(find.text('精确'), findsOneWidget);
 
-      // 5. Verify Page 2 feed item was AUTOMATICALLY loaded without any scroll event!
-      expect(find.text('这是一条关于HDR照片的精选动态'), findsOneWidget);
-      expect(find.text('小米14 Ultra'), findsWidgets);
-      expect(find.byIcon(Icons.smartphone_rounded), findsWidgets);
-      expect(find.byIcon(Icons.thumb_up_outlined), findsWidgets);
-      expect(find.byIcon(Icons.chat_bubble_outline_rounded), findsWidgets);
-      expect(find.byIcon(Icons.share_outlined), findsWidgets);
+        // 5. Verify Page 2 feed item was AUTOMATICALLY loaded without any scroll event!
+        expect(find.text('这是一条关于HDR照片的精选动态'), findsOneWidget);
+        expect(find.text('小米14 Ultra'), findsWidgets);
+        expect(find.byIcon(Icons.smartphone_rounded), findsWidgets);
+        expect(find.byIcon(Icons.thumb_up_outlined), findsWidgets);
+        expect(find.byIcon(Icons.chat_bubble_outline_rounded), findsWidgets);
+        expect(find.byIcon(Icons.share_outlined), findsWidgets);
 
-      // Verify page 1 and page 2 queries were both sent
-      final allQueries = mockApi.recordedQueries.where((q) => q['type'] == 'all').toList();
-      expect(allQueries.length, greaterThanOrEqualTo(2));
-      expect(allQueries[0]['page'], 1);
-      expect(allQueries[1]['page'], 2);
-    });
+        // Verify page 1 and page 2 queries were both sent
+        final allQueries = mockApi.recordedQueries
+            .where((q) => q['type'] == 'all')
+            .toList();
+        expect(allQueries.length, greaterThanOrEqualTo(2));
+        expect(allQueries[0]['page'], 1);
+        expect(allQueries[1]['page'], 2);
+      },
+    );
 
     testWidgets('SearchSortCapsule switches selection on tap', (tester) async {
       String selected = 'default';
@@ -187,39 +192,42 @@ void main() {
       expect(selected, 'dateline');
     });
 
-    testWidgets('SearchFeedHeaderBar displays sort capsule and filter dropdown with feedArticle and feed', (tester) async {
-      String sort = 'default';
-      String filter = 'all';
+    testWidgets(
+      'SearchFeedHeaderBar displays sort capsule and filter dropdown with feedArticle and feed',
+      (tester) async {
+        String sort = 'default';
+        String filter = 'all';
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: StatefulBuilder(
-              builder: (context, setState) => SearchFeedHeaderBar(
-                currentSort: sort,
-                onSortChanged: (s) => setState(() => sort = s),
-                currentFilter: filter,
-                onFilterChanged: (f) => setState(() => filter = f),
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: StatefulBuilder(
+                builder: (context, setState) => SearchFeedHeaderBar(
+                  currentSort: sort,
+                  onSortChanged: (s) => setState(() => sort = s),
+                  currentFilter: filter,
+                  onFilterChanged: (f) => setState(() => filter = f),
+                ),
               ),
             ),
           ),
-        ),
-      );
+        );
 
-      expect(find.byType(SearchSortCapsule), findsOneWidget);
-      expect(find.byType(SearchFilterDropdown), findsOneWidget);
-      expect(find.text('全部'), findsOneWidget);
+        expect(find.byType(SearchSortCapsule), findsOneWidget);
+        expect(find.byType(SearchFilterDropdown), findsOneWidget);
+        expect(find.text('全部'), findsOneWidget);
 
-      await tester.tap(find.text('全部'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('全部'));
+        await tester.pumpAndSettle();
 
-      expect(find.text('图文'), findsOneWidget);
-      expect(find.text('纯文字'), findsOneWidget);
+        expect(find.text('图文'), findsOneWidget);
+        expect(find.text('纯文字'), findsOneWidget);
 
-      await tester.tap(find.text('图文'));
-      await tester.pumpAndSettle();
-      expect(filter, 'feedArticle');
-    });
+        await tester.tap(find.text('图文'));
+        await tester.pumpAndSettle();
+        expect(filter, 'feedArticle');
+      },
+    );
 
     testWidgets('Tapping 更多相关用户 animates to 用户 tab', (tester) async {
       final mockApi = _MockCoolapkApi();
@@ -249,33 +257,66 @@ void main() {
       expect(tabBar.controller?.index, 4);
     });
 
-    testWidgets('Switching sort in 综合 tab sends both sort and sortType parameters', (tester) async {
-      final mockApi = _MockCoolapkApi();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SearchResultsPage(
-            api: mockApi,
-            query: 'hdr照片',
-            initialType: 'all',
+    testWidgets(
+      'Switching sort in 综合 tab switches to feed type with sort and sortType parameters to avoid empty results',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: SearchResultsPage(
+              api: mockApi,
+              query: 'hdr照片',
+              initialType: 'all',
+            ),
           ),
-        ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pump(const Duration(milliseconds: 300));
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(milliseconds: 300));
 
-      // Tap '热度' in 综合 tab
-      await tester.tap(find.text('热度'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pump(const Duration(milliseconds: 300));
+        // Tap '实时' in 综合 tab
+        await tester.tap(find.text('实时'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(milliseconds: 300));
 
-      final hotQueries = mockApi.recordedQueries.where((q) => q['type'] == 'all' && q['sort'] == 'hot').toList();
-      expect(hotQueries, isNotEmpty);
-      expect(hotQueries.first['sortType'], 'hot');
-    });
+        final datelineQueries = mockApi.recordedQueries
+            .where((q) => q['type'] == 'feed' && q['sort'] == 'dateline')
+            .toList();
+        expect(datelineQueries, isNotEmpty);
+        expect(datelineQueries.first['sortType'], 'dateline');
 
-    testWidgets('Feed tab sends sort, sortType, and feedType parameters', (tester) async {
+        // Content should show real feed, not '暂无内容'
+        expect(find.text('动态分栏测试动态'), findsOneWidget);
+
+        // Tap '热度' in 综合 tab
+        await tester.tap(find.text('热度'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(milliseconds: 300));
+
+        final hotQueries = mockApi.recordedQueries
+            .where((q) => q['type'] == 'feed' && q['sort'] == 'hot')
+            .toList();
+        expect(hotQueries, isNotEmpty);
+        expect(hotQueries.first['sortType'], 'hot');
+
+        // Tap '综合' to switch back
+        await tester.tap(find.text('综合').last);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(milliseconds: 300));
+
+        final defaultQueries = mockApi.recordedQueries
+            .where((q) => q['type'] == 'all' && q['sort'] == 'default')
+            .toList();
+        expect(defaultQueries, isNotEmpty);
+      },
+    );
+
+    testWidgets('Feed tab sends sort, sortType, and feedType parameters', (
+      tester,
+    ) async {
       final mockApi = _MockCoolapkApi();
       await tester.pumpWidget(
         MaterialApp(
@@ -290,7 +331,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pump(const Duration(milliseconds: 300));
 
-      final feedQueries = mockApi.recordedQueries.where((q) => q['type'] == 'feed').toList();
+      final feedQueries = mockApi.recordedQueries
+          .where((q) => q['type'] == 'feed')
+          .toList();
       expect(feedQueries, isNotEmpty);
       expect(feedQueries.first['sort'], 'default');
       expect(feedQueries.first['sortType'], 'default');
@@ -301,7 +344,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pump(const Duration(milliseconds: 300));
 
-      final datelineQueries = mockApi.recordedQueries.where((q) => q['type'] == 'feed' && q['sort'] == 'dateline').toList();
+      final datelineQueries = mockApi.recordedQueries
+          .where((q) => q['type'] == 'feed' && q['sort'] == 'dateline')
+          .toList();
       expect(datelineQueries, isNotEmpty);
       expect(datelineQueries.first['sortType'], 'dateline');
     });

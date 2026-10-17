@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
+import '../../core/utils/spring_page_route.dart';
 import '../../core/widgets/cached_network_image.dart';
 import '../../core/widgets/review_refresh_header.dart';
 import '../feed/feed_pages.dart';
@@ -475,7 +476,7 @@ class _AppDetailPageState extends State<AppDetailPage> {
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _AppDownloadButton(api: widget.api, data: data),
+              child: AppDownloadButton(api: widget.api, data: data),
             ),
             if (metrics.isNotEmpty) ...[
               const SizedBox(height: 14),
@@ -782,51 +783,53 @@ class _AppDetailPageState extends State<AppDetailPage> {
         _sectionTitle('应用截图', onAccent),
         SizedBox(
           height: 192,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: pics.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final pic = pics[index];
-              return GestureDetector(
-                onTap: () => Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => ImageGalleryPage(
-                      api: widget.api,
-                      pics: pics,
-                      initialIndex: index,
-                      statusId: _appId,
-                      isDetail: true,
-                      heroScope: _galleryScope,
+          child: protectHorizontalDragFromVerticalRefresh(
+            ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: pics.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final pic = pics[index];
+                return GestureDetector(
+                  onTap: () => Navigator.of(context).push<void>(
+                    PhysicsSpringGalleryRoute<void>(
+                      child: ImageGalleryPage(
+                        api: widget.api,
+                        pics: pics,
+                        initialIndex: index,
+                        statusId: _appId,
+                        isDetail: true,
+                        heroScope: _galleryScope,
+                      ),
                     ),
                   ),
-                ),
-                child: ImageGalleryHeroThumbnail(
-                  scope: _galleryScope,
-                  index: index,
-                  pic: pic,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: CachedNetworkImage(
-                      pic.previewUrl,
-                      headers: coolapkImageHeaders(pic.url, api: widget.api),
-                      width: 112,
-                      height: 192,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => Container(
+                  child: ImageGalleryHeroThumbnail(
+                    scope: _galleryScope,
+                    index: index,
+                    pic: pic,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: CachedNetworkImage(
+                        pic.previewUrl,
+                        headers: coolapkImageHeaders(pic.url, api: widget.api),
                         width: 112,
-                        color: cardColor,
-                        child: Icon(
-                          Icons.broken_image_outlined,
-                          color: onAccent,
+                        height: 192,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          width: 112,
+                          color: cardColor,
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            color: onAccent,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ],
@@ -1131,6 +1134,7 @@ class _AppDetailPageState extends State<AppDetailPage> {
         ),
         body: EasyRefresh(
           header: reviewDefaultRefreshHeader,
+          triggerAxis: Axis.vertical,
           onRefresh: _refresh,
           child: NotificationListener<ScrollNotification>(
             onNotification: (notification) {
@@ -1324,10 +1328,16 @@ class _AppDetailSectionState extends State<_AppDetailSection> {
   );
 }
 
-class _AppDownloadButton extends StatelessWidget {
-  const _AppDownloadButton({required this.api, required this.data});
+class AppDownloadButton extends StatelessWidget {
+  const AppDownloadButton({
+    required this.api,
+    required this.data,
+    this.compact = false,
+    super.key,
+  });
   final CoolapkApi api;
   final Map<String, dynamic> data;
+  final bool compact;
 
   String _field(Iterable<String> keys) {
     for (final key in keys) {
@@ -1350,50 +1360,63 @@ class _AppDownloadButton extends StatelessWidget {
         'url',
       ]),
     );
-    return FilledButton.icon(
-      onPressed: () async {
-        try {
-          var resolved = uri;
-          if (resolved == null ||
-              resolved.scheme != 'https' ||
-              resolved.host.isEmpty ||
-              resolved.userInfo.isNotEmpty) {
-            final packageName = _field([
-              'apkname',
-              'packageName',
-              'package_name',
-              'apk_name',
-              'pn',
-            ]);
-            final appId = _field(['id', 'apkId', 'aid']);
-            final versionCode = _field(['apkversioncode', 'versionCode', 'vc']);
-            if (packageName.isEmpty || appId.isEmpty || versionCode.isEmpty) {
-              throw const CoolapkApiException('应用缺少下载所需的版本信息');
-            }
-            resolved = await api.resolveApkDownloadUrl(
-              packageName: packageName,
-              appId: appId,
-              versionCode: versionCode,
-            );
+    Future<void> download() async {
+      try {
+        var resolved = uri;
+        if (resolved == null ||
+            resolved.scheme != 'https' ||
+            resolved.host.isEmpty ||
+            resolved.userInfo.isNotEmpty) {
+          final packageName = _field([
+            'apkname',
+            'packageName',
+            'package_name',
+            'apk_name',
+            'pn',
+          ]);
+          final appId = _field(['id', 'apkId', 'aid']);
+          final versionCode = _field(['apkversioncode', 'versionCode', 'vc']);
+          if (packageName.isEmpty || appId.isEmpty || versionCode.isEmpty) {
+            throw const CoolapkApiException('应用缺少下载所需的版本信息');
           }
-          if (resolved.scheme != 'https' ||
-              resolved.host.isEmpty ||
-              resolved.userInfo.isNotEmpty) {
-            throw const CoolapkApiException('酷安没有返回有效的下载地址');
-          }
-          if (!await launchUrl(
-            resolved,
-            mode: LaunchMode.externalApplication,
-          )) {
-            throw const CoolapkApiException('无法打开下载地址');
-          }
-        } catch (error) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context)
-                .showSnackBar(SnackBar(content: Text(error.toString())));
-          }
+          resolved = await api.resolveApkDownloadUrl(
+            packageName: packageName,
+            appId: appId,
+            versionCode: versionCode,
+          );
         }
-      },
+        if (resolved.scheme != 'https' ||
+            resolved.host.isEmpty ||
+            resolved.userInfo.isNotEmpty) {
+          throw const CoolapkApiException('酷安没有返回有效的下载地址');
+        }
+        if (!await launchUrl(resolved, mode: LaunchMode.externalApplication)) {
+          throw const CoolapkApiException('无法打开下载地址');
+        }
+      } catch (error) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(error.toString())));
+        }
+      }
+    }
+
+    if (compact) {
+      return FilledButton(
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF009688),
+          foregroundColor: Colors.white,
+          minimumSize: const Size(56, 30),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          tapTargetSize: MaterialTapTargetSize.padded,
+          textStyle: const TextStyle(fontSize: 13),
+        ),
+        onPressed: download,
+        child: const Text('下载'),
+      );
+    }
+    return FilledButton.icon(
+      onPressed: download,
       icon: const Icon(Icons.download_rounded),
       label: const Text('打开下载地址'),
     );

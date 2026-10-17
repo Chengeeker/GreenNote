@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:greennote/core/accounts/local_account.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/features/shared/api_list_page.dart';
+import 'package:greennote/features/shared/app_management_page.dart';
 import 'package:greennote/features/shell/main_pages.dart';
 
 class AccountLayoutApi implements CoolapkApi {
@@ -11,6 +13,9 @@ class AccountLayoutApi implements CoolapkApi {
   @override
   final LocalAccount localAccount;
   final reads = <String>[];
+  int loginChecks = 0;
+  int spaceRequests = 0;
+  Map<String, dynamic>? spaceData;
   @override
   bool get isAnonymous => localAccount.active;
   @override
@@ -24,23 +29,40 @@ class AccountLayoutApi implements CoolapkApi {
   @override
   Map<String, String> imageHeadersFor() => {};
   @override
-  Future<Map<String, dynamic>> checkLogin() async => {
-    'data': {'uid': '123'},
-  };
+  Future<Map<String, dynamic>> checkLogin() async {
+    loginChecks++;
+    return {
+      'data': {'uid': '123'},
+    };
+  }
+
   @override
-  Future<Map<String, dynamic>> getUserSpace(String uid) async => {
+  Future<Map<String, dynamic>> getUserSpace(String uid) async {
+    spaceRequests++;
+    return {
+      'data':
+          spaceData ??
+          {
+            'userInfo': {
+              'username': '布局预览用户',
+              'level': '3',
+              'experience': '100',
+              'next_level_experience': '1000',
+              'feed_num': '12',
+              'followNum': '3',
+              'fansNum': '4',
+            },
+            'feed_num': '',
+          },
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> getUserProfile(String uid) async => {
     'data': {
-      'username': '布局预览用户',
-      'level': '3',
-      'experience': '100',
-      'next_level_experience': '1000',
-      'feedNum': '12',
-      'followNum': '3',
-      'fansNum': '4',
+      'user_info': {'feed_num': ''},
     },
   };
-  @override
-  Future<Map<String, dynamic>> getUserProfile(String uid) async => {'data': {}};
   @override
   Future<ApiPage> getList(
     String path, {
@@ -130,6 +152,7 @@ Future<AccountLayoutApi> mountAccount(
   WidgetTester tester, {
   bool anonymous = false,
   double textScale = 1,
+  Map<String, dynamic>? spaceData,
 }) async {
   tester.view.physicalSize = const Size(360, 800);
   tester.view.devicePixelRatio = 1;
@@ -147,7 +170,7 @@ Future<AccountLayoutApi> mountAccount(
     }
     return account;
   }))!;
-  final api = AccountLayoutApi(account);
+  final api = AccountLayoutApi(account)..spaceData = spaceData;
   await tester.pumpWidget(
     MaterialApp(
       theme: ThemeData(
@@ -174,6 +197,69 @@ Future<AccountLayoutApi> mountAccount(
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('应用管理入口打开本机应用列表而不要求开发者主页', (tester) async {
+    const channel = MethodChannel('com.green.note/app_manager');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'getInstalledApps') return const [];
+          return true;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    await mountAccount(tester, anonymous: true);
+    await tester.tap(find.text('应用管理'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AppManagementPage), findsOneWidget);
+    expect(find.text('开发者应用'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final count in [330, 0]) {
+    testWidgets('bound UID reads public feed field including $count', (
+      tester,
+    ) async {
+      await mountAccount(
+        tester,
+        anonymous: true,
+        spaceData: {
+          'username': '公开用户',
+          'feed': count,
+          'follow': 33,
+          'fans': 249,
+        },
+      );
+      expect(find.text('$count'), findsOneWidget);
+      expect(find.text('33'), findsOneWidget);
+      expect(find.text('249'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets(
+    'pulling down on account page refreshes cloud profile and cards',
+    (tester) async {
+      final api = await mountAccount(tester);
+      final initialReads = api.reads.length;
+      final initialLoginChecks = api.loginChecks;
+      final initialSpaceRequests = api.spaceRequests;
+
+      await tester.drag(
+        find.byKey(const ValueKey('account-refreshable-list')),
+        const Offset(0, 420),
+      );
+      await tester.pumpAndSettle();
+
+      expect(api.loginChecks, initialLoginChecks + 1);
+      expect(api.spaceRequests, greaterThan(initialSpaceRequests));
+      expect(api.reads.length, greaterThan(initialReads));
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'account cards match the reference grouping and four-column previews',
@@ -221,6 +307,7 @@ void main() {
       expect(api.reads, isNot(contains('/v6/member/recentHistoryList')));
       expect(api.reads, isNot(contains('/v6/user/hitHistoryList')));
       expect(api.reads, isNot(contains('/v6/collection/myCollectionList')));
+      expect(find.text('12'), findsOneWidget);
       await tester.scrollUntilVisible(
         find.text('我的收藏单'),
         200,

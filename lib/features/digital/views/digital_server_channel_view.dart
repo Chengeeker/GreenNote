@@ -23,6 +23,7 @@ class DigitalServerChannelView extends StatefulWidget {
     this.system = false,
     this.bottomPadding = 100,
     this.groupProductRows = false,
+    this.initialSortTitle,
     super.key,
   });
 
@@ -31,6 +32,7 @@ class DigitalServerChannelView extends StatefulWidget {
   final bool system;
   final double bottomPadding;
   final bool groupProductRows;
+  final String? initialSortTitle;
 
   @override
   State<DigitalServerChannelView> createState() =>
@@ -47,6 +49,7 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
   String _first = '';
   String _last = '';
   String _selectedSortTitle = '最近回复';
+  late String _activeUrl;
   List<Map<String, dynamic>>? _cachedRecentFeeds;
   List<Map<String, dynamic>>? _cachedHotFeeds;
 
@@ -56,6 +59,8 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
   @override
   void initState() {
     super.initState();
+    _activeUrl = widget.url;
+    _selectedSortTitle = widget.initialSortTitle ?? '最近回复';
     _load(refresh: true);
   }
 
@@ -67,46 +72,83 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
     });
     final page = refresh ? 1 : _page + 1;
     try {
-      final result = await widget.api.getList(
+      var result = await widget.api.getList(
         '/v6/page/dataList',
         query: {
-          'url': widget.url,
+          'url': _activeUrl,
           'page': page,
           if (!refresh && _first.isNotEmpty) 'firstItem': _first,
           if (!refresh && _last.isNotEmpty) 'lastItem': _last,
         },
       );
       if (!mounted) return;
-      final rawItems = result.items;
+      var rawItems = result.items;
+      var retainedSortCard = _items
+          .where(
+            (item) =>
+                (item['entityTemplate'] ?? '').toString().toLowerCase() ==
+                'sortselectcard',
+          )
+          .firstOrNull;
       String? markedSortTitle;
+      String? initialSortUrl;
       if (refresh) {
         for (final item in rawItems) {
           if ((item['entityTemplate'] ?? '').toString().toLowerCase() !=
               'sortselectcard') {
             continue;
           }
+          retainedSortCard = item;
           final options = item['entities'];
           if (options is List) {
             for (final option in options.whereType<Map>()) {
+              if (_page == 0 &&
+                  widget.initialSortTitle != null &&
+                  option['title'] == widget.initialSortTitle) {
+                initialSortUrl = option['url']?.toString();
+              }
               final selected =
                   option['selected'] ??
                   option['isSelected'] ??
                   option['is_selected'];
               if (selected == true || selected == 1 || selected == '1') {
                 markedSortTitle = (option['title'] ?? '').toString();
-                break;
               }
             }
           }
           break;
         }
       }
+      if (initialSortUrl != null &&
+          initialSortUrl.isNotEmpty &&
+          initialSortUrl != _activeUrl) {
+        _activeUrl = initialSortUrl;
+        result = await widget.api.getList(
+          '/v6/page/dataList',
+          query: {'url': _activeUrl, 'page': 1},
+        );
+        if (!mounted) return;
+        rawItems = result.items;
+      }
+      // Sort leaf endpoints may omit the controls returned by the series page.
+      if (widget.initialSortTitle != null &&
+          refresh &&
+          retainedSortCard != null &&
+          !rawItems.any(
+            (item) =>
+                (item['entityTemplate'] ?? '').toString().toLowerCase() ==
+                'sortselectcard',
+          )) {
+        rawItems = [retainedSortCard, ...rawItems];
+      }
       setState(() {
         if (refresh) {
           _items.clear();
           _cachedRecentFeeds = null;
           _cachedHotFeeds = null;
-          _selectedSortTitle = markedSortTitle ?? '最近回复';
+          if (widget.initialSortTitle == null) {
+            _selectedSortTitle = markedSortTitle ?? '最近回复';
+          }
         }
         final existingKeys = _items.map(_key).toSet();
         final newItems = <Map<String, dynamic>>[];
@@ -154,6 +196,7 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
   Widget build(BuildContext context) {
     super.build(context);
     return EasyRefresh(
+      triggerAxis: Axis.vertical,
       header: reviewDefaultRefreshHeader,
       onRefresh: () => _load(refresh: true),
       onLoad: _more ? () => _load(refresh: false) : null,
@@ -965,11 +1008,24 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
   }
 
   Future<void> _onSortTabChanged(String title, String url) async {
-    if (_selectedSortTitle == title) return;
+    if (_selectedSortTitle == title || _loading) return;
+    final previousTitle = _selectedSortTitle;
+    final previousUrl = _activeUrl;
     HapticFeedbackUtil.selection();
     setState(() {
       _selectedSortTitle = title;
     });
+    if (widget.initialSortTitle != null) {
+      _activeUrl = url;
+      await _load(refresh: true);
+      if (mounted && _error != null) {
+        setState(() {
+          _selectedSortTitle = previousTitle;
+          _activeUrl = previousUrl;
+        });
+      }
+      return;
+    }
 
     final dynamicIndex = _items.indexWhere(
       (item) =>
@@ -1948,7 +2004,10 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
                 alignment: Alignment.center,
                 children: [
                   if (isBrandProductList)
-                    productImage
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: productImage,
+                    )
                   else
                     Container(
                       width: 60,

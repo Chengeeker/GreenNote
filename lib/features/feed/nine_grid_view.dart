@@ -12,6 +12,7 @@ class NineGridView extends StatefulWidget {
   final List<GalleryImage> pics;
   final String statusId;
   final bool isDetail;
+  final bool joinedImages;
   final String? authorName;
   final String? authorId;
   final String? authorAvatar;
@@ -23,6 +24,7 @@ class NineGridView extends StatefulWidget {
     required this.pics,
     required this.statusId,
     this.isDetail = false,
+    this.joinedImages = false,
     this.authorName,
     this.authorId,
     this.authorAvatar,
@@ -49,7 +51,9 @@ class _NineGridViewState extends State<NineGridView> {
   }
 
   void _onHdrUpdated() {
-    if (mounted) setState(() {});
+    if (mounted && pics.any((p) => HdrImageDetector.isKnownHdr(p.url))) {
+      setState(() {});
+    }
   }
 
   List<GalleryImage> get pics => widget.pics;
@@ -74,69 +78,100 @@ class _NineGridViewState extends State<NineGridView> {
   Widget _buildGrid(BuildContext context, {required int crossAxisCount}) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final spacing = 7.0;
-    final radius = BorderRadius.circular(12);
+    final spacing = widget.joinedImages ? 3.0 : 7.0;
+    final radius = BorderRadius.circular(widget.joinedImages ? 0 : 12);
 
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      padding: EdgeInsets.zero,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        mainAxisSpacing: spacing,
-        crossAxisSpacing: spacing,
-        childAspectRatio: 1.0,
-      ),
-      itemCount: _visibleCount,
-      itemBuilder: (context, index) {
-        final pic = pics[index];
-        final thumbnail = Stack(
-          fit: StackFit.expand,
-          children: [
-            ClipRRect(
-              borderRadius: radius,
-              child: _buildImageContent(pic, colorScheme, cacheWidth: 450),
-            ),
-            if (pic.badgeText.isNotEmpty)
-              Positioned(
-                bottom: 4,
-                right: 4,
-                child: _buildBadge(pic.badgeText),
-              ),
-            if (!isDetail && pics.length > 9 && index == 8)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: Container(
-                    key: ValueKey('media-overflow-$statusId'),
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      borderRadius: radius,
-                    ),
-                    child: Text(
-                      '+${pics.length - 9}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
-                      ),
+    Widget buildTile(int index) {
+      final pic = pics[index];
+      final thumbnail = Stack(
+        fit: StackFit.expand,
+        children: [
+          ClipRRect(
+            borderRadius: radius,
+            child: _buildImageContent(pic, colorScheme, cacheWidth: 450),
+          ),
+          if (pic.badgeText.isNotEmpty)
+            Positioned(bottom: 4, right: 4, child: _buildBadge(pic.badgeText)),
+          if (!isDetail && pics.length > 9 && index == 8)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  key: ValueKey('media-overflow-$statusId'),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    borderRadius: radius,
+                  ),
+                  child: Text(
+                    '+${pics.length - 9}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
               ),
+            ),
+        ],
+      );
+      return GestureDetector(
+        onTap: () => _openMedia(context, index),
+        child: ImageGalleryHeroThumbnail(
+          scope: _heroScope,
+          index: index,
+          pic: pic,
+          child: thumbnail,
+        ),
+      );
+    }
+
+    final Widget grid;
+    if (widget.joinedImages && _visibleCount == 5) {
+      grid = LayoutBuilder(
+        builder: (context, constraints) => Column(
+          key: ValueKey('joined-five-media-$statusId'),
+          children: [
+            for (final indices in [
+              const [0, 1],
+              const [2, 3, 4],
+            ]) ...[
+              if (indices.first > 0) SizedBox(height: spacing),
+              SizedBox(
+                height:
+                    (constraints.maxWidth - spacing * (indices.length - 1)) /
+                    indices.length,
+                child: Row(
+                  children: [
+                    for (final index in indices) ...[
+                      if (index != indices.first) SizedBox(width: spacing),
+                      Expanded(child: buildTile(index)),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ],
-        );
-        return GestureDetector(
-          onTap: () => _openMedia(context, index),
-          child: ImageGalleryHeroThumbnail(
-            scope: _heroScope,
-            index: index,
-            pic: pic,
-            child: thumbnail,
-          ),
-        );
-      },
-    );
+        ),
+      );
+    } else {
+      grid = GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: crossAxisCount,
+          mainAxisSpacing: spacing,
+          crossAxisSpacing: spacing,
+          childAspectRatio: 1.0,
+        ),
+        itemCount: _visibleCount,
+        itemBuilder: (context, index) => buildTile(index),
+      );
+    }
+    return widget.joinedImages
+        ? ClipRRect(borderRadius: BorderRadius.circular(8), child: grid)
+        : grid;
   }
 
   Widget _buildImageContent(

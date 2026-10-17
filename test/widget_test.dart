@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,12 +15,15 @@ import 'package:greennote/features/feed/image_gallery_page.dart';
 import 'package:greennote/features/shared/api_list_page.dart';
 import 'package:greennote/features/settings/personalization_page.dart';
 import 'package:greennote/core/design_system/components/review_choice_tile.dart';
+import 'package:greennote/main.dart' show MainScaffold;
 
 class FakeApi implements CoolapkApi {
   @override
   bool get isAnonymous => false;
 
   final paths = <String>[];
+  final queries = <Map<String, dynamic>>[];
+  List<Map<String, dynamic>> productSearchResults = const [];
   @override
   String get currentUid => '1';
   @override
@@ -44,8 +49,9 @@ class FakeApi implements CoolapkApi {
     Map<String, dynamic> query = const {},
   }) async {
     paths.add(path);
+    queries.add(Map<String, dynamic>.from(query));
     return ApiPage(
-      items: const [],
+      items: path == '/v6/search' ? productSearchResults : const [],
       page: 1,
       hasMore: false,
       firstItem: '',
@@ -54,11 +60,35 @@ class FakeApi implements CoolapkApi {
   }
 
   @override
+  Future<Map<String, dynamic>> getProductDetail(String productId) async => {
+    'id': productId,
+    'title': '已解析机型',
+  };
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets(
+    'startup waits on a clean background without a title or spinner',
+    (tester) async {
+      final apiCompleter = Completer<CoolapkApi>();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coolapkApiProvider.overrideWith((ref) => apiCompleter.future),
+          ],
+          child: const MaterialApp(home: MainScaffold()),
+        ),
+      );
+
+      expect(find.text('GreenNote'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
   test('feed parsing retains all server pictures', () {
     final urls = List.generate(
       12,
@@ -136,6 +166,24 @@ void main() {
     },
   );
   test(
+    'WebDAV folder defaults to GreenNote and keeps a saved custom path',
+    () async {
+      final settings = AppSettingsNotifier();
+      expect(
+        (await settings.loadWebDavConfig())['directory'],
+        defaultWebDavDirectory,
+      );
+
+      await settings.saveWebDavConfig(
+        url: 'https://example.com/dav',
+        username: 'user',
+        directory: 'My Archive',
+      );
+      expect((await settings.loadWebDavConfig())['directory'], 'My Archive');
+      settings.dispose();
+    },
+  );
+  test(
     'backup includes UI preferences and remains compatible with v1',
     () async {
       final controller = AppSettingsNotifier();
@@ -190,6 +238,9 @@ void main() {
   testWidgets(
     'five destinations keep publish as an action and support standard bar',
     (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'greennote.liquid_glass_nav': false,
+      });
       var selected = -1;
       await tester.pumpWidget(
         ProviderScope(
@@ -245,7 +296,7 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
-  testWidgets('feed card uses final TweetCard geometry and typography', (
+  testWidgets('standard feed card keeps its geometry and typography', (
     tester,
   ) async {
     const feed = CoolapkFeed(
@@ -271,11 +322,66 @@ void main() {
     expect(card.elevation, 1);
     expect(
       (card.shape as RoundedRectangleBorder).borderRadius,
-      BorderRadius.circular(22),
+      BorderRadius.circular(20),
     );
     final body = tester.widget<Text>(find.text(feed.message));
     expect(body.style!.fontSize, 16);
     expect(body.style!.height, 1.3);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('feed device link opens the resolved product discussion', (
+    tester,
+  ) async {
+    final api = FakeApi()
+      ..productSearchResults = const [
+        {'id': '14339', 'title': '小米 14'},
+      ];
+    const feed = CoolapkFeed(
+      id: 'device-link-test',
+      username: '示例酷友',
+      avatar: '',
+      message: '机型点击测试',
+      date: '刚刚',
+      likeCount: '0',
+      replyCount: '0',
+      pictures: [],
+      uid: 'user-1',
+      raw: {'device_title': '小米 14'},
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: FeedCard(api: api, feed: feed),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('feed-device-link')));
+    await tester.pumpAndSettle();
+
+    expect(api.queries.first, {
+      'type': 'product',
+      'searchValue': '小米 14',
+      'page': 1,
+    });
+    expect(find.byType(ProductPage), findsOneWidget);
+    expect(find.text('讨论'), findsOneWidget);
+    final discussionRequestIndex = api.paths.indexOf('/v6/page/dataList');
+    expect(discussionRequestIndex, greaterThanOrEqualTo(0));
+    expect(
+      api.queries[discussionRequestIndex],
+      containsPair('url', '/page?url=/product/feedList'),
+    );
+    expect(api.queries[discussionRequestIndex], containsPair('id', '14339'));
+    expect(api.queries[discussionRequestIndex], containsPair('type', 'feed'));
+
+    Navigator.of(tester.element(find.byType(ProductPage))).pop();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('feed-author-link')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<UserSpacePage>(find.byType(UserSpacePage)).uid,
+      'user-1',
+    );
     expect(tester.takeException(), isNull);
   });
   testWidgets(

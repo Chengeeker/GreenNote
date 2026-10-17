@@ -13,10 +13,11 @@ import '../../core/design_system/components/review_navigation_bar.dart'
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/coolapk_api.dart';
+import '../../core/network/product_price.dart';
 import '../../core/network/coolapk_image.dart';
 import '../feed/feed_pages.dart';
 import '../feed/image_gallery_page.dart';
@@ -26,7 +27,12 @@ import '../../core/widgets/app_avatar.dart';
 import '../../core/theme/app_theme.dart';
 import '../digital/utils/digital_system_helper.dart';
 import 'app_detail_page.dart';
+import 'activity_pages.dart';
+import '../../core/widgets/coolapk_rich_text.dart';
 import '../shell/main_pages.dart' show ComposeFeedPage;
+import 'dart:convert';
+import 'package:url_launcher/url_launcher.dart';
+import 'product_comparison_page.dart';
 
 class ApiListPage extends StatefulWidget {
   const ApiListPage({
@@ -37,7 +43,12 @@ class ApiListPage extends StatefulWidget {
     this.showAppBar = true,
     this.nested = false,
     this.header,
+    this.overlapHandle,
     this.itemBuilder,
+    this.itemBuilderWithIndex,
+    this.itemFilter,
+    this.onPageItemsLoaded,
+    this.initialItems = const [],
     super.key,
   });
 
@@ -48,7 +59,13 @@ class ApiListPage extends StatefulWidget {
   final bool showAppBar;
   final bool nested;
   final Widget? header;
+  final SliverOverlapAbsorberHandle? overlapHandle;
   final Widget Function(BuildContext, Map<String, dynamic>)? itemBuilder;
+  final Widget Function(BuildContext, Map<String, dynamic>, int)?
+  itemBuilderWithIndex;
+  final bool Function(Map<String, dynamic>)? itemFilter;
+  final void Function(List<Map<String, dynamic>>)? onPageItemsLoaded;
+  final List<Map<String, dynamic>> initialItems;
 
   @override
   State<ApiListPage> createState() => _ApiListPageState();
@@ -68,10 +85,30 @@ class _ApiListPageState extends State<ApiListPage>
   bool _more = true;
   bool _pendingRefresh = false;
   int _requestVersion = 0;
+  static bool _isFeedEntity(Map<String, dynamic> item) {
+    final type = (item['entityType'] ?? item['entity_type'] ?? '')
+        .toString()
+        .toLowerCase();
+    if (type == 'card') return false;
+    final feedType = (item['feedType'] ?? item['feed_type'] ?? '')
+        .toString()
+        .toLowerCase();
+    final template = (item['entityTemplate'] ?? item['entity_template'] ?? '')
+        .toString()
+        .toLowerCase();
+    return (type.contains('feed') && !type.contains('reply')) ||
+        type.contains('article') ||
+        feedType.contains('article') ||
+        template.contains('article') ||
+        (type.isEmpty && item.containsKey('message'));
+  }
 
   @override
   void initState() {
     super.initState();
+    if (widget.initialItems.isNotEmpty) {
+      _items.addAll(widget.initialItems);
+    }
     _scroll.addListener(_onScroll);
     _load(refresh: true);
   }
@@ -107,7 +144,7 @@ class _ApiListPageState extends State<ApiListPage>
       if (refresh) _pendingRefresh = true;
       return;
     }
-    if (!refresh && !_more) return;
+    if (!refresh && (!_more || _error != null)) return;
     final requestVersion = ++_requestVersion;
     final path = widget.path;
     final query = Map<String, dynamic>.of(widget.query);
@@ -117,31 +154,68 @@ class _ApiListPageState extends State<ApiListPage>
     });
     final next = refresh ? 1 : _page + 1;
     try {
-      final page = await widget.api.getList(
-        path,
-        query: {
-          ...query,
-          'page': next,
-          if (!refresh && _first.isNotEmpty) 'firstItem': _first,
-          if (!refresh && _last.isNotEmpty) 'lastItem': _last,
-        },
-      );
+      final requestPath =
+          (path.startsWith('/v6/feed/replyList') ||
+              path.startsWith('/v6/feed/hotReplyList'))
+          ? 'https://api2.coolapk.com$path'
+          : path;
+      ApiPage page;
+      try {
+        page = await widget.api.getList(
+          requestPath,
+          query: {
+            ...query,
+            'page': next,
+            if (!refresh && _first.isNotEmpty) 'firstItem': _first,
+            if (!refresh && _last.isNotEmpty) 'lastItem': _last,
+          },
+        );
+      } catch (_) {
+        if (requestPath != path) {
+          page = await widget.api.getList(
+            path,
+            query: {
+              ...query,
+              'page': next,
+              if (!refresh && _first.isNotEmpty) 'firstItem': _first,
+              if (!refresh && _last.isNotEmpty) 'lastItem': _last,
+            },
+          );
+        } else {
+          rethrow;
+        }
+      }
       if (!mounted || requestVersion != _requestVersion) return;
+      widget.onPageItemsLoaded?.call(page.items);
       setState(() {
         if (refresh) {
           _items.clear();
+          if (widget.initialItems.isNotEmpty) {
+            _items.addAll(widget.initialItems);
+          }
           _first = '';
           _last = '';
         }
         final known = _items.map(_entityKey).toSet();
-        _items.addAll(page.items.where((item) => known.add(_entityKey(item))));
+        _items.addAll(
+          page.items.where(
+            (item) =>
+                (widget.itemFilter?.call(item) ?? true) &&
+                known.add(_entityKey(item)),
+          ),
+        );
         _page = next;
         if (page.firstItem.isNotEmpty) _first = page.firstItem;
         if (page.lastItem.isNotEmpty) _last = page.lastItem;
         _more = page.hasMore && page.items.isNotEmpty;
       });
       precacheFeedImages(page.items, context, api: widget.api);
-      if (refresh && page.hasMore && _items.length <= 4) {
+      final isSearchAll = path.contains('/v6/search') && query['type'] == 'all';
+      final hasNoFeedsInSearchAll = isSearchAll && !_items.any(_isFeedEntity);
+      final shouldPreloadNext = refresh &&
+          page.hasMore &&
+          (_items.length <= 4 || hasNoFeedsInSearchAll);
+      if (shouldPreloadNext) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_loading && _more) {
             _load(refresh: false);
@@ -149,8 +223,75 @@ class _ApiListPageState extends State<ApiListPage>
         });
       }
     } catch (error) {
+      final errorStr = error.toString();
+      final isCaptchaOrRestricted =
+          errorStr.contains('验证码') ||
+          errorStr.contains('captcha') ||
+          errorStr.contains('403') ||
+          errorStr.contains('受限');
+      if (path.contains('/feed/replyList') && query['id'] != null) {
+        if (mounted) {
+          try {
+            final parentId = query['id'].toString();
+            final detailRes = await widget.api.getReplyDetail(parentId);
+            final data = detailRes['data'];
+            if (data is Map) {
+              final rawRows =
+                  data['replyRows'] ??
+                  data['subReplyRows'] ??
+                  data['replyList'] ??
+                  data['subReplyList'];
+              final existingIds = _items.map(_entityKey).toSet();
+              if (rawRows is List && rawRows.isNotEmpty) {
+                for (final row in rawRows.whereType<Map>()) {
+                  final mapRow = Map<String, dynamic>.from(row);
+                  if (existingIds.add(_entityKey(mapRow))) {
+                    _items.add(mapRow);
+                  }
+                }
+              }
+              final recentIds =
+                  (data['recent_reply_ids'] ?? data['recentReplyIds'])
+                      ?.toString() ??
+                  '';
+              if (recentIds.isNotEmpty) {
+                final ids = recentIds
+                    .split(',')
+                    .map((s) => s.trim())
+                    .where((s) => s.isNotEmpty)
+                    .toList();
+                final fetchedSubReplies = await Future.wait(
+                  ids.take(15).map((subId) async {
+                    if (existingIds.contains(subId)) return null;
+                    try {
+                      final subDetail = await widget.api.getReplyDetail(subId);
+                      final subData = subDetail['data'];
+                      if (subData is Map) {
+                        return Map<String, dynamic>.from(subData);
+                      }
+                    } catch (_) {}
+                    return null;
+                  }),
+                );
+                for (final item in fetchedSubReplies) {
+                  if (item != null && existingIds.add(_entityKey(item))) {
+                    _items.add(item);
+                  }
+                }
+              }
+              _more = false;
+            }
+          } catch (_) {}
+        }
+      }
       if (mounted && requestVersion == _requestVersion) {
-        setState(() => _error = error.toString());
+        setState(() {
+          if (isCaptchaOrRestricted || path.contains('/feed/replyList')) {
+            _error = null;
+          } else {
+            _error = errorStr;
+          }
+        });
       }
     } finally {
       if (mounted) {
@@ -163,6 +304,12 @@ class _ApiListPageState extends State<ApiListPage>
     }
   }
 
+  Future<void> _retry({required bool refresh}) async {
+    if (_loading) return;
+    setState(() => _error = null);
+    await _load(refresh: refresh);
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -170,10 +317,231 @@ class _ApiListPageState extends State<ApiListPage>
         widget.title.trim().startsWith('今日酷安') ||
         widget.path == '/v6/main/headline' ||
         widget.path == '/main/headline';
+    final isCollectionList =
+        widget.path.contains('/collection/myCollectionList') ||
+        widget.path.contains('/collection/list') ||
+        (widget.title.contains('收藏单') &&
+            !widget.path.contains('/collection/itemlist'));
+    final isArticleList = widget.path == '/v6/user/htmlFeedList' ||
+        widget.path.contains('htmlFeedList') ||
+        widget.path.contains('articleList') ||
+        (widget.path.contains('/search') &&
+            (widget.query['type'] == 'feedArticle' ||
+                widget.query['feedType'] == 'feedArticle'));
     final now = DateTime.now();
     final pageTitle = isTodayHeadline
         ? '今日酷安:${now.year}年${now.month}月${now.day}日'
         : widget.title;
+    final listPadding = _items.isEmpty
+        ? MediaQuery.paddingOf(context)
+        : EdgeInsets.fromLTRB(
+            0,
+            widget.header != null || isTodayHeadline || isCollectionList
+                ? 0
+                : 10,
+            0,
+            24 + MediaQuery.paddingOf(context).bottom,
+          );
+    final delegate = _items.isEmpty
+        ? SliverChildListDelegate([
+            if (widget.header != null) widget.header!,
+            SizedBox(
+              height:
+                  MediaQuery.sizeOf(context).height *
+                  (widget.itemBuilder == null ? 0.55 : 0.2),
+              child: Center(
+                child: _loading
+                    ? const CircularProgressIndicator()
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _error == null ||
+                                    _error!.contains('验证码') ||
+                                    _error!.contains('受限') ||
+                                    _error!.contains('限制') ||
+                                    _error!.toLowerCase().contains('captcha') ||
+                                    _error!.contains('403')
+                                ? '暂无内容'
+                                : _error!,
+                          ),
+                          if (_error != null &&
+                              !_error!.contains('验证码') &&
+                              !_error!.contains('受限') &&
+                              !_error!.contains('限制') &&
+                              !_error!.toLowerCase().contains('captcha') &&
+                              !_error!.contains('403'))
+                            TextButton(
+                              onPressed: () => _retry(refresh: true),
+                              child: const Text('重试'),
+                            ),
+                        ],
+                      ),
+              ),
+            ),
+          ])
+        : isCollectionList
+        ? SliverChildListDelegate([
+            if (widget.header != null) widget.header!,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? const Color(0xFF1E1E22)
+                      : Theme.of(context).colorScheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var i = 0; i < _items.length; i++) ...[
+                      if (i > 0)
+                        Divider(
+                          height: 1,
+                          indent: 114,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white.withValues(alpha: 0.06)
+                              : Theme.of(context).dividerColor
+                                    .withValues(alpha: 0.25),
+                        ),
+                      _CollectionTile(api: widget.api, entity: _items[i]),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.all(18),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_error != null &&
+                !_error!.contains('验证码') &&
+                !_error!.contains('受限') &&
+                !_error!.contains('限制') &&
+                !_error!.toLowerCase().contains('captcha') &&
+                !_error!.contains('403'))
+              TextButton(
+                onPressed: () => _retry(refresh: false),
+                child: Text('加载失败，点击重试：$_error'),
+              ),
+          ])
+        : SliverChildBuilderDelegate(
+            (context, index) {
+              if (widget.header != null) {
+                if (index == 0) return widget.header!;
+              }
+              final itemIndex = widget.header != null ? index - 1 : index;
+              if (itemIndex == _items.length) {
+                if (_loading) {
+                  return const Padding(
+                    padding: EdgeInsets.all(18),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (_error != null &&
+                    (_error!.contains('验证码') ||
+                        _error!.contains('受限') ||
+                        _error!.contains('限制') ||
+                        _error!.toLowerCase().contains('captcha') ||
+                        _error!.contains('403'))) {
+                  return const SizedBox.shrink();
+                }
+                return TextButton(
+                  onPressed: () => _retry(refresh: false),
+                  child: Text('加载失败，点击重试：$_error'),
+                );
+              }
+              final item = _items[itemIndex];
+              final searchScope = SearchResultsScope.of(context);
+              final isSearchAll = searchScope != null &&
+                  widget.header == null &&
+                  widget.path.contains('/v6/search') &&
+                  widget.query['type'] == 'all';
+
+              final cardWidget = widget.itemBuilderWithIndex?.call(
+                    context,
+                    item,
+                    itemIndex,
+                  ) ??
+                  widget.itemBuilder?.call(context, item) ??
+                  (isTodayHeadline
+                      ? _TodayCoolapkCard(
+                          key: ValueKey(_entityKey(item)),
+                          api: widget.api,
+                          entity: item,
+                        )
+                      : ApiEntityCard(
+                          key: ValueKey(_entityKey(item)),
+                          api: widget.api,
+                          entity: item,
+                          articleLayout: isArticleList,
+                        ));
+
+              if (isSearchAll) {
+                final firstFeedIndex = _items.indexWhere(_isFeedEntity);
+                final isFirstFeed =
+                    firstFeedIndex != -1 && itemIndex == firstFeedIndex;
+                final isLastCardWithoutFeed =
+                    firstFeedIndex == -1 && itemIndex == _items.length - 1;
+
+                if (isFirstFeed) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SearchFeedSectionHeader(
+                        currentSort: searchScope.allSortType,
+                        onSortChanged: searchScope.onAllSortChanged,
+                      ),
+                      cardWidget,
+                    ],
+                  );
+                } else if (isLastCardWithoutFeed) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      cardWidget,
+                      SearchFeedSectionHeader(
+                        currentSort: searchScope.allSortType,
+                        onSortChanged: searchScope.onAllSortChanged,
+                        isLoading: _more,
+                      ),
+                    ],
+                  );
+                }
+              }
+
+              return cardWidget;
+            },
+            childCount:
+                _items.length +
+                (widget.header != null ? 1 : 0) +
+                (_loading || _error != null ? 1 : 0),
+          );
+    final scrollable = widget.overlapHandle == null
+        ? ListView.custom(
+            controller: widget.nested ? null : _scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+            padding: listPadding,
+            childrenDelegate: delegate,
+          )
+        : CustomScrollView(
+            key: PageStorageKey(widget.key),
+            physics: const AlwaysScrollableScrollPhysics(),
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+            slivers: [
+              SliverOverlapInjector(handle: widget.overlapHandle!),
+              SliverPadding(
+                padding: listPadding,
+                sliver: SliverList(delegate: delegate),
+              ),
+            ],
+          );
     final list = NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         if (notification.depth == 0 &&
@@ -185,81 +553,9 @@ class _ApiListPageState extends State<ApiListPage>
       },
       child: EasyRefresh(
         header: reviewDefaultRefreshHeader,
+        triggerAxis: Axis.vertical,
         onRefresh: () => _load(refresh: true),
-        child: filterHorizontalScrollNotifications(
-          _items.isEmpty
-              ? ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  children: [
-                    if (widget.header != null) widget.header!,
-                    SizedBox(
-                      height:
-                          MediaQuery.sizeOf(context).height *
-                          (widget.itemBuilder == null ? 0.55 : 0.2),
-                      child: Center(
-                        child: _loading
-                            ? const CircularProgressIndicator()
-                            : Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(_error ?? '暂无内容'),
-                                  if (_error != null)
-                                    TextButton(
-                                      onPressed: () => _load(refresh: true),
-                                      child: const Text('重试'),
-                                    ),
-                                ],
-                              ),
-                      ),
-                    ),
-                  ],
-                )
-              : ListView.builder(
-                  controller: widget.nested ? null : _scroll,
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: EdgeInsets.fromLTRB(
-                    0,
-                    widget.header != null || isTodayHeadline ? 0 : 10,
-                    0,
-                    24 + MediaQuery.paddingOf(context).bottom,
-                  ),
-                  itemCount:
-                      _items.length +
-                      (widget.header != null ? 1 : 0) +
-                      (_loading || _error != null ? 1 : 0),
-                  itemBuilder: (context, index) {
-                    if (widget.header != null) {
-                      if (index == 0) return widget.header!;
-                    }
-                    final itemIndex = widget.header != null ? index - 1 : index;
-                    if (itemIndex == _items.length) {
-                      if (_loading) {
-                        return const Padding(
-                          padding: EdgeInsets.all(18),
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      }
-                      return TextButton(
-                        onPressed: () => _load(refresh: false),
-                        child: Text('加载失败，点击重试：$_error'),
-                      );
-                    }
-                    final item = _items[itemIndex];
-                    return widget.itemBuilder?.call(context, item) ??
-                        (isTodayHeadline
-                            ? _TodayCoolapkCard(
-                                key: ValueKey(_entityKey(item)),
-                                api: widget.api,
-                                entity: item,
-                              )
-                            : ApiEntityCard(
-                                key: ValueKey(_entityKey(item)),
-                                api: widget.api,
-                                entity: item,
-                              ));
-                  },
-                ),
-        ),
+        child: filterHorizontalScrollNotifications(scrollable),
       ),
     );
     if (!widget.showAppBar) return list;
@@ -276,10 +572,96 @@ class _ApiListPageState extends State<ApiListPage>
                   icon: const Icon(Icons.refresh_rounded),
                 ),
               ]
+            : isCollectionList
+            ? [
+                IconButton(
+                  tooltip: '新建收藏单',
+                  onPressed: _showCreateCollectionDialog,
+                  icon: const Icon(Icons.add_rounded),
+                ),
+              ]
             : null,
       ),
       body: list,
     );
+  }
+
+  Future<void> _showCreateCollectionDialog() async {
+    final titleController = TextEditingController();
+    final descController = TextEditingController();
+    var isOpen = true;
+    final ok = await showAppDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('新建收藏单'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '名称',
+                  hintText: '请输入收藏单名称',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: descController,
+                decoration: const InputDecoration(
+                  labelText: '说明（选填）',
+                  hintText: '请输入收藏单说明',
+                ),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('公开收藏单'),
+                subtitle: Text(
+                  isOpen ? '所有人可见' : '仅自己可见',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                value: isOpen,
+                onChanged: (val) => setDialogState(() => isOpen = val),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('创建'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final name = titleController.text.trim();
+    final desc = descController.text.trim();
+    titleController.dispose();
+    descController.dispose();
+    if (ok != true || name.isEmpty) return;
+    try {
+      await widget.api.createCollection(
+        name,
+        description: desc,
+        isOpen: isOpen,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('创建收藏单成功')));
+        _load(refresh: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('创建失败: $e')));
+      }
+    }
   }
 }
 
@@ -365,6 +747,59 @@ class SearchSortCapsule extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class SearchFeedSectionHeader extends StatelessWidget {
+  const SearchFeedSectionHeader({
+    required this.currentSort,
+    required this.onSortChanged,
+    this.isLoading = false,
+    super.key,
+  });
+
+  final String currentSort;
+  final ValueChanged<String> onSortChanged;
+  final bool isLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                '动态',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              SearchSortCapsule(
+                currentSort: currentSort,
+                onSortChanged: onSortChanged,
+              ),
+            ],
+          ),
+        ),
+        if (isLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 18),
+            child: Center(
+              child: SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -486,10 +921,16 @@ class SearchFeedHeaderBar extends StatelessWidget {
 }
 
 class ApiEntityCard extends StatelessWidget {
-  const ApiEntityCard({required this.api, required this.entity, super.key});
+  const ApiEntityCard({
+    required this.api,
+    required this.entity,
+    this.articleLayout = false,
+    super.key,
+  });
 
   final CoolapkApi api;
   final Map<String, dynamic> entity;
+  final bool articleLayout;
 
   String _value(Iterable<String> keys) {
     for (final key in keys) {
@@ -507,13 +948,20 @@ class ApiEntityCard extends StatelessWidget {
       var sub = url.substring(url.indexOf('/t/') + 3);
       if (sub.contains('?')) sub = sub.substring(0, sub.indexOf('?'));
       if (sub.contains('/')) sub = sub.substring(0, sub.indexOf('/'));
+      // A /t/ URL may contain raw Chinese, which decodeComponent rejects.
+      var decoded = sub;
       try {
-        final decoded = Uri.decodeComponent(sub).replaceAll('#', '').trim();
-        if (decoded.isNotEmpty && int.tryParse(decoded) == null) {
-          return decoded;
-        }
+        decoded = Uri.decodeComponent(sub);
       } catch (_) {}
+      decoded = decoded.replaceAll('#', '').trim();
+      if (decoded.isNotEmpty && int.tryParse(decoded) == null) return decoded;
     }
+    final uri = Uri.tryParse(
+      url.startsWith('/') ? 'https://coolapk.com$url' : url,
+    );
+    final queryTag =
+        uri?.queryParameters['tag']?.replaceAll('#', '').trim() ?? '';
+    if (queryTag.isNotEmpty) return queryTag;
     for (final key in ['tag', 'tagName', 'title', 'name']) {
       final val = entity[key]?.toString().trim() ?? '';
       if (val.isNotEmpty && int.tryParse(val) == null) {
@@ -526,15 +974,48 @@ class ApiEntityCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final type = _value(['entityType', 'entity_type']).toLowerCase();
+    final template =
+        _value(['entityTemplate', 'entity_template']).toLowerCase();
+    final feedType = _value(['feedType', 'feed_type']).toLowerCase();
+    final isArticle = articleLayout ||
+        type == 'article' ||
+        type == 'feedarticle' ||
+        type == 'feed_article' ||
+        type == 'dyharticle' ||
+        template == 'feedarticle' ||
+        template == 'feed_article' ||
+        template == 'article' ||
+        template == 'dyharticle' ||
+        feedType == 'feedarticle' ||
+        feedType == 'feed_article' ||
+        feedType == 'article' ||
+        feedType == 'dyharticle';
+
     if (type == 'card') return _buildTemplate(context);
     if ((type.contains('feed') && !type.contains('reply')) ||
+        type.contains('article') ||
+        isArticle ||
         (type.isEmpty && entity.containsKey('message'))) {
-      final feed = CoolapkFeed.fromJson(entity);
-      if (feed.id.isNotEmpty) return FeedCard(api: api, feed: feed);
+      CoolapkFeed feed;
+      final cachedFeed = entity['_cached_feed_model'];
+      if (cachedFeed is CoolapkFeed) {
+        feed = cachedFeed;
+      } else {
+        feed = CoolapkFeed.fromJson(entity);
+        try {
+          entity['_cached_feed_model'] = feed;
+        } catch (_) {}
+      }
+      if (feed.id.isNotEmpty) {
+        return FeedCard(api: api, feed: feed, articleLayout: isArticle);
+      }
     }
     final isTopic = type.contains('topic') || type.contains('tag');
     final isApk = type.contains('apk') || type.contains('app');
     final isCollection = type.contains('collection');
+    if (isCollection) {
+      return _CollectionTile(api: api, entity: entity);
+    }
     final topicTag = isTopic ? extractTopicTag(entity) : '';
     final id = isTopic && topicTag.isNotEmpty
         ? topicTag
@@ -591,53 +1072,55 @@ class ApiEntityCard extends StatelessWidget {
         image = preset;
       }
     }
-    return InkWell(
-      onTap: id.isEmpty ? null : () => _open(context, type, id, entity),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (image.isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: CachedNetworkImage(
-                  normalizeCoolapkImageUrl(image),
-                  headers: coolapkImageHeaders(image, api: api),
-                  width: 50,
-                  height: 50,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => _icon(context, type),
-                ),
-              )
-            else
-              _icon(context, type),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title.isEmpty ? '酷安内容' : title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700),
+    return RepaintBoundary(
+      child: InkWell(
+        onTap: id.isEmpty ? null : () => _open(context, type, id, entity),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (image.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: CachedNetworkImage(
+                    normalizeCoolapkImageUrl(image),
+                    headers: coolapkImageHeaders(image, api: api),
+                    width: 50,
+                    height: 50,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => _icon(context, type),
                   ),
-                  if (subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                )
+              else
+                _icon(context, type),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      _plain(subtitle),
-                      maxLines: 3,
+                      title.isEmpty ? '酷安内容' : title,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium,
+                      style: Theme.of(context).textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
                     ),
+                    if (subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        _plain(subtitle),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-            const Icon(Icons.chevron_right_rounded),
-          ],
+              const Icon(Icons.chevron_right_rounded),
+            ],
+          ),
         ),
       ),
     );
@@ -689,6 +1172,62 @@ class ApiEntityCard extends StatelessWidget {
         .whereType<Map>()
         .map((item) => Map<String, dynamic>.from(item))
         .toList(growable: false);
+    if (template == 'textCard') {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (title.isNotEmpty)
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+            if (_value(['description']).isNotEmpty) ...[
+              const SizedBox(height: 8),
+              CoolapkRichText(
+                api: api,
+                text: _value(['description']),
+                style: Theme.of(context).textTheme.bodyLarge
+                    ?.copyWith(height: 1.6),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+    if (template == 'imageScaleCard') {
+      final picture = _value(['pic']).isNotEmpty
+          ? _value(['pic'])
+          : (entities.isEmpty ? '' : _first(entities.first, ['pic']));
+      final dimensions = RegExp(r'@(\d+)x(\d+)').firstMatch(picture);
+      final width = double.tryParse(dimensions?.group(1) ?? '');
+      final height = double.tryParse(dimensions?.group(2) ?? '');
+      if (picture.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: AspectRatio(
+            aspectRatio:
+                width != null && height != null && width > 0 && height > 0
+                ? width / height
+                : 4.5,
+            child: CachedNetworkImage(
+              normalizeCoolapkImageUrl(picture),
+              headers: coolapkImageHeaders(picture, api: api),
+              fit: BoxFit.cover,
+            ),
+          ),
+        ),
+      );
+    }
+    if (template == 'refreshCard' && _value(['url']).isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: FilledButton(
+          onPressed: () => openHeadlineTarget(context, api, entity),
+          child: Text(title),
+        ),
+      );
+    }
     if (template == 'noMoreDataCard' || entities.isEmpty && title.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -787,14 +1326,16 @@ class ApiEntityCard extends StatelessWidget {
               ),
               SizedBox(
                 height: 104,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  itemCount: entities.length,
-                  separatorBuilder: (_, _) => const SizedBox(width: 14),
-                  itemBuilder: (_, index) => SizedBox(
-                    width: 72,
-                    child: _TemplateItem(api: api, item: entities[index]),
+                child: protectHorizontalDragFromVerticalRefresh(
+                  ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    itemCount: entities.length,
+                    separatorBuilder: (_, _) => const SizedBox(width: 14),
+                    itemBuilder: (_, index) => SizedBox(
+                      width: 72,
+                      child: _TemplateItem(api: api, item: entities[index]),
+                    ),
                   ),
                 ),
               ),
@@ -825,35 +1366,6 @@ class ApiEntityCard extends StatelessWidget {
           ),
         );
 
-        if (searchScope != null) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              userCard,
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      '动态',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    SearchSortCapsule(
-                      currentSort: searchScope.allSortType,
-                      onSortChanged: searchScope.onAllSortChanged,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        }
         return userCard;
       }
 
@@ -870,14 +1382,19 @@ class ApiEntityCard extends StatelessWidget {
             ),
           SizedBox(
             height: 116,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              itemCount: entities.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 12),
-              itemBuilder: (_, index) => SizedBox(
-                width: 92,
-                child: _TemplateItem(api: api, item: entities[index]),
+            child: protectHorizontalDragFromVerticalRefresh(
+              ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 6,
+                ),
+                itemCount: entities.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 12),
+                itemBuilder: (_, index) => SizedBox(
+                  width: 92,
+                  child: _TemplateItem(api: api, item: entities[index]),
+                ),
               ),
             ),
           ),
@@ -928,6 +1445,16 @@ class ApiEntityCard extends StatelessWidget {
     Map<String, dynamic>? item,
   ]) {
     final data = item ?? entity;
+    final activity = activityGoodsUrl(data);
+    if (activity != null) {
+      openActivityDocument(
+        context,
+        api,
+        activity,
+        title: _first(data, ['goods_title', 'title', 'name']),
+      );
+      return;
+    }
     if (type.contains('dyh')) {
       Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
@@ -1029,6 +1556,136 @@ class ApiEntityCard extends StatelessWidget {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => RawEntityPage(api: api, entity: entity),
+      ),
+    );
+  }
+}
+
+class _CollectionTile extends StatelessWidget {
+  const _CollectionTile({required this.api, required this.entity});
+
+  final CoolapkApi api;
+  final Map<String, dynamic> entity;
+
+  String _val(List<String> keys) {
+    for (final k in keys) {
+      final v = entity[k];
+      if (v != null && v.toString().trim().isNotEmpty) {
+        return v.toString().trim();
+      }
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final id = _val(['id', 'collectionId', 'collection_id']);
+    final title = _val(['title', 'name']);
+
+    final isOpenVal = _val(['is_open', 'isOpen', 'status']);
+    final isPrivate = isOpenVal == '0' || isOpenVal == 'private';
+    final privacy = isPrivate ? '私密' : '公开';
+
+    final followNum = _val(['follow_num', 'followNum', 'follownum']);
+    final followText = '${followNum.isEmpty ? '1' : followNum}人关注';
+
+    final contentNum = _val([
+      'content_num',
+      'contentNum',
+      'item_num',
+      'itemNum',
+      'feed_num',
+      'feednum',
+      'num',
+      'count',
+    ]);
+    final contentText = '${contentNum.isEmpty ? '0' : contentNum}个内容';
+
+    final subtitle = '$privacy  $followText  $contentText';
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return InkWell(
+      onTap: id.isEmpty
+          ? null
+          : () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => ApiListPage(
+                    api: api,
+                    title: title.isEmpty ? '收藏单' : title,
+                    path: '/v6/collection/itemlist',
+                    query: {'id': id},
+                  ),
+                ),
+              );
+            },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 84,
+              height: 64,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Color(0xFF1FD5D2), Color(0xFF20D4A0)],
+                ),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF20D4A0).withValues(alpha: 0.25),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.folder_outlined,
+                  color: Colors.white,
+                  size: 36,
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title.isEmpty ? '收藏单' : title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: isDark ? Colors.white54 : Colors.black54,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: isDark ? Colors.white38 : Colors.black38,
+              size: 22,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1611,171 +2268,12 @@ class CoolPicPage extends StatefulWidget {
   State<CoolPicPage> createState() => _CoolPicPageState();
 }
 
-class EventDetailPage extends StatefulWidget {
+class EventDetailPage extends StatelessWidget {
   const EventDetailPage({required this.api, required this.id, super.key});
-
   final CoolapkApi api;
   final String id;
-
   @override
-  State<EventDetailPage> createState() => _EventDetailPageState();
-}
-
-class _EventDetailPageState extends State<EventDetailPage> {
-  Map<String, dynamic>? _event;
-  String? _error;
-  bool _loading = true;
-
-  String _text(List<String> keys) => _first(_event ?? const {}, keys);
-
-  int? _time(List<String> keys) {
-    final value = int.tryParse(_text(keys));
-    return value != null && value > 0 ? value : null;
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final response = await widget.api.request(
-        '/v6/event/detail',
-        query: {'id': widget.id},
-      );
-      final root = response is Map ? response : const <String, dynamic>{};
-      final data = root['data'];
-      if (data is! Map) throw const CoolapkApiException('活动详情数据为空');
-      if (mounted) setState(() => _event = Map<String, dynamic>.from(data));
-    } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final event = _event;
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final start = _time(['registrationStart', 'registration_start']);
-    final end = _time(['registrationEnd', 'registration_end']);
-    final eventEnd = _time(['eventEnd', 'event_end']);
-    final stage = int.tryParse(_text(['stageStatus', 'stage_status']));
-    final action = _text(['actionUrl', 'action_url']);
-    final canRegister =
-        action.isNotEmpty &&
-        stage != 2 &&
-        stage != 3 &&
-        (start == null || now >= start) &&
-        (end == null || now <= end);
-    final status = stage == 3 || (eventEnd != null && now > eventEnd)
-        ? '活动已结束'
-        : start != null && now < start
-        ? '报名未开始'
-        : stage == 2
-        ? '活动进行中'
-        : end != null && now > end
-        ? '报名已结束'
-        : canRegister
-        ? '立即报名'
-        : '暂不可报名';
-    final logo = _text(['logo', 'pic', 'cover']);
-    final title = _text(['title', 'name']);
-
-    return Scaffold(
-      appBar: ReviewFrostedAppBar(title: const Text('酷安活动')),
-      body: _loading && event == null
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null && event == null
-          ? _RetryView(message: _error!, onRetry: _load)
-          : ListView(
-              padding: EdgeInsets.fromLTRB(
-                0,
-                0,
-                0,
-                24 + MediaQuery.paddingOf(context).bottom,
-              ),
-              children: [
-                if (logo.isNotEmpty)
-                  AspectRatio(
-                    aspectRatio: 1080 / 608,
-                    child: CachedNetworkImage(
-                      logo,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                    ),
-                  ),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '报名时间：${_formatEventTime(start)} 至 ${_formatEventTime(end)}',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton(
-                        onPressed: canRegister
-                            ? () => _openAction(action)
-                            : null,
-                        child: Text(status),
-                      ),
-                      if (_text(['noticeRule', 'notice_rule']).isNotEmpty) ...[
-                        const Divider(height: 28),
-                        Text(
-                          '报名须知',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(_text(['noticeRule', 'notice_rule'])),
-                      ],
-                      if (_error != null) ...[
-                        const SizedBox(height: 12),
-                        TextButton(
-                          onPressed: _load,
-                          child: Text('刷新失败：$_error'),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-    );
-  }
-
-  Future<void> _openAction(String raw) async {
-    final uri = Uri.tryParse(raw);
-    if (uri == null || uri.host.isEmpty || uri.scheme != 'https') {
-      _snack(context, '活动报名地址无效');
-      return;
-    }
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication) &&
-        mounted) {
-      _snack(context, '无法打开活动报名地址');
-    }
-  }
-}
-
-String _formatEventTime(int? seconds) {
-  if (seconds == null) return '待定';
-  final date = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
-  return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  Widget build(BuildContext context) => CrowdTestPage(api: api, id: id);
 }
 
 class _CoolPicPageState extends State<CoolPicPage> {
@@ -2969,13 +3467,13 @@ class _ProfileTabHeader extends SliverPersistentHeaderDelegate {
       tabs != oldDelegate.tabs || color != oldDelegate.color;
 }
 
-Widget _greenComposeFab({
+Widget greenComposeFab({
   required BuildContext context,
   required Object heroTag,
   required VoidCallback onPressed,
-  bool useLiquidGlass = false,
+  bool useLiquidGlass = true,
 }) {
-  final size = useLiquidGlass ? 46.0 : 48.0;
+  final size = useLiquidGlass ? 48.0 : 48.0;
   final button = Theme(
     data: Theme.of(context).copyWith(
       floatingActionButtonTheme: Theme.of(context).floatingActionButtonTheme
@@ -2990,9 +3488,11 @@ Widget _greenComposeFab({
           ? Colors.transparent
           : const Color(0xFF00B075),
       elevation: useLiquidGlass ? 0 : 4,
-      shape: const CircleBorder(),
+      shape: const CircleBorder(
+        side: BorderSide(color: Color(0x33FFFFFF), width: 1.5),
+      ),
       onPressed: onPressed,
-      child: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
+      child: const Icon(Icons.add_rounded, color: Colors.white, size: 26),
     ),
   );
   if (!useLiquidGlass) return button;
@@ -3074,7 +3574,10 @@ class _ProductPageState extends State<ProductPage>
   late List<_ProductTab> _tabs = _defaultTabs;
   Map<String, dynamic>? _detail;
   bool _following = false;
+  bool _followWorking = false;
   String _sortMode = 'default';
+  final _outerScroll = ScrollController();
+  final _compactHeader = ValueNotifier(false);
 
   @override
   void initState() {
@@ -3084,11 +3587,23 @@ class _ProductPageState extends State<ProductPage>
       initialIndex: 1, // '讨论'
       vsync: this,
     );
+    _outerScroll.addListener(_updateCompactHeader);
     _loadDetail();
+  }
+
+  void _updateCompactHeader() {
+    if (!_outerScroll.hasClients) return;
+    final position = _outerScroll.position;
+    final collapsed =
+        position.maxScrollExtent > 0 &&
+        position.pixels >= position.maxScrollExtent - 1;
+    if (_compactHeader.value != collapsed) _compactHeader.value = collapsed;
   }
 
   @override
   void dispose() {
+    _outerScroll.dispose();
+    _compactHeader.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -3139,6 +3654,9 @@ class _ProductPageState extends State<ProductPage>
         }
       } catch (_) {}
     }
+    if (tabs.isNotEmpty && !tabs.any((t) => t.type == 'main')) {
+      tabs.insert(0, const _ProductTab(title: '参数', type: 'main'));
+    }
     return tabs.isEmpty ? _defaultTabs : tabs;
   }
 
@@ -3147,7 +3665,8 @@ class _ProductPageState extends State<ProductPage>
     for (var i = 0; i < a.length; i++) {
       if (a[i].title != b[i].title ||
           a[i].type != b[i].type ||
-          a[i].subId != b[i].subId) {
+          a[i].subId != b[i].subId ||
+          a[i].url != b[i].url) {
         return true;
       }
     }
@@ -3157,11 +3676,21 @@ class _ProductPageState extends State<ProductPage>
   Future<void> _loadDetail() async {
     try {
       final res = await widget.api.getProductDetail(widget.id);
+      final action = res['userAction'];
+      final isFollow =
+          res['is_follow'] ??
+          res['isFollow'] ??
+          (action is Map ? action['follow'] : null);
+      final following = widget.api.isAnonymous
+          ? widget.api.localAccount.productFollows.containsKey(widget.id)
+          : isFollow == true || '$isFollow' == '1';
       if (mounted) {
         final serverTabs = _parseServerTabs(res['tabList'], widget.id);
         if (_hasTabDiff(_tabs, serverTabs)) {
-          final currentType = _tabs[_tabController.index].type;
-          var nextIndex = serverTabs.indexWhere((t) => t.type == currentType);
+          final currentTab = _tabs[_tabController.index];
+          var nextIndex = serverTabs.indexWhere(
+            (t) => t.type == currentTab.type && t.subId == currentTab.subId,
+          );
           if (nextIndex < 0) {
             nextIndex = serverTabs.indexWhere((t) => t.type == 'feed');
           }
@@ -3177,8 +3706,7 @@ class _ProductPageState extends State<ProductPage>
             _detail = res;
             _tabs = serverTabs;
             _tabController = newController;
-            final isFollow = res['is_follow'] ?? res['isFollow'];
-            _following = isFollow == 1 || isFollow == true;
+            _following = following;
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             oldController.dispose();
@@ -3186,8 +3714,7 @@ class _ProductPageState extends State<ProductPage>
         } else {
           setState(() {
             _detail = res;
-            final isFollow = res['is_follow'] ?? res['isFollow'];
-            _following = isFollow == 1 || isFollow == true;
+            _following = following;
           });
         }
       }
@@ -3195,12 +3722,103 @@ class _ProductPageState extends State<ProductPage>
   }
 
   Future<void> _toggleFollow() async {
+    if (_followWorking) return;
+    if (!widget.api.hasAccount) {
+      AppToast.show(context, widget.api.loginRequiredMessage);
+      return;
+    }
     final next = !_following;
-    setState(() => _following = next);
+    setState(() {
+      _following = next;
+      _followWorking = true;
+    });
     try {
-      await widget.api.followProduct(widget.id, following: !next);
-    } catch (_) {
-      if (mounted) setState(() => _following = !next);
+      await widget.api.followProduct(
+        widget.id,
+        following: !next,
+        product: _detail,
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() => _following = !next);
+        AppToast.show(context, '$error');
+      }
+    } finally {
+      if (mounted) setState(() => _followWorking = false);
+    }
+  }
+
+  void _openComparison() {
+    HapticFeedbackUtil.light();
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ProductComparisonPage(
+          api: widget.api,
+          initialProductId: widget.id,
+          initialDetail: _detail,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleBuy() async {
+    HapticFeedbackUtil.light();
+    final raw = _detail ?? const <String, dynamic>{};
+    final explicitUrl = (raw['buy_url'] ??
+            raw['goods_buy_url'] ??
+            raw['jd_url'] ??
+            raw['mall_url'] ??
+            raw['shop_url'] ??
+            '')
+        .toString()
+        .trim();
+
+    final productTitle = (raw['title'] ?? widget.title).toString().trim();
+    final searchTitle = productTitle.isNotEmpty ? productTitle : '手机';
+
+    if (explicitUrl.isNotEmpty &&
+        (explicitUrl.startsWith('http://') ||
+            explicitUrl.startsWith('https://') ||
+            explicitUrl.startsWith('openapp.jdmobile://'))) {
+      try {
+        final uri = Uri.parse(explicitUrl);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // Construct JD app scheme & mobile web search url
+    final jdParams = jsonEncode({
+      'category': 'jump',
+      'des': 'search',
+      'keyWord': searchTitle,
+    });
+    final jdAppUri = Uri.parse(
+      'openapp.jdmobile://virtual?params=${Uri.encodeComponent(jdParams)}',
+    );
+    final jdWebUri = Uri.parse(
+      'https://so.m.jd.com/ware/search.action?keyword=${Uri.encodeComponent(searchTitle)}',
+    );
+
+    try {
+      if (await canLaunchUrl(jdAppUri)) {
+        final launched = await launchUrl(
+          jdAppUri,
+          mode: LaunchMode.externalApplication,
+        );
+        if (launched) return;
+      }
+    } catch (_) {}
+
+    // Fallback to JD web
+    try {
+      await launchUrl(jdWebUri, mode: LaunchMode.externalApplication);
+    } catch (e) {
+      if (mounted) {
+        AppToast.show(context, '无法打开购买链接: $e');
+      }
     }
   }
 
@@ -3209,6 +3827,10 @@ class _ProductPageState extends State<ProductPage>
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
+    final actionBarHeight = math.max(
+      44.0,
+      MediaQuery.textScalerOf(context).scale(12) * 1.4 + 22,
+    );
     const primaryGreen = Color(0xFF00B074);
 
     final raw = _detail ?? const <String, dynamic>{};
@@ -3239,9 +3861,22 @@ class _ProductPageState extends State<ProductPage>
               ? '${(int.parse('$followNumRaw') / 10000).toStringAsFixed(1)}万'
               : '$followNumRaw');
 
-    final scoreStr = (raw['score'] ?? raw['star_average_score'] ?? '7.7')
+    final isUnreleased =
+        raw['release_status'] == 0 || raw['release_status']?.toString() == '0';
+    final releaseTime = (raw['release_time_txt'] ?? raw['release_time'] ?? '')
         .toString();
-    final scoreVal = double.tryParse(scoreStr) ?? 7.7;
+    final wishCount = num.tryParse('${raw['wish_count'] ?? 0}')?.toInt() ?? 0;
+    final wishCountText = wishCount >= 10000
+        ? '${(wishCount / 10000).toStringAsFixed(1)}万'
+        : '$wishCount';
+
+    final scoreStr =
+        (raw['score'] ??
+                raw['star_average_score'] ??
+                raw['rating_average_score'] ??
+                '0')
+            .toString();
+    final scoreVal = double.tryParse(scoreStr) ?? 0;
     final starCount = (scoreVal / 2).clamp(1.0, 5.0).round();
 
     final batteryScore =
@@ -3268,30 +3903,30 @@ class _ProductPageState extends State<ProductPage>
         7.1;
 
     final commentSummary =
-        (raw['comment_num_txt'] ??
-                '${raw['owner_comment_num'] ?? '3550'}机主点评 ${raw['detail_comment_num'] ?? '3327'}详细点评')
-            .toString();
+        raw['comment_num_txt']?.toString().trim().isNotEmpty == true
+        ? raw['comment_num_txt'].toString()
+        : isUnreleased
+        ? '${raw['owner_star_total_count'] ?? 0}机主点评 ${raw['rating_total_num'] ?? 0}详细点评'
+        : '${raw['owner_comment_num'] ?? '3550'}机主点评 ${raw['detail_comment_num'] ?? '3327'}详细点评';
 
     final specsTags = <String>[
-      if ((raw['release_time_txt'] ?? raw['release_time'] ?? '')
-          .toString()
-          .isNotEmpty)
-        '${raw['release_time_txt'] ?? raw['release_time']} 上市'
-      else
+      if (releaseTime.isNotEmpty)
+        '$releaseTime 上市'
+      else if (!isUnreleased)
         '2025-10-13 上市',
       if ((raw['chip'] ?? raw['soc'] ?? raw['processor'] ?? '')
           .toString()
           .isNotEmpty)
         (raw['chip'] ?? raw['soc'] ?? raw['processor']).toString()
-      else
+      else if (!isUnreleased)
         '天玑 9500',
       if ((raw['screen_size'] ?? raw['screen'] ?? '').toString().isNotEmpty)
         (raw['screen_size'] ?? raw['screen']).toString()
-      else
+      else if (!isUnreleased)
         '6.78 英寸',
       if ((raw['screen_type'] ?? '').toString().isNotEmpty)
         raw['screen_type'].toString()
-      else
+      else if (!isUnreleased)
         '直屏',
       if ((raw['battery'] ?? '').toString().isNotEmpty)
         raw['battery'].toString(),
@@ -3301,39 +3936,118 @@ class _ProductPageState extends State<ProductPage>
 
     return Scaffold(
       extendBody: true,
-      body: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) => [
-          SliverAppBar(
-            pinned: true,
-            elevation: 0,
-            scrolledUnderElevation: 1,
-            backgroundColor: theme.scaffoldBackgroundColor,
-            leading: IconButton(
-              icon: const Icon(Icons.arrow_back_rounded),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            title: innerBoxIsScrolled
-                ? Text(
-                    productTitle,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+      appBar: AppBar(
+        elevation: 0,
+        scrolledUnderElevation: 1,
+        backgroundColor: theme.scaffoldBackgroundColor,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        titleSpacing: 4,
+        title: ValueListenableBuilder<bool>(
+          valueListenable: _compactHeader,
+          builder: (context, compact, _) => compact
+              ? Row(
+                  key: const ValueKey('product-compact-header'),
+                  children: [
+                    if (logo.isNotEmpty) ...[
+                      SizedBox(
+                        width: 28,
+                        height: 34,
+                        child: CachedNetworkImage(
+                          normalizeCoolapkImageUrl(logo),
+                          headers: coolapkImageHeaders(logo, api: widget.api),
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            productTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                          if (!isUnreleased && scoreVal > 0)
+                            Semantics(
+                              label: '机型评分 $scoreStr 分',
+                              child: ExcludeSemantics(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  alignment: Alignment.centerLeft,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      for (var i = 0; i < 5; i++)
+                                        Icon(
+                                          scoreVal / 2 >= i + 1
+                                              ? Icons.star_rounded
+                                              : scoreVal / 2 > i
+                                              ? Icons.star_half_rounded
+                                              : Icons.star_outline_rounded,
+                                          size: 12,
+                                          color: const Color(0xFFFFA000),
+                                        ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        scoreStr,
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Color(0xFFFFA000),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
+                  ],
+                )
+              : const SizedBox.shrink(),
+        ),
+        actions: [
+          ValueListenableBuilder<bool>(
+            valueListenable: _compactHeader,
+            builder: (context, compact, _) => compact
+                ? TextButton(
+                    key: const ValueKey('product-compact-follow'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: scheme.onSurface,
+                      backgroundColor: scheme.surfaceContainerHighest,
+                      minimumSize: const Size(64, 48),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                    ),
+                    onPressed: _followWorking ? null : _toggleFollow,
+                    child: Text(_following ? '已关注' : '关注'),
                   )
-                : null,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.search_rounded),
-                onPressed: () => Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        SearchPage(api: widget.api, initialQuery: productTitle),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-            ],
+                : const SizedBox.shrink(),
           ),
+          IconButton(
+            tooltip: '搜索机型',
+            icon: const Icon(Icons.search_rounded),
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    SearchPage(api: widget.api, initialQuery: productTitle),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      body: NestedScrollView(
+        key: const ValueKey('product-nested-scroll'),
+        controller: _outerScroll,
+        headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
@@ -3497,92 +4211,129 @@ class _ProductPageState extends State<ProductPage>
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                            InkWell(
-                              onTap: () {},
-                              child: Text(
-                                '详细数据 >',
+                            if (isUnreleased)
+                              Text(
+                                releaseTime.isEmpty ? '未发布' : '$releaseTime上市',
                                 style: TextStyle(
                                   fontSize: 11.5,
                                   color: scheme.onSurfaceVariant.withValues(
                                     alpha: 0.8,
                                   ),
                                 ),
+                              )
+                            else
+                              InkWell(
+                                onTap: () {},
+                                child: Text(
+                                  '详细数据 >',
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: scheme.onSurfaceVariant.withValues(
+                                      alpha: 0.8,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
                           ],
                         ),
                         const SizedBox(height: 10),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            SizedBox(
-                              width: 108,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    scoreVal.toStringAsFixed(1),
-                                    style: const TextStyle(
-                                      fontSize: 38,
-                                      fontWeight: FontWeight.w900,
-                                      height: 1.1,
-                                    ),
+                        if (isUnreleased)
+                          SizedBox(
+                            height: 112,
+                            child: Center(
+                              child: Text.rich(
+                                TextSpan(
+                                  style: TextStyle(
+                                    color: scheme.onSurfaceVariant,
                                   ),
-                                  const SizedBox(height: 3),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      for (var s = 0; s < 5; s++)
-                                        Icon(
-                                          s < starCount
-                                              ? Icons.star_rounded
-                                              : Icons.star_outline_rounded,
-                                          size: 15,
-                                          color: s < starCount
-                                              ? const Color(0xFFFFA000)
-                                              : scheme.outlineVariant,
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 3),
-                                  Text(
-                                    '机主评分',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: scheme.onSurfaceVariant.withValues(
-                                        alpha: 0.7,
+                                  children: [
+                                    TextSpan(
+                                      text: wishCountText,
+                                      style: const TextStyle(
+                                        fontSize: 28,
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    const TextSpan(
+                                      text: ' 人想买',
+                                      style: TextStyle(fontSize: 16),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                            Container(
-                              height: 90,
-                              width: 1,
-                              margin: const EdgeInsets.symmetric(
-                                horizontal: 10,
+                          )
+                        else
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 108,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Text(
+                                      scoreVal.toStringAsFixed(1),
+                                      style: const TextStyle(
+                                        fontSize: 38,
+                                        fontWeight: FontWeight.w900,
+                                        height: 1.1,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        for (var s = 0; s < 5; s++)
+                                          Icon(
+                                            s < starCount
+                                                ? Icons.star_rounded
+                                                : Icons.star_outline_rounded,
+                                            size: 15,
+                                            color: s < starCount
+                                                ? const Color(0xFFFFA000)
+                                                : scheme.outlineVariant,
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      '机主评分',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: scheme.onSurfaceVariant
+                                            .withValues(alpha: 0.7),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                              color: scheme.outlineVariant.withValues(
-                                alpha: 0.2,
+                              Container(
+                                height: 90,
+                                width: 1,
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                ),
+                                color: scheme.outlineVariant.withValues(
+                                  alpha: 0.2,
+                                ),
                               ),
-                            ),
-                            Expanded(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  _buildScoreBar('续航', batteryScore, scheme),
-                                  _buildScoreBar('影像', cameraScore, scheme),
-                                  _buildScoreBar('性能', perfScore, scheme),
-                                  _buildScoreBar('屏幕', screenScore, scheme),
-                                  _buildScoreBar('外观质感', designScore, scheme),
-                                  _buildScoreBar('性价比', valueScore, scheme),
-                                ],
+                              Expanded(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _buildScoreBar('续航', batteryScore, scheme),
+                                    _buildScoreBar('影像', cameraScore, scheme),
+                                    _buildScoreBar('性能', perfScore, scheme),
+                                    _buildScoreBar('屏幕', screenScore, scheme),
+                                    _buildScoreBar('外观质感', designScore, scheme),
+                                    _buildScoreBar('性价比', valueScore, scheme),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
+                            ],
+                          ),
                         const SizedBox(height: 12),
                         Divider(
                           height: 1,
@@ -3612,11 +4363,19 @@ class _ProductPageState extends State<ProductPage>
                               () => AppToast.show(context, '已加入想买清单'),
                             ),
                             const SizedBox(width: 8),
-                            _buildCapsuleAction(
-                              '打分',
-                              scheme,
-                              () => AppToast.show(context, '评分功能需登录机主账号'),
-                            ),
+                            if (isUnreleased)
+                              _buildCapsuleAction(
+                                '未发布',
+                                scheme,
+                                null,
+                                outlined: true,
+                              )
+                            else
+                              _buildCapsuleAction(
+                                '打分',
+                                scheme,
+                                () => AppToast.show(context, '评分功能需登录机主账号'),
+                              ),
                           ],
                         ),
                       ],
@@ -3665,111 +4424,45 @@ class _ProductPageState extends State<ProductPage>
               ),
             ),
           ),
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _SliverTabBarDelegate(
-              TabBar(
-                controller: _tabController,
-                isScrollable: true,
-                tabAlignment: TabAlignment.start,
-                indicatorColor: primaryGreen,
-                indicatorWeight: 3,
-                labelColor: primaryGreen,
-                labelStyle: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                ),
-                unselectedLabelColor: scheme.onSurfaceVariant,
-                unselectedLabelStyle: const TextStyle(fontSize: 14),
-                dividerColor: Colors.transparent,
-                tabs: [for (final tab in _tabs) Tab(text: tab.title)],
-              ),
-              color: theme.scaffoldBackgroundColor,
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: AnimatedBuilder(
-              animation: _tabController,
-              builder: (context, _) {
-                final currentIndex = _tabController.index;
-                if (currentIndex >= _tabs.length) {
-                  return const SizedBox.shrink();
-                }
-                final currentTab = _tabs[currentIndex];
-                if (currentTab.type != 'feed' && currentTab.type != 'rating') {
-                  return const SizedBox.shrink();
-                }
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            currentTab.type == 'feed' ? '全部讨论' : '全部点评',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                              color: scheme.onSurface,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.sort_rounded,
-                            size: 16,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ],
-                      ),
-                      Container(
-                        padding: const EdgeInsets.all(2.5),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? const Color(0xFF222222)
-                              : scheme.surfaceContainerHighest.withValues(
-                                  alpha: 0.5,
-                                ),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildSortChip(
-                              '默认',
-                              'default',
-                              primaryGreen,
-                              scheme,
-                              isDark,
-                            ),
-                            _buildSortChip(
-                              '最新',
-                              'latest',
-                              primaryGreen,
-                              scheme,
-                              isDark,
-                            ),
-                            _buildSortChip(
-                              '热度',
-                              'hot',
-                              primaryGreen,
-                              scheme,
-                              isDark,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+          SliverOverlapAbsorber(
+            handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+            sliver: SliverPersistentHeader(
+              pinned: true,
+              delegate: _SliverTabBarDelegate(
+                TabBar(
+                  controller: _tabController,
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  indicatorColor: primaryGreen,
+                  indicatorWeight: 3,
+                  indicator: const _ProductTabIndicator(),
+                  labelColor: primaryGreen,
+                  labelStyle: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
                   ),
-                );
-              },
+                  unselectedLabelColor: scheme.onSurfaceVariant,
+                  unselectedLabelStyle: const TextStyle(fontSize: 16),
+                  dividerColor: Colors.transparent,
+                  tabs: [for (final tab in _tabs) Tab(text: tab.title)],
+                ),
+                color: theme.scaffoldBackgroundColor,
+              ),
             ),
           ),
         ],
-        body: TabBarView(
-          controller: _tabController,
-          children: [for (final tab in _tabs) _buildTabContent(tab, raw)],
+        body: Builder(
+          builder: (context) => TabBarView(
+            controller: _tabController,
+            children: [
+              for (final tab in _tabs)
+                _buildTabContent(
+                  tab,
+                  raw,
+                  NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+                ),
+            ],
+          ),
         ),
       ),
       bottomNavigationBar: SafeArea(
@@ -3782,9 +4475,9 @@ class _ProductPageState extends State<ProductPage>
             children: [
               SizedBox(
                 width: math.min(176.0, MediaQuery.sizeOf(context).width - 82.0),
-                height: 44,
+                height: actionBarHeight,
                 child: GlassContainer(
-                  height: 44,
+                  height: actionBarHeight,
                   shape: const LiquidRoundedSuperellipse(borderRadius: 9999),
                   settings: ReviewNavigationBar.liquidGlassSettings,
                   quality: ReviewNavigationBar.liquidGlassQuality,
@@ -3799,7 +4492,7 @@ class _ProductPageState extends State<ProductPage>
                             '对比',
                             Icons.compare_arrows_rounded,
                             Colors.white,
-                            () => AppToast.show(context, '已加入机型对比库'),
+                            _openComparison,
                           ),
                         ),
                         Expanded(
@@ -3812,31 +4505,42 @@ class _ProductPageState extends State<ProductPage>
                             _toggleFollow,
                           ),
                         ),
-                        Expanded(
-                          child: _buildBottomAction(
-                            '打分',
-                            Icons.star_border_rounded,
-                            Colors.white,
-                            () => AppToast.show(
-                              context,
-                              widget.api.loginRequiredMessage,
+                        if (isUnreleased)
+                          Expanded(
+                            child: _buildBottomAction(
+                              '未发布',
+                              Icons.star_border_rounded,
+                              scheme.onSurfaceVariant,
+                              null,
+                            ),
+                          )
+                        else ...[
+                          Expanded(
+                            child: _buildBottomAction(
+                              '打分',
+                              Icons.star_border_rounded,
+                              Colors.white,
+                              () => AppToast.show(
+                                context,
+                                widget.api.loginRequiredMessage,
+                              ),
                             ),
                           ),
-                        ),
-                        Expanded(
-                          child: _buildBottomAction(
-                            '购买',
-                            Icons.shopping_bag_outlined,
-                            Colors.white,
-                            () => AppToast.show(context, '正在跳转官方购买渠道'),
+                          Expanded(
+                            child: _buildBottomAction(
+                              '购买',
+                              Icons.shopping_bag_outlined,
+                              Colors.white,
+                              _handleBuy,
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                   ),
                 ),
               ),
-              _greenComposeFab(
+              greenComposeFab(
                 context: context,
                 heroTag: 'product_fab_${widget.id}',
                 useLiquidGlass: true,
@@ -3941,18 +4645,23 @@ class _ProductPageState extends State<ProductPage>
   Widget _buildCapsuleAction(
     String label,
     ColorScheme scheme,
-    VoidCallback onTap,
-  ) {
+    VoidCallback? onTap, {
+    bool outlined = false,
+  }) {
     return InkWell(
       borderRadius: BorderRadius.circular(14),
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          color: outlined
+              ? Colors.transparent
+              : scheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.3),
+            color: scheme.outlineVariant.withValues(
+              alpha: outlined ? 0.6 : 0.3,
+            ),
             width: 0.5,
           ),
         ),
@@ -3971,41 +4680,39 @@ class _ProductPageState extends State<ProductPage>
   Widget _buildSortChip(
     String label,
     String mode,
-    Color primaryGreen,
     ColorScheme scheme,
     bool isDark,
   ) {
     final selected = _sortMode == mode;
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () {
-        if (_sortMode == mode) return;
-        HapticFeedbackUtil.selection();
-        setState(() => _sortMode = mode);
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: selected
-              ? (isDark ? const Color(0xFF2E2E2E) : scheme.surface)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    blurRadius: 3,
-                    offset: const Offset(0, 1),
-                  ),
-                ]
-              : null,
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 11.5,
-            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            color: selected ? primaryGreen : scheme.onSurfaceVariant,
+    return Semantics(
+      button: true,
+      selected: selected,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          if (_sortMode == mode) return;
+          HapticFeedbackUtil.selection();
+          setState(() => _sortMode = mode);
+        },
+        child: SizedBox(
+          height: 48,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: selected
+                    ? (isDark ? const Color(0xFF1E1E1E) : scheme.surface)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -4016,7 +4723,7 @@ class _ProductPageState extends State<ProductPage>
     String label,
     IconData icon,
     Color color,
-    VoidCallback onTap,
+    VoidCallback? onTap,
   ) {
     return InkWell(
       borderRadius: BorderRadius.circular(30),
@@ -4030,8 +4737,9 @@ class _ProductPageState extends State<ProductPage>
             const SizedBox(height: 2),
             Text(
               label,
+              maxLines: 1,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: FontWeight.w500,
                 color: color,
               ),
@@ -4042,9 +4750,145 @@ class _ProductPageState extends State<ProductPage>
     );
   }
 
-  Widget _buildTabContent(_ProductTab tab, Map<String, dynamic> raw) {
+  Widget _buildProductListHeader(_ProductTab tab, Map<String, dynamic> raw) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final isPrice = tab.type == 'subTabFeed' && tab.subId == '6';
+    final price = isPrice
+        ? ProductPrice.tryParse(raw['subtab_statistics_item6'])
+        : null;
+    final sortable = isPrice || tab.type == 'feed' || tab.type == 'rating';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (price != null)
+          Container(
+            key: const ValueKey('product-price-summary'),
+            margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: dark ? const Color(0xFF1E1E1E) : scheme.surfaceContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.currency_yen_rounded,
+                      size: 16,
+                      color: Color(0xFFFF9800),
+                    ),
+                    const SizedBox(width: 4),
+                    const Text('到手价', style: TextStyle(fontSize: 13)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        price.updatedAt.isEmpty
+                            ? ''
+                            : '发布时间：${price.updatedAt}',
+                        textAlign: TextAlign.end,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '当前最低价 ',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const TextSpan(text: '¥', style: TextStyle(fontSize: 20)),
+                      TextSpan(
+                        text: price.formatted,
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (sortable)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    isPrice
+                        ? '排序规则'
+                        : tab.type == 'feed'
+                        ? '全部讨论'
+                        : '全部点评',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+                SizedBox(
+                  height: 48,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        top: 8,
+                        bottom: 8,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: dark
+                                ? const Color(0xFF2C2C2C)
+                                : scheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                        ),
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildSortChip('默认', 'default', scheme, dark),
+                          _buildSortChip('最新', 'latest', scheme, dark),
+                          _buildSortChip('热度', 'hot', scheme, dark),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTabContent(
+    _ProductTab tab,
+    Map<String, dynamic> raw,
+    SliverOverlapAbsorberHandle overlapHandle,
+  ) {
     if (tab.type == 'main') {
-      return _ProductSpecsFullView(api: widget.api, id: widget.id, raw: raw);
+      return RepaintBoundary(
+        child: _ProductSpecsFullView(
+          api: widget.api,
+          id: widget.id,
+          raw: raw,
+          overlapHandle: overlapHandle,
+        ),
+      );
     }
     if (tab.type == 'external') {
       final parsed = _parseApiRoute(tab.url ?? '');
@@ -4056,28 +4900,42 @@ class _ProductPageState extends State<ProductPage>
         query: parsed.$2,
         showAppBar: false,
         nested: true,
+        overlapHandle: overlapHandle,
       );
     }
-    return ApiListPage(
-      key: ValueKey('prod-${tab.type}-${tab.subId ?? ""}-${widget.id}'),
-      api: widget.api,
-      title: tab.title,
-      path: '/v6/page/dataList',
-      query: {
-        'url': '/page?url=/product/feedList',
-        'id': widget.id,
-        'type': tab.type,
-        if (tab.subId != null && tab.subId!.isNotEmpty) 'subId': tab.subId!,
-        if (tab.type == 'feed')
-          'listType': _sortMode == 'latest'
-              ? 'dateline_desc'
-              : (_sortMode == 'hot' ? 'hot_desc' : 'lastupdate_desc'),
-        if (tab.type == 'rating')
-          'listType': _sortMode == 'latest' ? 'dateline_desc' : 'hot_desc',
-        if (tab.type == 'trade') 'listType': 'dateline_desc',
-      },
-      showAppBar: false,
-      nested: true,
+    final uri = Uri.tryParse(tab.url ?? '');
+    final inner = Uri.tryParse(uri?.queryParameters['url'] ?? tab.url ?? '');
+    return RepaintBoundary(
+      child: ApiListPage(
+        key: ValueKey('prod-${tab.type}-${tab.subId ?? ""}-${widget.id}'),
+        api: widget.api,
+        title: tab.title,
+        path: '/v6/page/dataList',
+        query: {
+          ...?inner?.queryParameters,
+          'url': '/page?url=/product/feedList',
+          'id': widget.id,
+          'type': tab.type,
+          'withSortCard': 0,
+          'withSubTabFeedCard': 0,
+          if (tab.subId != null && tab.subId!.isNotEmpty) 'subId': tab.subId!,
+          if (tab.type == 'feed')
+            'listType': _sortMode == 'latest'
+                ? 'dateline_desc'
+                : _sortMode == 'hot'
+                ? 'hot_desc'
+                : 'lastupdate_desc',
+          if (tab.type == 'rating')
+            'listType': _sortMode == 'latest' ? 'dateline_desc' : 'hot_desc',
+          if (tab.type == 'subTabFeed' && _sortMode != 'default')
+            'listType': _sortMode == 'latest' ? 'dateline_desc' : 'rank_score',
+          if (tab.type == 'trade') 'listType': 'dateline_desc',
+        },
+        header: _buildProductListHeader(tab, raw),
+        showAppBar: false,
+        nested: true,
+        overlapHandle: overlapHandle,
+      ),
     );
   }
 
@@ -4101,6 +4959,34 @@ class _ProductPageState extends State<ProductPage>
   }
 }
 
+class _ProductTabIndicator extends Decoration {
+  const _ProductTabIndicator();
+
+  @override
+  BoxPainter createBoxPainter([VoidCallback? onChanged]) =>
+      _ProductTabIndicatorPainter();
+}
+
+class _ProductTabIndicatorPainter extends BoxPainter {
+  @override
+  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
+    final size = configuration.size;
+    if (size == null) return;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          offset.dx + (size.width - 12) / 2,
+          offset.dy + size.height - 7,
+          12,
+          3,
+        ),
+        const Radius.circular(2),
+      ),
+      Paint()..color = const Color(0xFF009688),
+    );
+  }
+}
+
 class _SliverTabBarDelegate extends SliverPersistentHeaderDelegate {
   _SliverTabBarDelegate(this._tabBar, {required this.color});
 
@@ -4108,9 +4994,9 @@ class _SliverTabBarDelegate extends SliverPersistentHeaderDelegate {
   final Color color;
 
   @override
-  double get minExtent => _tabBar.preferredSize.height;
+  double get minExtent => _tabBar.preferredSize.height + 20;
   @override
-  double get maxExtent => _tabBar.preferredSize.height;
+  double get maxExtent => _tabBar.preferredSize.height + 20;
 
   @override
   Widget build(
@@ -4118,7 +5004,21 @@ class _SliverTabBarDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    return ColoredBox(color: color, child: _tabBar);
+    return ColoredBox(
+      color: color,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          child: ColoredBox(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? const Color(0xFF1E1E1E)
+                : Theme.of(context).colorScheme.surfaceContainer,
+            child: Center(child: _tabBar),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -4132,157 +5032,281 @@ class _ProductSpecsFullView extends StatefulWidget {
     required this.api,
     required this.id,
     required this.raw,
+    required this.overlapHandle,
   });
 
   final CoolapkApi api;
   final String id;
   final Map<String, dynamic> raw;
+  final SliverOverlapAbsorberHandle overlapHandle;
 
   @override
   State<_ProductSpecsFullView> createState() => _ProductSpecsFullViewState();
 }
 
-class _ProductSpecsFullViewState extends State<_ProductSpecsFullView> {
-  List<Map<String, dynamic>> _params = const [];
+class _ProductSpecsFullViewState extends State<_ProductSpecsFullView>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+  final _params = <(String, String?)>[];
+  String? _selectedConfig;
+  String? _error;
   bool _loading = false;
+
+  List<Map> get _configs =>
+      (widget.raw['configRows'] is List
+              ? widget.raw['configRows'] as List
+              : const [])
+          .whereType<Map>()
+          .toList(growable: false);
+
+  void _populateFallbackParams() {
+    if (_params.isNotEmpty) return;
+    final raw = widget.raw;
+    if (raw.isEmpty) return;
+    final rows = <(String, String?)>[];
+
+    // 基本信息
+    rows.add(('基本信息', null));
+    final releaseTime = (raw['release_time_txt'] ?? raw['release_time'] ?? '').toString();
+    if (releaseTime.isNotEmpty) rows.add(('上市时间', releaseTime));
+    final price = (raw['price'] ?? raw['price_str'] ?? '').toString();
+    if (price.isNotEmpty) rows.add(('官方价格', price.startsWith('¥') ? price : '¥$price'));
+
+    // 性能
+    final chip = (raw['chip'] ?? raw['soc'] ?? raw['processor'] ?? '').toString();
+    if (chip.isNotEmpty) {
+      rows.add(('性能与配置', null));
+      rows.add(('处理器 / 芯片', chip));
+      final ram = (raw['ram'] ?? '').toString();
+      final rom = (raw['rom'] ?? '').toString();
+      if (ram.isNotEmpty || rom.isNotEmpty) {
+        rows.add(('存储组合', '$ram $rom'.trim()));
+      }
+    }
+
+    // 屏幕
+    final screenSize = (raw['screen_size'] ?? raw['screen'] ?? '').toString();
+    final screenType = (raw['screen_type'] ?? '').toString();
+    final resolution = (raw['screen_resolution'] ?? '').toString();
+    final refreshRate = (raw['screen_refresh_rate'] ?? '').toString();
+    if (screenSize.isNotEmpty || screenType.isNotEmpty || resolution.isNotEmpty) {
+      rows.add(('屏幕规格', null));
+      if (screenSize.isNotEmpty) rows.add(('屏幕尺寸', screenSize));
+      if (screenType.isNotEmpty) rows.add(('材质 / 形态', screenType));
+      if (resolution.isNotEmpty) rows.add(('分辨率', resolution));
+      if (refreshRate.isNotEmpty) rows.add(('刷新率', refreshRate));
+    }
+
+    // 影像
+    final mainCamera = (raw['main_camera'] ?? raw['camera'] ?? '').toString();
+    final cameraBrand = (raw['camera_brand'] ?? '').toString();
+    if (mainCamera.isNotEmpty || cameraBrand.isNotEmpty) {
+      rows.add(('影像系统', null));
+      if (cameraBrand.isNotEmpty && cameraBrand != '-') rows.add(('影像联名', cameraBrand));
+      if (mainCamera.isNotEmpty) rows.add(('后置主摄', mainCamera));
+    }
+
+    // 续航与机身
+    final battery = (raw['battery'] ?? '').toString();
+    final charging = (raw['charging'] ?? '').toString();
+    final thickness = (raw['thickness'] ?? '').toString();
+    final weight = (raw['weight'] ?? '').toString();
+    if (battery.isNotEmpty || charging.isNotEmpty || thickness.isNotEmpty || weight.isNotEmpty) {
+      rows.add(('续航与机身', null));
+      if (battery.isNotEmpty) rows.add(('电池容量', battery));
+      if (charging.isNotEmpty) rows.add(('充电规格', charging));
+      if (thickness.isNotEmpty || weight.isNotEmpty) {
+        rows.add(('机身尺寸', '$thickness / $weight'.replaceAll(RegExp(r'^/|/$'), '').trim()));
+      }
+    }
+
+    if (rows.length > 1) {
+      _params.addAll(rows);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadParams();
+    _populateFallbackParams();
+    _loadInitialConfig();
   }
 
-  Future<void> _loadParams() async {
-    setState(() => _loading = true);
+  @override
+  void didUpdateWidget(covariant _ProductSpecsFullView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _populateFallbackParams();
+    _loadInitialConfig();
+  }
+
+  void _loadInitialConfig() {
+    if (_params.isEmpty) _populateFallbackParams();
+    if (_selectedConfig == null && _configs.isNotEmpty) {
+      final id = '${_configs.first['id'] ?? ''}';
+      if (id.isNotEmpty) _loadConfig(id);
+    }
+  }
+
+  Future<void> _loadConfig(String id) async {
+    final oldParams = List<(String, String?)>.from(_params);
+    setState(() {
+      _selectedConfig = id;
+      _loading = true;
+      _error = null;
+    });
     try {
-      final res = await widget.api.request(
-        '/v6/product/paramList',
-        query: {'id': widget.id},
+      final response = await widget.api.request(
+        '/v6/product/config',
+        query: {'id': id},
       );
-      final data = res['data'];
-      if (data is List && mounted) {
+      final data = decodeProductObject(response['data']);
+      if (data.isEmpty) throw const FormatException('暂无参数配置');
+      final config = decodeProductObject(data['config_data']);
+      final rows = <(String, String?)>[];
+      void append(Map values, String prefix, int depth) {
+        if (depth > 8) return;
+        for (final entry in values.entries) {
+          final name = prefix.isEmpty
+              ? '${entry.key}'
+              : '$prefix / ${entry.key}';
+          if (entry.value is Map) {
+            if (depth == 0) rows.add((name, null));
+            append(entry.value as Map, depth == 0 ? '' : name, depth + 1);
+          } else {
+            final value = entry.value is List
+                ? (entry.value as List).join('、')
+                : '${entry.value ?? ''}'.trim();
+            if (value.isNotEmpty) rows.add((name, value));
+          }
+        }
+      }
+
+      append(config, '', 0);
+      if (!mounted || _selectedConfig != id) return;
+      setState(() {
+        _params.clear();
+        _params.addAll(rows.isNotEmpty ? rows : oldParams);
+      });
+    } catch (error) {
+      if (mounted && _selectedConfig == id) {
         setState(() {
-          _params = data
-              .whereType<Map>()
-              .map(Map<String, dynamic>.from)
-              .toList();
+          _error = '$error';
+          if (_params.isEmpty) {
+            _params.addAll(oldParams);
+            _populateFallbackParams();
+          }
         });
       }
-    } catch (_) {
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && _selectedConfig == id) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final scheme = Theme.of(context).colorScheme;
-    if (_loading && _params.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final displayParams = _params.isNotEmpty
-        ? _params
-        : [
-            {
-              'title': '处理器',
-              'value':
-                  widget.raw['chip'] ??
-                  widget.raw['processor'] ??
-                  '天玑 9500 / 骁龙 8 至尊版',
-            },
-            {
-              'title': '屏幕尺寸',
-              'value': widget.raw['screen_size'] ?? '6.78 英寸 AMOLED',
-            },
-            {
-              'title': '屏幕分辨率',
-              'value': widget.raw['screen_resolution'] ?? '2800 × 1260 像素',
-            },
-            {
-              'title': '刷新率',
-              'value': widget.raw['screen_refresh_rate'] ?? '1-120Hz 8T LTPO',
-            },
-            {'title': '电池容量', 'value': widget.raw['battery'] ?? '6000mAh 蓝海电池'},
-            {
-              'title': '充电功率',
-              'value': widget.raw['charging'] ?? '90W 超快闪充 + 30W 无线闪充',
-            },
-            {
-              'title': '后置主摄',
-              'value': widget.raw['camera_main'] ?? '5000万像素 索尼定制超大底 OIS',
-            },
-            {
-              'title': '潜望长焦',
-              'value': widget.raw['camera_tele'] ?? '2亿像素 蔡司 APO 超级长焦',
-            },
-            {
-              'title': '前置镜头',
-              'value': widget.raw['camera_front'] ?? '5000万像素 超感光前置',
-            },
-            {
-              'title': '机身尺寸与重量',
-              'value':
-                  widget.raw['dimensions'] ?? '164.0 × 75.3 × 8.2mm, 约 223g',
-            },
-            {
-              'title': '操作系统',
-              'value': widget.raw['os'] ?? 'OriginOS 5 / Android 15',
-            },
-            {
-              'title': '防水等级',
-              'value': widget.raw['waterproof'] ?? 'IP68 & IP69 防尘抗水',
-            },
-          ];
-
-    return ListView.separated(
-      padding: EdgeInsets.fromLTRB(
-        16,
-        12,
-        16,
-        80 + MediaQuery.paddingOf(context).bottom,
-      ),
-      itemCount: displayParams.length,
-      separatorBuilder: (_, _) => Divider(
-        height: 1,
-        thickness: 0.5,
-        color: scheme.outlineVariant.withValues(alpha: 0.2),
-      ),
-      itemBuilder: (context, index) {
-        final item = displayParams[index];
-        final name = (item['title'] ?? item['name'] ?? item['key'] ?? '')
-            .toString();
-        final value = (item['value'] ?? item['val'] ?? '').toString();
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 100,
-                child: Text(
-                  name,
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w500,
-                    color: scheme.onSurface,
-                  ),
-                ),
-              ),
-            ],
+    return CustomScrollView(
+      key: PageStorageKey('product-specs-${widget.id}'),
+      primary: false,
+      physics: const ClampingScrollPhysics(),
+      slivers: [
+        SliverOverlapInjector(handle: widget.overlapHandle),
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            12,
+            16,
+            80 + MediaQuery.paddingOf(context).bottom,
           ),
-        );
-      },
+          sliver: SliverList.builder(
+            itemCount: _params.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final config in _configs)
+                          ChoiceChip(
+                            label: Text('${config['title'] ?? ''}'),
+                            selected: _selectedConfig == '${config['id']}',
+                            onSelected: (selected) {
+                              if (selected) _loadConfig('${config['id']}');
+                            },
+                          ),
+                      ],
+                    ),
+                    if (_loading)
+                      const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    if (!_loading && _params.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          children: [
+                            Text(_error ?? '暂无参数'),
+                            if (_error != null && _selectedConfig != null)
+                              TextButton(
+                                onPressed: () => _loadConfig(_selectedConfig!),
+                                child: const Text('重试'),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                );
+              }
+              final (name, value) = _params[index - 1];
+              if (value == null) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 20, bottom: 8),
+                  child: Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                );
+              }
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 100,
+                      child: Text(
+                        name,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        value,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
@@ -4901,6 +5925,10 @@ class _TopicPageState extends State<TopicPage>
       final detailMap = data is Map
           ? Map<String, dynamic>.from(data)
           : response;
+      if (isActivityTopic(detailMap)) {
+        setState(() => _detail = detailMap);
+        return;
+      }
       final isFollow = _flag(detailMap, ['isFollow', 'is_follow', 'followed']);
 
       final title = _first(detailMap, ['title', 'tag', 'name']);
@@ -5801,6 +6829,14 @@ class _TopicPageState extends State<TopicPage>
 
   @override
   Widget build(BuildContext context) {
+    if (_detail != null && (isActivityTopic(_detail!) || _cleanTag == '人像摄影')) {
+      return ActivityTopicView(
+        api: widget.api,
+        tag: _cleanTag,
+        detail: _detail!,
+        headerColor: _cleanTag == '人像摄影' ? const Color(0xFF63643C) : null,
+      );
+    }
     final title = _first(_detail, ['title', 'tag', 'name']);
     final displayTitle = title.isNotEmpty
         ? title
@@ -5857,7 +6893,7 @@ class _TopicPageState extends State<TopicPage>
 
       return Scaffold(
         appBar: ReviewFrostedAppBar(title: Text('#$displayTitle#')),
-        floatingActionButton: _greenComposeFab(
+        floatingActionButton: greenComposeFab(
           context: context,
           heroTag: 'topic_fab_${widget.tag}',
           onPressed: () {
@@ -6047,7 +7083,7 @@ class _TopicPageState extends State<TopicPage>
 
     return Scaffold(
       backgroundColor: _profile.primaryBg,
-      floatingActionButton: _greenComposeFab(
+      floatingActionButton: greenComposeFab(
         context: context,
         heroTag: 'topic_fab_${widget.tag}',
         onPressed: () {
@@ -6349,26 +7385,42 @@ class _RetryView extends StatelessWidget {
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
-          FilledButton.tonal(onPressed: onRetry, child: const Text('重试')),
-        ],
+  Widget build(BuildContext context) {
+    final lower = message.toLowerCase();
+    final isCaptcha =
+        lower.contains('captcha') ||
+        message.contains('验证码') ||
+        message.contains('受限') ||
+        message.contains('限制') ||
+        lower.contains('403');
+    if (isCaptcha) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('暂无内容', textAlign: TextAlign.center),
+        ),
+      );
+    }
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(message, textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('重试')),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 Widget _avatar(String value, double size, {required CoolapkApi api}) =>
     AppAvatar(api: api, url: value, size: size);
 
-String _entityKey(Map<String, dynamic> value) =>
-    '${value['entityType'] ?? value['entity_type']}:${value['id'] ?? value['uid'] ?? value['url']}:${value['title']}';
+String _entityKey(Map<String, dynamic> value) => coolapkEntityKey(value);
 
 String _first(Map<String, dynamic>? data, Iterable<String> keys) {
   if (data == null) return '';

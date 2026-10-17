@@ -20,6 +20,13 @@ Widget filterHorizontalScrollNotifications(Widget child) =>
       child: child,
     );
 
+Widget protectHorizontalDragFromVerticalRefresh(Widget child) =>
+    GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: (_) {},
+      child: child,
+    );
+
 Widget _buildFrostedAppBarRefreshIndicator(
   BuildContext context,
   IndicatorState state,

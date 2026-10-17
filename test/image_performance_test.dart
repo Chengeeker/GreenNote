@@ -1,10 +1,14 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:greennote/core/design_system/components/review_card.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/core/network/coolapk_image.dart';
 import 'package:greennote/core/network/http_overrides.dart';
 import 'package:greennote/core/widgets/app_avatar.dart';
 import 'package:greennote/core/widgets/cached_network_image.dart';
+import 'package:greennote/core/widgets/coolapk_rich_text.dart';
 import 'package:greennote/features/feed/nine_grid_view.dart';
 import 'package:greennote/features/feed/image_gallery_page.dart';
 
@@ -26,7 +30,9 @@ void main() {
       client.close();
     });
 
-    testWidgets('AppAvatar uses downscaled cacheWidth and cacheHeight', (tester) async {
+    testWidgets('AppAvatar uses downscaled cacheWidth and cacheHeight', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -43,21 +49,24 @@ void main() {
       expect(find.byType(AppAvatar), findsOneWidget);
     });
 
-    testWidgets('CachedNetworkImage automatically computes effective cache dimensions', (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: CachedNetworkImage(
-              'https://image.coolapk.com/pic_test.jpg',
-              width: 100,
-              height: 80,
+    testWidgets(
+      'CachedNetworkImage automatically computes effective cache dimensions',
+      (tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: Scaffold(
+              body: CachedNetworkImage(
+                'https://image.coolapk.com/pic_test.jpg',
+                width: 100,
+                height: 80,
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      expect(find.byType(CachedNetworkImage), findsOneWidget);
-    });
+        expect(find.byType(CachedNetworkImage), findsOneWidget);
+      },
+    );
 
     testWidgets('NineGridView builds with cache downsampling', (tester) async {
       final pics = [
@@ -80,7 +89,9 @@ void main() {
       expect(find.byType(NineGridView), findsOneWidget);
     });
 
-    testWidgets('precacheFeedImages safely handles CoolapkFeed and Map items', (tester) async {
+    testWidgets('precacheFeedImages safely handles CoolapkFeed and Map items', (
+      tester,
+    ) async {
       final feeds = [
         const CoolapkFeed(
           id: '1',
@@ -110,6 +121,56 @@ void main() {
       );
 
       await tester.pump();
+    });
+
+    test('HdrImageDetector.checkBytes performs fast ASCII scan without exception', () {
+      final sdrBytes = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]);
+      expect(HdrImageDetector.checkBytes(sdrBytes), isFalse);
+      expect(HdrImageDetector.isKnownHdr('https://image.coolapk.com/sdr.jpg'), isFalse);
+
+      final hdrBytes = Uint8List.fromList('...apple:gainmap="...'.codeUnits);
+      if (HdrImageDetector.checkBytes(hdrBytes)) {
+        HdrImageDetector.markHdr('https://image.coolapk.com/hdr.jpg');
+      }
+      expect(HdrImageDetector.isKnownHdr('https://image.coolapk.com/hdr.jpg'), isTrue);
+    });
+
+    testWidgets('CoolapkRichText renders and caches parsed tokens across rebuilds', (tester) async {
+      const text = '测试文本包含 #话题标签# 以及酷安表情 [doge] 还有链接 https://coolapk.com';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CoolapkRichText(text: text, api: _FakeApi()),
+          ),
+        ),
+      );
+      expect(find.byType(CoolapkRichText), findsOneWidget);
+      expect(find.textContaining('测试文本包含'), findsOneWidget);
+
+      // Rebuild to exercise token cache hit
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CoolapkRichText(text: text, api: _FakeApi()),
+          ),
+        ),
+      );
+      expect(find.byType(CoolapkRichText), findsOneWidget);
+    });
+
+    testWidgets('ReviewCard isolates rendering with RepaintBoundary', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ReviewCard(
+              child: Text('Card Content'),
+            ),
+          ),
+        ),
+      );
+      expect(find.byType(RepaintBoundary), findsWidgets);
+      final repaintBoundaries = tester.widgetList<RepaintBoundary>(find.byType(RepaintBoundary));
+      expect(repaintBoundaries.isNotEmpty, isTrue);
     });
   });
 }

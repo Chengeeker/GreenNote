@@ -19,9 +19,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show RenderImage, RenderClipRRect, PlatformViewHitTestBehavior;
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
+import '../../core/storage/storage_path_resolver.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/utils/haptic_feedback_util.dart';
 
@@ -171,6 +173,11 @@ Widget imageGalleryHeroFlightShuttleBuilder(
   if (source == null) return fromHero.child;
 
   final isPop = flightDirection == HeroFlightDirection.pop;
+  if (!isPop) {
+    toHeroContext
+        .findAncestorStateOfType<_ImageGalleryPageState>()
+        ?._retainOpeningPreview(source.image);
+  }
   if (isPop && (tag is! ImageGalleryHeroTag || !tag.thumbnailUsesCover)) {
     return fromHero.child;
   }
@@ -432,6 +439,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   int _thumbnailSyncEpoch = 0;
   double? _thumbnailScrollBottom;
   final Expando<ExtendedImageGesture> _pagingImages = Expando();
+  ui.Image? _openingPreview;
   final Set<int> _galleryPointers = {};
   int? _galleryTapPointer;
   Offset? _galleryTapDownPosition;
@@ -553,6 +561,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
 
   @override
   void dispose() {
+    _openingPreview?.dispose();
     HdrImageDetector.notifier.removeListener(_onHdrDetected);
     _mediaChannel.setMethodCallHandler(null);
     _galleryTapTimer?.cancel();
@@ -582,6 +591,15 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     if (!mounted) return;
     setState(() {});
     _updateWindowHdr();
+  }
+
+  void _retainOpeningPreview(ui.Image image) {
+    if (_openingPreview != null) return;
+    // The flight can end before the separately sized original is decoded.
+    _openingPreview = image.clone();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _updateWindowHdr() {
@@ -654,18 +672,27 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
         'image/avif' => 'avif',
         _ => 'jpg',
       };
+      final prefs = await SharedPreferences.getInstance();
+      final pathType = prefs.getInt('greennote.image_save_path_type') ?? 0;
+      final subDir = StoragePathResolver.resolveSubDir(
+        pathType: pathType,
+        myNickname: widget.api.currentUserNickname,
+        authorName: widget.authorName,
+        isVideo: false,
+      );
       final savedPath = await _mediaChannel.invokeMethod<String>(
         'saveMediaToGallery',
         {
           'bytes': Uint8List.fromList(bytes),
           'fileName': 'gn_${DateTime.now().microsecondsSinceEpoch}.$ext',
-          'relativeSubDir': 'Greennote',
+          'relativeSubDir': subDir,
+          'isVideo': false,
           'mimeType': mime,
         },
       );
       HapticFeedbackUtil.medium();
       if (mounted) {
-        AppToast.show(context, '图片已保存至相册：${savedPath ?? "Pictures/Greennote"}');
+        AppToast.show(context, '图片已保存至相册：${savedPath ?? "Picture/$subDir"}');
       }
     } catch (_) {
       if (mounted) AppToast.show(context, '保存失败，请检查网络和相册权限后重试');
@@ -1094,6 +1121,15 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                     mode: ExtendedImageMode.gesture,
                     enableSlideOutPage: false,
                     loadStateChanged: (state) {
+                      if (state.extendedImageLoadState == LoadState.loading &&
+                          index == widget.initialIndex &&
+                          _openingPreview != null) {
+                        return RawImage(
+                          key: const ValueKey('gallery-opening-preview'),
+                          image: _openingPreview,
+                          fit: BoxFit.contain,
+                        );
+                      }
                       if (state.extendedImageLoadState != LoadState.completed) {
                         return null;
                       }

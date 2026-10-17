@@ -120,6 +120,12 @@ void main() {
             body: DigitalRankGridCard(
               api: _FakeCoolapkApi(),
               title: '今日热门',
+              items: const [
+                {'title': '一加16'},
+                {'title': '荣耀 Magic9 Pro'},
+                {'title': '小米18 Pro Max'},
+                {'title': 'iPhone 18 Pro Max'},
+              ],
               subTitle: '榜单',
               onMoreTap: () {
                 moreTapped = true;
@@ -172,6 +178,42 @@ void main() {
       );
 
       expect(find.text('我的关注'), findsNothing);
+    });
+
+    testWidgets('anonymous UID account opens its local followed products', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      final api = _FakeCoolapkApi(anonymousValue: true);
+      api.localAccount = LocalAccount(await SharedPreferences.getInstance());
+      await api.localAccount.setPublicIdentity(
+        uid: '12345',
+        username: '公开主页',
+        userAvatar: '',
+      );
+      await api.localAccount.setActive(true);
+      await api.localAccount.toggle('productFollows', '34001', {
+        'id': '34001',
+        'title': '本地机型',
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: DigitalFollowCard(api: api, emptyText: '还没有关注的机型'),
+          ),
+        ),
+      );
+      expect(find.text('本地机型'), findsOneWidget);
+      await tester.tap(find.text('更多'));
+      await tester.pumpAndSettle();
+      expect(find.text('本地机型'), findsOneWidget);
+      expect(find.byTooltip('取消本地关注'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('取消本地关注'));
+      await tester.pump();
+      expect(find.text('还没有关注的机型'), findsOneWidget);
+      expect(api.localAccount.productFollows, isEmpty);
     });
 
     testWidgets(
@@ -249,7 +291,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
 
-      expect(find.text('关注设备需要先登录酷安账号'), findsOneWidget);
+      expect(find.text('请先登录'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 3));
     });
 
     testWidgets('Tapping follow when logged in sends follow API request', (
@@ -275,6 +318,39 @@ void main() {
         fakeApi.requestedPaths.contains('/v6/product/changeFollowStatus'),
         isTrue,
       );
+      expect(find.text('已关注 一加16'), findsOneWidget);
+    });
+
+    testWidgets('Tapping follow on anonymous UID account saves locally', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      final fakeApi = _FakeCoolapkApi(anonymousValue: true);
+      fakeApi.localAccount = LocalAccount(
+        await SharedPreferences.getInstance(),
+      );
+      await fakeApi.localAccount.setPublicIdentity(
+        uid: '12345',
+        username: '公开主页',
+        userAvatar: '',
+      );
+      await fakeApi.localAccount.setActive(true);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: DigitalLibraryView(api: fakeApi)),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final followBtn = find.text('关注').first;
+      await tester.ensureVisible(followBtn);
+      await tester.pump();
+      await tester.tap(followBtn);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(fakeApi.localAccount.productFollows['34676']['title'], '一加16');
       expect(find.text('已关注 一加16'), findsOneWidget);
     });
 
@@ -337,7 +413,18 @@ void main() {
       expect(find.byTooltip('消息'), findsOneWidget);
 
       // Tab 1 (Digital)
-      await tester.tap(find.text('数码'));
+      tester
+          .widget<Semantics>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is Semantics &&
+                  !widget.container &&
+                  widget.properties.label == '数码' &&
+                  widget.properties.onTap != null,
+            ),
+          )
+          .properties
+          .onTap!();
       await tester.pump();
       final firstDigitalPage = find
           .ancestor(
@@ -354,7 +441,18 @@ void main() {
       expect(find.text('APP'), findsOneWidget);
 
       // Tab 3 (My)
-      await tester.tap(find.text('我的'));
+      tester
+          .widget<Semantics>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is Semantics &&
+                  !widget.container &&
+                  widget.properties.label == '我的' &&
+                  widget.properties.onTap != null,
+            ),
+          )
+          .properties
+          .onTap!();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('我的'), findsWidgets);
@@ -468,10 +566,7 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(
             home: Scaffold(
-              body: DigitalServerChannelView(
-                api: fakeApi,
-                url: 'V15_PAD',
-              ),
+              body: DigitalServerChannelView(api: fakeApi, url: 'V15_PAD'),
             ),
           ),
         );
@@ -543,10 +638,7 @@ void main() {
         await tester.pumpWidget(
           MaterialApp(
             home: Scaffold(
-              body: DigitalLibraryView(
-                api: fakeApi,
-                initialCategoryId: '1000',
-              ),
+              body: DigitalLibraryView(api: fakeApi, initialCategoryId: '1000'),
             ),
           ),
         );
@@ -583,9 +675,7 @@ void main() {
         final fakeApi = _FakeCoolapkApi();
         await tester.pumpWidget(
           MaterialApp(
-            home: Scaffold(
-              body: CoolPicPage(api: fakeApi),
-            ),
+            home: Scaffold(body: CoolPicPage(api: fakeApi)),
           ),
         );
         await tester.pump();
@@ -617,21 +707,27 @@ class _FakeCoolapkApi implements CoolapkApi {
   @override
   late final LocalAccount localAccount;
   @override
-  bool get isAnonymous => false;
+  bool get isAnonymous => anonymousValue;
 
-  _FakeCoolapkApi({this.hasCookieValue = false});
+  _FakeCoolapkApi({this.hasCookieValue = false, this.anonymousValue = false});
 
   final bool hasCookieValue;
+  final bool anonymousValue;
   final List<String> requestedPaths = [];
 
   @override
   String get currentUid => '12345';
+  @override
+  String get loginRequiredMessage => '请先登录';
 
   @override
   String get currentUserAvatar => 'https://img.coolapk.com/avatar.jpg';
 
   @override
   bool get hasCookie => hasCookieValue;
+
+  @override
+  bool get hasAccount => isAnonymous || hasCookie;
 
   @override
   Map<String, String> imageHeadersFor() => const {};
@@ -906,6 +1002,30 @@ class _FakeCoolapkApi implements CoolapkApi {
       };
     }
     return {'data': <dynamic>[]};
+  }
+
+  @override
+  Future<void> followProduct(
+    String productId, {
+    required bool following,
+    Map<String, dynamic>? product,
+  }) async {
+    if (isAnonymous) {
+      await localAccount.toggle('productFollows', productId, {
+        'id': productId,
+        for (final key in const [
+          'title',
+          'pic',
+          'logo',
+          'cover',
+          'hot_num',
+          'votenum',
+        ])
+          if (product?[key] != null) key: product![key].toString(),
+      });
+    } else {
+      requestedPaths.add('/v6/product/changeFollowStatus');
+    }
   }
 
   @override

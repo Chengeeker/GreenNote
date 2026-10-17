@@ -1,11 +1,13 @@
 import 'package:easy_refresh/easy_refresh.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../../../core/network/coolapk_api.dart';
 import '../../../core/widgets/review_refresh_header.dart';
 import '../../feed/feed_pages.dart';
 import '../../shared/api_list_page.dart';
 import '../widgets/digital_cards.dart';
+import '../widgets/digital_home_cards.dart';
 
 class DigitalHomeView extends StatefulWidget {
   const DigitalHomeView({
@@ -30,6 +32,11 @@ class _DigitalHomeViewState extends State<DigitalHomeView>
 
   bool _loading = false;
   String? _error;
+  String? _followError;
+  int _page = 0;
+  bool _hasMore = true;
+  String _first = '';
+  String _last = '';
   List<Map<String, dynamic>> _serverCards = [];
 
   static const _libraryCategoryIds = {
@@ -51,37 +58,82 @@ class _DigitalHomeViewState extends State<DigitalHomeView>
     _loadData();
   }
 
-  Future<void> _loadData() async {
-    if (_loading) return;
-    setState(() {
-      _loading = true;
-    });
-
+  Future<IndicatorResult> _loadData({bool refresh = true}) async {
+    if (_loading) return IndicatorResult.none;
+    if (!refresh && !_hasMore) return IndicatorResult.noMore;
+    setState(() => _loading = true);
     try {
-      final res = await widget.api.request(
+      final result = await widget.api.getList(
         '/v6/page/dataList',
-        query: const {'url': 'V10_DIGITAL_HOME', 'page': 1},
+        query: {
+          'url': 'V10_DIGITAL_HOME',
+          'page': refresh ? 1 : _page + 1,
+          if (!refresh && _first.isNotEmpty) 'firstItem': _first,
+          if (!refresh && _last.isNotEmpty) 'lastItem': _last,
+        },
       );
-      if (!mounted) return;
-
-      final dataList = res['data'];
-      if (dataList is List) {
-        setState(() {
-          _serverCards = dataList
-              .whereType<Map>()
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList();
+      if (!mounted) return IndicatorResult.none;
+      final cards = result.items
+          .where(
+            (c) =>
+                c['entityTemplate'] != 'configCard' && c['entityType'] != 'ad',
+          )
+          .toList();
+      if (refresh) {
+        final follow = cards
+            .where(
+              (c) =>
+                  c['title'] == '我的关注' ||
+                  '${c['entityTemplate']}'.toLowerCase().contains('follow'),
+            )
+            .firstOrNull;
+        cards.remove(follow);
+        _followError = null;
+        var followed = widget.api.isAnonymous
+            ? widget.api.localAccount.productFollows.values
+                  .map((item) => Map<String, dynamic>.from(item as Map))
+                  .toList()
+            : widget.api.hasCookie && follow != null
+            ? digitalHomeEntities(follow)
+            : <Map<String, dynamic>>[];
+        if (follow == null && widget.api.hasCookie) {
+          try {
+            final result = await widget.api.getList(
+              '/v6/page/dataList',
+              query: const {'url': '#/product/followProductList', 'page': 1},
+            );
+            followed = result.items
+                .where((c) => c['entityType'] == 'product')
+                .toList();
+          } catch (error) {
+            _followError = '关注加载失败，点击重试';
+          }
+        }
+        if (!mounted) return IndicatorResult.none;
+        cards.insert(0, {
+          'entityTemplate': 'followCard',
+          'title': '我的关注',
+          'entities': followed,
         });
       }
-      _error = null;
+      setState(() {
+        if (refresh) _serverCards = [];
+        final known = _serverCards.map(coolapkEntityKey).toSet();
+        _serverCards.addAll(cards.where((c) => known.add(coolapkEntityKey(c))));
+        _page = result.page;
+        _hasMore = result.hasMore;
+        _first = result.firstItem;
+        _last = result.lastItem;
+        _error = null;
+      });
+      return refresh || _hasMore
+          ? IndicatorResult.success
+          : IndicatorResult.noMore;
     } catch (error) {
-      _error = '数码首页加载失败：$error';
+      if (mounted) setState(() => _error = '数码首页加载失败：$error');
+      return IndicatorResult.fail;
     } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -124,7 +176,6 @@ class _DigitalHomeViewState extends State<DigitalHomeView>
   Widget build(BuildContext context) {
     super.build(context);
 
-    // If server returned cards, check if we can parse custom blocks from them
     final hasServerCards = _serverCards.isNotEmpty;
     if (_loading && !hasServerCards) {
       return const Center(child: CircularProgressIndicator());
@@ -141,179 +192,139 @@ class _DigitalHomeViewState extends State<DigitalHomeView>
       );
     }
 
-    // Look for category grid card in server response
-    Map<String, dynamic>? serverCategoryCard;
-    Map<String, dynamic>? serverRankCard;
-    Map<String, dynamic>? serverBannerCard;
-    Map<String, dynamic>? serverFollowCard;
-    final otherCards = <Map<String, dynamic>>[];
-
-    if (hasServerCards) {
-      for (final card in _serverCards) {
-        final template = (card['entityTemplate'] ?? '')
-            .toString()
-            .toLowerCase();
-        final rawTitle = (card['title'] ?? '').toString();
-
-        if (rawTitle.contains('我的关注') || template.contains('follow')) {
-          serverFollowCard = card;
-        } else if (template.contains('iconlinkgrid') ||
-            template.contains('icontablinkgrid')) {
-          serverCategoryCard = card;
-        } else if (template.contains('iconlongtitlegrid') ||
-            template.contains('iconminigrid') ||
-            rawTitle.contains('热门') ||
-            card['withRanking'] == 1 ||
-            card['withRanking'] == '1') {
-          serverRankCard = card;
-        } else if (template.contains('imagecarousel') ||
-            template.contains('imagecard')) {
-          serverBannerCard ??= card;
-        } else {
-          otherCards.add(card);
-        }
-      }
-    }
-
-    final List<Map<String, dynamic>>? categoryItems =
-        serverCategoryCard != null && serverCategoryCard['entities'] is List
-        ? (serverCategoryCard['entities'] as List)
-              .whereType<Map>()
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList()
-        : null;
-
-    final List<Map<String, dynamic>>? rankItems =
-        serverRankCard != null && serverRankCard['entities'] is List
-        ? (serverRankCard['entities'] as List)
-              .whereType<Map>()
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList()
-        : null;
-
-    final List<Map<String, dynamic>> followItems =
-        serverFollowCard != null && serverFollowCard['entities'] is List
-        ? (serverFollowCard['entities'] as List)
-              .whereType<Map>()
-              .map((e) => Map<String, dynamic>.from(e))
-              .toList()
-        : const [];
-
-    final bannerUrl = serverBannerCard != null
-        ? (serverBannerCard['pic'] ??
-                  (serverBannerCard['entities'] is List &&
-                          (serverBannerCard['entities'] as List).isNotEmpty
-                      ? (serverBannerCard['entities'] as List)[0]['pic']
-                      : null))
-              ?.toString()
-        : null;
-
-    return EasyRefresh(
-      header: reviewDefaultRefreshHeader,
-      onRefresh: _loadData,
-      child: filterHorizontalScrollNotifications(
-        ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.fromLTRB(
-            0,
-            8,
-            0,
-            24 + MediaQuery.paddingOf(context).bottom,
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    return Theme(
+      data: theme.copyWith(
+        cardTheme: theme.cardTheme.copyWith(
+          color: dark
+              ? const Color(0xFF1E1E1E)
+              : theme.colorScheme.surfaceContainerLow,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
-          children: [
-            // 1. "我的关注"（仅当有关注设备时展示）
-            DigitalFollowCard(
-              api: widget.api,
-              items: followItems,
-              onMoreTap: () => widget.onSelectTab?.call(0),
+        ),
+        colorScheme: theme.colorScheme.copyWith(
+          onSurface: dark
+              ? const Color(0xFFCCCCCC)
+              : theme.colorScheme.onSurface,
+          onSurfaceVariant: dark
+              ? const Color(0xFF999999)
+              : theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+      child: EasyRefresh(
+        triggerAxis: Axis.vertical,
+        header: ClassicHeader(
+          textDimension: MediaQuery.sizeOf(context).width - 80,
+          dragText: '下拉刷新',
+          armedText: '释放立即刷新',
+          readyText: '正在刷新...',
+          processingText: '正在刷新...',
+          processedText: '刷新成功',
+          failedText: '刷新失败',
+          noMoreText: '没有更多了',
+          messageText: '最后更新于 %T',
+          showMessage: true,
+        ),
+        footer: const ClassicFooter(
+          showMessage: false,
+          dragText: '上拉加载',
+          armedText: '释放加载',
+          readyText: '正在加载...',
+          processingText: '正在加载...',
+          processedText: '加载完成',
+          failedText: '加载失败',
+          noMoreText: '没有更多了',
+        ),
+        onRefresh: () => _loadData(),
+        onLoad: () => _loadData(refresh: false),
+        child: filterHorizontalScrollNotifications(
+          ListView.builder(
+            scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.only(
+              top: 4,
+              bottom: 24 + MediaQuery.paddingOf(context).bottom,
             ),
-
-            // 2. 10个品类5列网格
-            DigitalCategoryGridCard(
-              api: widget.api,
-              items: categoryItems,
-              onCategoryTap: _handleCategoryTap,
+            itemCount: _serverCards.length,
+            itemBuilder: (context, index) => KeyedSubtree(
+              key: ValueKey(coolapkEntityKey(_serverCards[index])),
+              child: RepaintBoundary(
+                child: _buildDynamicServerCard(_serverCards[index]),
+              ),
             ),
-
-            // 3. 推荐横幅
-            DigitalBannerCard(
-              api: widget.api,
-              imageUrl: bannerUrl,
-              title: serverBannerCard?['title']?.toString() ?? '数码精选',
-              targetUrl: serverBannerCard?['url']?.toString(),
-            ),
-
-            // 4. "今日热门" 8款机型榜单
-            DigitalRankGridCard(
-              api: widget.api,
-              title: serverRankCard?['title']?.toString() ?? '今日热门',
-              subTitle: serverRankCard?['subTitle']?.toString() ?? '榜单',
-              items: rankItems,
-              onMoreTap: () {
-                if (widget.onSelectTab != null) {
-                  widget.onSelectTab!(3); // Navigate to 排行榜
-                }
-              },
-            ),
-
-            // 5. 其余服务端卡片 (如热门系统、评分榜、时间线、动态等)
-            if (otherCards.isNotEmpty)
-              for (final card in otherCards) _buildDynamicServerCard(card),
-          ],
+          ),
         ),
       ),
     );
   }
 
+  void _open(Map<String, dynamic> item) =>
+      openHeadlineTarget(context, widget.api, item);
+
   Widget _buildDynamicServerCard(Map<String, dynamic> card) {
     final template = (card['entityTemplate'] ?? '').toString().toLowerCase();
     final type = (card['entityType'] ?? '').toString().toLowerCase();
     final title = (card['title'] ?? '').toString();
-
+    final items = digitalHomeEntities(card);
+    if (template.contains('config') ||
+        template.contains('ad') && type == 'ad') {
+      return const SizedBox.shrink();
+    }
+    if (title == '我的关注' || template.contains('follow')) {
+      return DigitalFollowCard(
+        api: widget.api,
+        items: items.take(2).toList(),
+        emptyText:
+            _followError ?? (widget.api.hasAccount ? '还没有关注的机型' : '登录后查看关注的机型'),
+        onEmptyTap: _followError == null ? null : () => _loadData(),
+      );
+    }
+    if (template.contains('iconlinkgrid') ||
+        template.contains('icontablinkgrid')) {
+      return DigitalCategoryGridCard(
+        api: widget.api,
+        items: items,
+        onCategoryTap: _handleCategoryTap,
+      );
+    }
+    if (template.contains('imagecarousel') || template == 'imagecard') {
+      return DigitalHomeCarousel(
+        key: ValueKey(items.map((e) => e['pic']).join('|')),
+        api: widget.api,
+        card: card,
+        onTap: _open,
+      );
+    }
     if (template.contains('producttimeline')) {
-      final entities = card['entities'] is List
-          ? (card['entities'] as List)
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList()
-          : <Map<String, dynamic>>[];
       return DigitalTimelineCard(
         api: widget.api,
-        title: title.isNotEmpty ? title : '新品日历',
-        items: entities,
-      );
-    }
-
-    if (type.contains('feed') ||
-        (type.isEmpty && card.containsKey('message'))) {
-      final feed = CoolapkFeed.fromJson(card);
-      if (feed.id.isNotEmpty) {
-        return FeedCard(api: widget.api, feed: feed);
-      }
-    }
-
-    if (title.isNotEmpty &&
-        (template.contains('title') || template.contains('header'))) {
-      return DigitalSectionHeaderCard(
         title: title,
-        onTap: () {
-          final url = (card['url'] ?? '').toString();
-          if (url.isNotEmpty) {
-            Navigator.of(context).push<void>(
-              MaterialPageRoute<void>(
-                builder: (_) => ApiListPage(
-                  api: widget.api,
-                  title: title,
-                  path: '/v6/page/dataList',
-                  query: {'url': url},
-                ),
-              ),
-            );
-          }
-        },
+        items: items,
+        onMoreTap: () => _open(card),
       );
     }
-
+    if (template.contains('grid')) {
+      final extra = digitalHomeExtra(card);
+      return DigitalRankGridCard(
+        api: widget.api,
+        title: title,
+        subTitle: (card['subTitle'] ?? '更多').toString(),
+        items: items,
+        showRanking: '${extra['withRanking'] ?? card['withRanking']}' == '1',
+        onItemTap: _open,
+        onMoreTap: () => _open(card),
+      );
+    }
+    if (template == 'iconlistcard' || template == 'feedlistcard') {
+      return DigitalHomeListCard(api: widget.api, card: card, onTap: _open);
+    }
+    if (type == 'feed' || type == 'feedcover') {
+      final feed = CoolapkFeed.fromJson(card);
+      if (feed.id.isNotEmpty) return FeedCard(api: widget.api, feed: feed);
+    }
     return ApiEntityCard(api: widget.api, entity: card);
   }
 }

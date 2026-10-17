@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../core/design_system/components/review_frosted_app_bar.dart';
 import '../../../core/network/coolapk_api.dart';
 import '../../../core/utils/haptic_feedback_util.dart';
+import '../../../core/widgets/review_refresh_header.dart';
 import 'digital_server_channel_view.dart';
 
 class DigitalBrandPage extends StatefulWidget {
@@ -25,7 +26,6 @@ class DigitalBrandPage extends StatefulWidget {
 
 class _DigitalBrandPageState extends State<DigitalBrandPage> {
   List<Map<String, dynamic>> _tabs = const [];
-  String _contentUrl = '';
   int _selectedIndex = 0;
   bool _loading = true;
   String? _error;
@@ -107,9 +107,6 @@ class _DigitalBrandPageState extends State<DigitalBrandPage> {
       setState(() {
         _tabs = tabs;
         _selectedIndex = selectedIndex;
-        _contentUrl = tabs.isEmpty
-            ? widget.url
-            : (tabs[selectedIndex]['url'] ?? widget.url).toString();
         _loading = false;
       });
     } catch (error) {
@@ -121,14 +118,14 @@ class _DigitalBrandPageState extends State<DigitalBrandPage> {
     }
   }
 
-  void _selectTab(int index) {
-    if (index == _selectedIndex) return;
-    HapticFeedbackUtil.selection();
-    setState(() {
-      _selectedIndex = index;
-      _contentUrl = (_tabs[index]['url'] ?? '').toString();
-    });
-  }
+  Widget _series(String url) => DigitalServerChannelView(
+    key: ValueKey(url),
+    api: widget.api,
+    url: url,
+    bottomPadding: 24,
+    groupProductRows: true,
+    initialSortTitle: '最新',
+  );
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -145,66 +142,49 @@ class _DigitalBrandPageState extends State<DigitalBrandPage> {
               ],
             ),
           )
-        : Column(
-            children: [
-              if (_tabs.isNotEmpty)
-                SizedBox(
-                  height: 48,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    itemCount: _tabs.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 24),
-                    itemBuilder: (context, index) {
-                      final selected = index == _selectedIndex;
-                      return InkWell(
-                        onTap: () => _selectTab(index),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Text(
-                                (_tabs[index]['title'] ?? '').toString(),
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: selected
-                                      ? const Color(0xFF00B074)
-                                      : Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                  fontWeight: selected
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                ),
-                              ),
-                            ),
-                            Container(
-                              height: 3,
-                              width: 24,
-                              decoration: BoxDecoration(
-                                color: selected
-                                    ? const Color(0xFF00B074)
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+        : _tabs.isEmpty
+        ? _series(widget.url)
+        : DefaultTabController(
+            length: _tabs.length,
+            initialIndex: _selectedIndex,
+            child: Column(
+              children: [
+                TabBar(
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 12),
+                  labelColor: const Color(0xFF00B074),
+                  unselectedLabelColor: Theme.of(context)
+                      .colorScheme
+                      .onSurfaceVariant,
+                  labelStyle: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  unselectedLabelStyle: const TextStyle(fontSize: 16),
+                  indicatorColor: const Color(0xFF00B074),
+                  indicatorWeight: 3,
+                  indicatorSize: TabBarIndicatorSize.label,
+                  dividerColor: Colors.transparent,
+                  onTap: (_) => HapticFeedbackUtil.selection(),
+                  tabs: [
+                    for (final tab in _tabs)
+                      Tab(text: (tab['title'] ?? '').toString()),
+                  ],
+                ),
+                Expanded(
+                  child: filterHorizontalScrollNotifications(
+                    TabBarView(
+                      physics: const ClampingScrollPhysics(),
+                      children: [
+                        for (final tab in _tabs) _series(tab['url'].toString()),
+                      ],
+                    ),
                   ),
                 ),
-              Expanded(
-                child: DigitalServerChannelView(
-                  key: ValueKey(_contentUrl),
-                  api: widget.api,
-                  url: _contentUrl,
-                  bottomPadding: 24,
-                  groupProductRows: true,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
   );
 }

@@ -12,6 +12,83 @@ void main() {
     expect(reviewFrostedAppBarRefreshHeader.position, IndicatorPosition.above);
   });
 
+  testWidgets('horizontal gestures do not trigger vertical refresh', (
+    tester,
+  ) async {
+    var refreshCount = 0;
+    final refreshCompleter = Completer<void>();
+    final horizontalController = ScrollController();
+    const staticTargetKey = ValueKey('horizontal-static-target');
+    const horizontalListKey = ValueKey('horizontal-scroll-list');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: EasyRefresh(
+            triggerAxis: Axis.vertical,
+            onRefresh: () {
+              refreshCount++;
+              return refreshCompleter.future;
+            },
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(
+                  height: 120,
+                  child: protectHorizontalDragFromVerticalRefresh(
+                    ColoredBox(
+                      key: staticTargetKey,
+                      color: Colors.transparent,
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  height: 144,
+                  child: protectHorizontalDragFromVerticalRefresh(
+                    ListView.builder(
+                      key: horizontalListKey,
+                      controller: horizontalController,
+                      scrollDirection: Axis.horizontal,
+                      itemCount: 8,
+                      itemBuilder: (_, index) => SizedBox(
+                        width: 120,
+                        child: Center(child: Text('item $index')),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 700),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byKey(staticTargetKey), const Offset(150, 100));
+    await tester.pump();
+    expect(refreshCount, 0);
+
+    await tester.drag(find.byKey(horizontalListKey), const Offset(-120, 0));
+    await tester.pumpAndSettle();
+    expect(horizontalController.offset, greaterThan(0));
+
+    await tester.drag(find.byKey(staticTargetKey), const Offset(0, 120));
+    await tester.pump();
+    for (var attempt = 0; attempt < 20 && refreshCount == 0; attempt++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(refreshCount, 1);
+
+    refreshCompleter.complete();
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+    horizontalController.dispose();
+  });
+
   testWidgets('refreshes without counting the overlay app-bar inset twice', (
     tester,
   ) async {

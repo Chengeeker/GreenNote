@@ -747,7 +747,10 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
             // 同步服务端初始关注状态
             final isFollow = entity['is_follow'];
             final id = (entity['id'] ?? entity['entityId'] ?? '').toString();
-            if (id.isNotEmpty && (isFollow == 1 || isFollow == '1')) {
+            if (id.isNotEmpty &&
+                (widget.api.isAnonymous
+                    ? widget.api.localAccount.productFollows.containsKey(id)
+                    : isFollow == 1 || isFollow == '1')) {
               _followedProductIds.add(id);
             }
           }
@@ -822,9 +825,13 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
   }
 
   // 6. 真实关注动作交互与接口调用
-  Future<void> _toggleFollow(String id, String title) async {
+  Future<void> _toggleFollow(
+    String id,
+    String title,
+    Map<String, dynamic> product,
+  ) async {
     HapticFeedbackUtil.light();
-    if (!widget.api.hasCookie) {
+    if (!widget.api.hasAccount) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(widget.api.loginRequiredMessage),
@@ -847,10 +854,10 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
     });
 
     try {
-      await widget.api.request(
-        '/v6/product/changeFollowStatus',
-        method: 'POST',
-        body: {'id': id, 'status': '$newStatus'},
+      await widget.api.followProduct(
+        id,
+        following: isFollowed,
+        product: product,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1547,7 +1554,7 @@ class _DigitalLibraryViewState extends State<DigitalLibraryView>
 
                                 // 绿色胶囊关注按钮
                                 GestureDetector(
-                                  onTap: () => _toggleFollow(id, title),
+                                  onTap: () => _toggleFollow(id, title, p),
                                   child: Container(
                                     width: double.infinity,
                                     height: 24,

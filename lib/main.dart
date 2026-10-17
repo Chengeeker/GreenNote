@@ -15,12 +15,13 @@ import 'core/settings/app_settings.dart';
 import 'core/design_system/components/review_navigation_bar.dart';
 import 'core/theme/app_theme.dart';
 import 'core/utils/app_toast.dart';
+import 'core/utils/coolapk_url_handler.dart';
 import 'core/utils/haptic_feedback_util.dart';
 import 'core/design_system/components/review_frosted_app_bar.dart';
 import 'core/widgets/app_avatar.dart';
 import 'features/feed/feed_pages.dart';
 import 'features/settings/app_settings_page.dart';
-import 'features/shared/api_list_page.dart';
+import 'features/shared/app_market_page.dart';
 import 'features/shell/main_pages.dart';
 
 void main() async {
@@ -259,7 +260,9 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                         : index == _previousIndex && _isTabTransitioning
                         ? _tabOutgoingTransition
                         : const AlwaysStoppedAnimation(Offset.zero),
-                    child: pages[index],
+                    child: RepaintBoundary(
+                      child: pages[index],
+                    ),
                   ),
                 ),
               ),
@@ -271,12 +274,9 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
 
   Widget _buildAppBadgeButton(BuildContext context, CoolapkApi client) {
     return IconButton(
-      tooltip: '应用精选',
+      tooltip: '应用商城',
       onPressed: () => Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              ApiListPage(api: client, title: '应用精选', path: '/v6/apk/rankList'),
-        ),
+        MaterialPageRoute<void>(builder: (_) => AppMarketPage(api: client)),
       ),
       icon: Container(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
@@ -476,6 +476,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
         data: (client) {
           if (!identical(_initializedApi, client)) {
             _initializedApi = client;
+            CoolapkUrlHandler.initLinkListener(client);
             unawaited(
               client.loadHomeTabRoutes().then<void>((_) {}).catchError((_) {}),
             );
@@ -533,11 +534,10 @@ class _StartupScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: ReviewFrostedAppBar(title: const Text('GreenNote')),
-      body: Center(
-        child: error == null
-            ? const CircularProgressIndicator()
-            : Padding(
+      body: error == null
+          ? const SizedBox.expand()
+          : Center(
+              child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -551,7 +551,7 @@ class _StartupScaffold extends StatelessWidget {
                   ],
                 ),
               ),
-      ),
+            ),
     );
   }
 }

@@ -4,10 +4,13 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
-import '../../core/utils/haptic_feedback_util.dart';
 import '../../core/network/coolapk_api.dart';
+import '../../core/storage/storage_path_resolver.dart';
+import '../../core/utils/app_toast.dart';
+import '../../core/utils/haptic_feedback_util.dart';
 
 enum _VideoDragMode { none, brightness, volume }
 
@@ -66,6 +69,8 @@ class _CoolapkVideoPlayerPageState extends State<CoolapkVideoPlayerPage> {
   Duration _targetSeekPosition = Duration.zero;
   Offset _panStartPos = Offset.zero;
   Timer? _hudDismissTimer;
+  String _playableUrl = '';
+  bool _isSavingVideo = false;
 
   @override
   void initState() {
@@ -106,6 +111,7 @@ class _CoolapkVideoPlayerPageState extends State<CoolapkVideoPlayerPage> {
       if (realUrl.isEmpty) {
         throw Exception('无法解析视频播放地址');
       }
+      _playableUrl = realUrl;
 
       final Map<String, String> headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -776,6 +782,19 @@ class _CoolapkVideoPlayerPageState extends State<CoolapkVideoPlayerPage> {
               ),
             ),
             IconButton(
+              icon: _isSavingVideo
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.download_rounded, color: Colors.white),
+              tooltip: '保存视频',
+              onPressed: _isSavingVideo ? null : _saveVideo,
+            ),
+            IconButton(
               icon: const Icon(Icons.speed_rounded, color: Colors.white),
               tooltip: '播放倍速',
               onPressed: _showSpeedPicker,
@@ -794,6 +813,63 @@ class _CoolapkVideoPlayerPageState extends State<CoolapkVideoPlayerPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _saveVideo() async {
+    if (_isSavingVideo) return;
+    final resolvedUrl = _playableUrl.isNotEmpty ? _playableUrl : widget.videoUrl;
+    if (resolvedUrl.isEmpty) {
+      AppToast.show(context, '无法获取视频地址');
+      return;
+    }
+    setState(() => _isSavingVideo = true);
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 25),
+        receiveTimeout: const Duration(seconds: 120),
+      ),
+    );
+    try {
+      final response = await dio.get<List<int>>(
+        resolvedUrl,
+        options: Options(
+          responseType: ResponseType.bytes,
+          followRedirects: true,
+          headers: widget.api.imageHeadersFor(),
+        ),
+      );
+      final bytes = response.data;
+      if (bytes == null || bytes.isEmpty) throw Exception('下载数据为空');
+
+      final prefs = await SharedPreferences.getInstance();
+      final pathType = prefs.getInt('greennote.video_save_path_type') ?? 0;
+      final subDir = StoragePathResolver.resolveSubDir(
+        pathType: pathType,
+        myNickname: widget.api.currentUserNickname,
+        authorName: widget.authorName,
+        isVideo: true,
+      );
+
+      final savedPath = await const MethodChannel('com.green.note/media').invokeMethod<String>(
+        'saveMediaToGallery',
+        {
+          'bytes': Uint8List.fromList(bytes),
+          'fileName': 'gn_${DateTime.now().microsecondsSinceEpoch}.mp4',
+          'relativeSubDir': subDir,
+          'isVideo': true,
+          'mimeType': 'video/mp4',
+        },
+      );
+      HapticFeedbackUtil.medium();
+      if (mounted) {
+        AppToast.show(context, '视频已保存至相册：${savedPath ?? "Movies/$subDir"}');
+      }
+    } catch (_) {
+      if (mounted) AppToast.show(context, '保存视频失败，请重试');
+    } finally {
+      dio.close();
+      if (mounted) setState(() => _isSavingVideo = false);
+    }
   }
 
   Widget _buildBottomBar(Duration position, Duration duration, bool isPlaying) {

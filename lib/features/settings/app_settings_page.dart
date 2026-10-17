@@ -7,7 +7,10 @@ import '../../core/utils/app_dialog.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_section_card.dart';
 import '../../core/utils/haptic_feedback_util.dart';
+import '../account/anonymous_accounts_page.dart';
+import 'cache_management_page.dart';
 import 'personalization_page.dart';
+import 'storage_settings_page.dart';
 import 'webdav_backup_page.dart';
 
 class AppSettingsPage extends StatefulWidget {
@@ -97,6 +100,25 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                     : '登录并管理本机保存的酷安 Cookie',
                 onTap: _openCookieManager,
               ),
+              const Divider(height: 1, indent: 56),
+              ReviewPreferenceTile(
+                leading: Icon(
+                  Icons.switch_account_outlined,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                title: '多匿名账户管理',
+                subtitle: widget.api.isAnonymous
+                    ? '当前: ${widget.api.localAccount.name} · 共 ${widget.api.localAccount.profiles.length} 个账户'
+                    : '管理或切换本机独立匿名账户（共 ${widget.api.localAccount.profiles.length} 个）',
+                onTap: () {
+                  HapticFeedbackUtil.light();
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => AnonymousAccountsPage(api: widget.api),
+                    ),
+                  );
+                },
+              ),
               if (widget.api.hasAccount) ...[
                 const Divider(height: 1, indent: 56),
                 ReviewPreferenceTile(
@@ -150,6 +172,40 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
         AppSectionCard(
           child: Column(
             children: [
+              ReviewPreferenceTile(
+                leading: Icon(
+                  Icons.folder_outlined,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                title: '存储设置',
+                subtitle: '设置图片与视频的存储保存路径',
+                onTap: () {
+                  HapticFeedbackUtil.light();
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => StorageSettingsPage(api: widget.api),
+                    ),
+                  );
+                },
+              ),
+              const Divider(height: 1),
+              ReviewPreferenceTile(
+                leading: Icon(
+                  Icons.cleaning_services_outlined,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                title: '缓存管理',
+                subtitle: '一键物理深度清理，支持设置自动清理阈值',
+                onTap: () {
+                  HapticFeedbackUtil.light();
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const CacheManagementPage(),
+                    ),
+                  );
+                },
+              ),
+              const Divider(height: 1),
               ReviewPreferenceTile(
                 leading: Icon(
                   Icons.cloud_sync_outlined,

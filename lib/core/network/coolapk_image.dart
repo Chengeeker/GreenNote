@@ -138,14 +138,31 @@ class HdrImageDetector {
   static bool checkBytes(List<int> bytes) {
     if (bytes.length < 16) return false;
     final checkLen = math.min(bytes.length, 131072);
-    final header = String.fromCharCodes(bytes.sublist(0, checkLen))
-        .toLowerCase();
-    return header.contains('hdrgm') ||
-        header.contains('hdr-gain-map') ||
-        header.contains('21496:1') ||
-        header.contains('21496:-1') ||
-        header.contains('gainmap') ||
-        header.contains('ultrahdr');
+    const patterns = [
+      [104, 100, 114, 103, 109], // 'hdrgm'
+      [103, 97, 105, 110, 109, 97, 112], // 'gainmap'
+      [50, 49, 52, 57, 54, 58, 49], // '21496:1'
+      [50, 49, 52, 57, 54, 58, 45, 49], // '21496:-1'
+      [104, 100, 114, 45, 103, 97, 105, 110, 45, 109, 97, 112], // 'hdr-gain-map'
+      [117, 108, 116, 114, 97, 104, 100, 114], // 'ultrahdr'
+    ];
+    for (var i = 0; i < checkLen; i++) {
+      for (final p in patterns) {
+        if (i + p.length <= checkLen) {
+          var match = true;
+          for (var j = 0; j < p.length; j++) {
+            var b = bytes[i + j];
+            if (b >= 65 && b <= 90) b += 32; // case-insensitive
+            if (b != p[j]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) return true;
+        }
+      }
+    }
+    return false;
   }
 
   static Future<void> detectFromCache(

@@ -34,12 +34,7 @@ class _MockCoolapkApi extends Fake implements CoolapkApi {
       };
     }
     return {
-      'data': {
-        'title': tag,
-        'tag': tag,
-        'follow_num': '100',
-        'feed_num': '50',
-      },
+      'data': {'title': tag, 'tag': tag, 'follow_num': '100', 'feed_num': '50'},
     };
   }
 
@@ -82,30 +77,36 @@ void main() {
       expect(profile.primaryBg, const Color(0xFF13161C));
     });
 
-    test('resolveSystemProfile identifies OriginOS, HarmonyOS, iOS, One UI, Flyme', () {
-      final origin = resolveSystemProfile('OriginOS 5', 'OriginOS 5');
-      expect(origin.isSystem, isTrue);
-      expect(origin.score, 9.5);
-      expect(origin.brandName, contains('vivo'));
+    test(
+      'resolveSystemProfile identifies OriginOS, HarmonyOS, iOS, One UI, Flyme',
+      () {
+        final origin = resolveSystemProfile('OriginOS 5', 'OriginOS 5');
+        expect(origin.isSystem, isTrue);
+        expect(origin.score, 9.5);
+        expect(origin.brandName, contains('vivo'));
 
-      final harmony = resolveSystemProfile('HarmonyOS NEXT', 'HarmonyOS NEXT');
-      expect(harmony.isSystem, isTrue);
-      expect(harmony.score, 9.5);
-      expect(harmony.brandName, contains('华为'));
+        final harmony = resolveSystemProfile(
+          'HarmonyOS NEXT',
+          'HarmonyOS NEXT',
+        );
+        expect(harmony.isSystem, isTrue);
+        expect(harmony.score, 9.5);
+        expect(harmony.brandName, contains('华为'));
 
-      final ios = resolveSystemProfile('iOS 18', 'iOS 18');
-      expect(ios.isSystem, isTrue);
-      expect(ios.score, 9.4);
-      expect(ios.brandName, 'Apple');
+        final ios = resolveSystemProfile('iOS 18', 'iOS 18');
+        expect(ios.isSystem, isTrue);
+        expect(ios.score, 9.4);
+        expect(ios.brandName, 'Apple');
 
-      final oneui = resolveSystemProfile('One UI 7', 'One UI 7');
-      expect(oneui.isSystem, isTrue);
-      expect(oneui.score, 9.3);
+        final oneui = resolveSystemProfile('One UI 7', 'One UI 7');
+        expect(oneui.isSystem, isTrue);
+        expect(oneui.score, 9.3);
 
-      final flyme = resolveSystemProfile('Flyme 11', 'Flyme 11');
-      expect(flyme.isSystem, isTrue);
-      expect(flyme.score, 9.3);
-    });
+        final flyme = resolveSystemProfile('Flyme 11', 'Flyme 11');
+        expect(flyme.isSystem, isTrue);
+        expect(flyme.score, 9.3);
+      },
+    );
 
     test('resolveSystemProfile identifies feature topics: 灵动岛, 流体云, 自由小窗', () {
       final island = resolveSystemProfile('灵动岛', '灵动岛');
@@ -130,78 +131,84 @@ void main() {
   });
 
   group('TopicPage Widget Tests', () {
-    testWidgets('renders ColorOS17 system topic with 8-dimension rating card and 4 tabs', (tester) async {
-      final mockApi = _MockCoolapkApi();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: TopicPage(
-            api: mockApi,
-            tag: 'ColorOS17',
-            initialTitle: 'ColorOS17',
+    testWidgets(
+      'renders ColorOS17 system topic with 8-dimension rating card and 4 tabs',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(
+              api: mockApi,
+              tag: 'ColorOS17',
+              initialTitle: 'ColorOS17',
+            ),
           ),
-        ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
 
-      // Check title and rating elements
-      expect(find.text('ColorOS17'), findsWidgets);
-      expect(find.text('酷安评分'), findsOneWidget);
-      expect(find.text('9.4'), findsAtLeastNWidgets(1));
-      expect(find.text('用户评分'), findsOneWidget);
+        // Check title and rating elements
+        expect(find.text('ColorOS17'), findsWidgets);
+        expect(find.text('酷安评分'), findsOneWidget);
+        expect(find.text('9.4'), findsAtLeastNWidgets(1));
+        expect(find.text('用户评分'), findsOneWidget);
 
-      // Check 8-dimension items
-      expect(find.text('美观度'), findsOneWidget);
-      expect(find.text('流畅性'), findsOneWidget);
-      expect(find.text('更新维护'), findsOneWidget);
+        // Check 8-dimension items
+        expect(find.text('美观度'), findsOneWidget);
+        expect(find.text('流畅性'), findsOneWidget);
+        expect(find.text('更新维护'), findsOneWidget);
 
-      // Check tabs for OS: 新特性, 讨论, 机型区, 点评
-      expect(find.text('新特性'), findsOneWidget);
-      expect(find.text('讨论'), findsOneWidget);
-      expect(find.text('机型区'), findsOneWidget);
-      expect(find.text('点评'), findsOneWidget);
+        // Check tabs for OS: 新特性, 讨论, 机型区, 点评
+        expect(find.text('新特性'), findsOneWidget);
+        expect(find.text('讨论'), findsOneWidget);
+        expect(find.text('机型区'), findsOneWidget);
+        expect(find.text('点评'), findsOneWidget);
 
-      // Check sub-filter row: 全部讨论 and 默认/最新/热度
-      expect(find.text('全部讨论'), findsOneWidget);
-      expect(find.text('默认'), findsOneWidget);
-      expect(find.text('最新'), findsOneWidget);
-      expect(find.text('热度'), findsOneWidget);
+        // Check sub-filter row: 全部讨论 and 默认/最新/热度
+        expect(find.text('全部讨论'), findsOneWidget);
+        expect(find.text('默认'), findsOneWidget);
+        expect(find.text('最新'), findsOneWidget);
+        expect(find.text('热度'), findsOneWidget);
 
-      // Check FAB
-      expect(find.byType(FloatingActionButton), findsOneWidget);
-    });
+        // Check FAB
+        expect(find.byType(FloatingActionButton), findsOneWidget);
+      },
+    );
 
-    testWidgets('renders HyperOS4柔光玻璃 feature topic with 5-star distribution and 2 tabs', (tester) async {
-      final mockApi = _MockCoolapkApi();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: TopicPage(
-            api: mockApi,
-            tag: 'HyperOS4柔光玻璃',
-            initialTitle: 'HyperOS4柔光玻璃',
+    testWidgets(
+      'renders HyperOS4柔光玻璃 feature topic with 5-star distribution and 2 tabs',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(
+              api: mockApi,
+              tag: 'HyperOS4柔光玻璃',
+              initialTitle: 'HyperOS4柔光玻璃',
+            ),
           ),
-        ),
-      );
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
 
-      // Check title and rating elements
-      expect(find.text('HyperOS4柔光玻璃'), findsWidgets);
-      expect(find.text('酷安评分'), findsOneWidget);
-      expect(find.text('9.6'), findsOneWidget);
+        // Check title and rating elements
+        expect(find.text('HyperOS4柔光玻璃'), findsWidgets);
+        expect(find.text('酷安评分'), findsOneWidget);
+        expect(find.text('9.6'), findsOneWidget);
 
-      // Check 5-star distribution rows
-      expect(find.text('5星'), findsOneWidget);
-      expect(find.text('4星'), findsOneWidget);
-      expect(find.text('1星'), findsOneWidget);
+        // Check 5-star distribution rows
+        expect(find.text('5星'), findsOneWidget);
+        expect(find.text('4星'), findsOneWidget);
+        expect(find.text('1星'), findsOneWidget);
 
-      // Check tabs for feature: 讨论, 点评
-      expect(find.text('讨论'), findsOneWidget);
-      expect(find.text('点评'), findsOneWidget);
-      expect(find.text('机型区'), findsNothing);
+        // Check tabs for feature: 讨论, 点评
+        expect(find.text('讨论'), findsOneWidget);
+        expect(find.text('点评'), findsOneWidget);
+        expect(find.text('机型区'), findsNothing);
 
-      // Check creator row
-      expect(find.textContaining('叫我小张 创建'), findsOneWidget);
-    });
+        // Check creator row
+        expect(find.textContaining('叫我小张 创建'), findsOneWidget);
+      },
+    );
   });
 }

@@ -13,6 +13,28 @@ class MainActivity : FlutterActivity() {
     private var mediaChannel: MethodChannel? = null
     private val mediaExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var uiChannel: MethodChannel? = null
+    private var appManagerChannel: MethodChannel? = null
+    private var cacheChannel: MethodChannel? = null
+    private var linksChannel: MethodChannel? = null
+    private var initialLink: String? = null
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        val data = intent?.dataString
+        if (!data.isNullOrEmpty()) {
+            initialLink = data
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val data = intent.dataString
+        if (!data.isNullOrEmpty()) {
+            linksChannel?.invokeMethod("onLink", data)
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/avatar")
@@ -48,6 +70,165 @@ class MainActivity : FlutterActivity() {
                     )
                 )
                 else -> result.notImplemented()
+            }
+        }
+        appManagerChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.green.note/app_manager",
+        )
+        appManagerChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getInstalledApps" -> mediaExecutor.execute {
+                    try {
+                        val apps = getInstalledApps()
+                        runOnUiThread { result.success(apps) }
+                    } catch (error: Exception) {
+                        runOnUiThread {
+                            result.error("APP_LIST_FAILED", error.message, null)
+                        }
+                    }
+                }
+                "launchApp" -> {
+                    val packageName = call.argument<String>("packageName")
+                    val intent = packageName?.let {
+                        packageManager.getLaunchIntentForPackage(it)
+                    }
+                    if (intent == null) {
+                        result.success(false)
+                    } else {
+                        try {
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (error: Exception) {
+                            result.error("APP_LAUNCH_FAILED", error.message, null)
+                        }
+                    }
+                }
+                "showAppInfo" -> {
+                    val packageName = call.argument<String>("packageName")
+                    if (packageName.isNullOrBlank()) {
+                        result.error("INVALID_PACKAGE", "Missing package name", null)
+                    } else {
+                        try {
+                            startActivity(android.content.Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.parse("package:$packageName"),
+                            ))
+                            result.success(true)
+                        } catch (error: Exception) {
+                            result.error("APP_INFO_FAILED", error.message, null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        cacheChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.green.note/cache",
+        )
+        cacheChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getCacheStats" -> mediaExecutor.execute {
+                    try {
+                        val stats = getCacheStatistics()
+                        runOnUiThread { result.success(stats) }
+                    } catch (error: Exception) {
+                        runOnUiThread {
+                            result.error("CACHE_STATS_FAILED", error.message, null)
+                        }
+                    }
+                }
+                "clearCache" -> mediaExecutor.execute {
+                    try {
+                        val cleared = clearAppCache()
+                        runOnUiThread {
+                            result.success(mapOf("cleared" to cleared, "success" to true))
+                        }
+                    } catch (error: Exception) {
+                        runOnUiThread {
+                            result.error("CACHE_CLEAR_FAILED", error.message, null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        linksChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.green.note/links",
+        )
+        linksChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getInitialLink" -> {
+                    val link = initialLink
+                    initialLink = null
+                    result.success(link)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun getInstalledApps(): List<Map<String, Any>> {
+        val pm = packageManager
+        val applications = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledApplications(
+                android.content.pm.PackageManager.ApplicationInfoFlags.of(
+                    android.content.pm.PackageManager.GET_META_DATA.toLong(),
+                ),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
+        }
+        return applications.mapNotNull { app ->
+            try {
+                val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    pm.getPackageInfo(
+                        app.packageName,
+                        android.content.pm.PackageManager.PackageInfoFlags.of(0),
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.getPackageInfo(app.packageName, 0)
+                }
+                val bitmap = android.graphics.Bitmap.createBitmap(
+                    96,
+                    96,
+                    android.graphics.Bitmap.Config.ARGB_8888,
+                )
+                val iconBytes = try {
+                    val icon = pm.getApplicationIcon(app)
+                    icon.setBounds(0, 0, 96, 96)
+                    icon.draw(android.graphics.Canvas(bitmap))
+                    java.io.ByteArrayOutputStream().use { output ->
+                        bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+                        output.toByteArray()
+                    }
+                } catch (_: Exception) {
+                    byteArrayOf()
+                } finally {
+                    bitmap.recycle()
+                }
+                val apkFiles = (listOfNotNull(app.sourceDir) + app.splitSourceDirs.orEmpty())
+                    .distinct()
+                    .map { java.io.File(it) }
+                mapOf(
+                    "packageName" to app.packageName,
+                    "label" to pm.getApplicationLabel(app).toString(),
+                    "version" to (packageInfo.versionName ?: ""),
+                    "sizeBytes" to apkFiles.sumOf { if (it.isFile) it.length() else 0L },
+                    "updatedAt" to packageInfo.lastUpdateTime,
+                    "isSystem" to (
+                        (app.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                            (app.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                    ),
+                    "canLaunch" to (pm.getLaunchIntentForPackage(app.packageName) != null),
+                    "icon" to iconBytes,
+                )
+            } catch (_: Exception) {
+                null
             }
         }
     }
@@ -251,8 +432,12 @@ class MainActivity : FlutterActivity() {
                     val bytes = call.argument<ByteArray>("bytes")
                     val name = call.argument<String>("fileName") ?: ""
                     val mime = call.argument<String>("mimeType") ?: ""
-                    if (bytes == null || bytes.isEmpty() || !Regex("gn_[0-9]+\\.(jpg|png|gif|webp|avif)").matches(name) || !mime.startsWith("image/")) {
-                        result.error("INVALID_ARGS", "Invalid image", null)
+                    val relativeSubDir = call.argument<String>("relativeSubDir") ?: "GreenNote"
+                    val isVideo = call.argument<Boolean>("isVideo") ?: false
+                    val validMediaName = Regex("gn_[0-9]+.*\\.(jpg|png|gif|webp|avif|mp4|mov|mkv|webm)", RegexOption.IGNORE_CASE).matches(name)
+                    val validMime = mime.startsWith("image/") || mime.startsWith("video/")
+                    if (bytes == null || bytes.isEmpty() || !validMediaName || !validMime) {
+                        result.error("INVALID_ARGS", "Invalid media parameters", null)
                         return@setMethodCallHandler
                     }
                     if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -262,17 +447,25 @@ class MainActivity : FlutterActivity() {
                     }
                     mediaExecutor.execute {
                         try {
+                            val baseDir = if (isVideo) android.os.Environment.DIRECTORY_MOVIES else android.os.Environment.DIRECTORY_PICTURES
+                            val sanitizedSub = relativeSubDir.trim('/').replace(Regex("[\\\\:*?\"<>|]"), "_")
+                            val targetRelativePath = if (sanitizedSub.isNotEmpty()) "$baseDir/$sanitizedSub" else "$baseDir/GreenNote"
+
                             val saved = if (Build.VERSION.SDK_INT >= 29) {
                                 val values = android.content.ContentValues().apply {
                                     put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
                                     put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
-                                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/Greennote")
+                                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, targetRelativePath)
                                     put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
                                 }
-                                val collection = android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                                val uri = contentResolver.insert(collection, values) ?: error("Cannot create image")
+                                val collection = if (isVideo) {
+                                    android.provider.MediaStore.Video.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                                } else {
+                                    android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                                }
+                                val uri = contentResolver.insert(collection, values) ?: error("Cannot create media store entry")
                                 try {
-                                    val output = contentResolver.openOutputStream(uri) ?: error("Cannot open image")
+                                    val output = contentResolver.openOutputStream(uri) ?: error("Cannot open media output stream")
                                     output.use { it.write(bytes) }
                                     values.clear()
                                     values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
@@ -281,19 +474,24 @@ class MainActivity : FlutterActivity() {
                                     contentResolver.delete(uri, null, null)
                                     throw e
                                 }
-                                "Pictures/Greennote/$name"
+                                "$targetRelativePath/$name"
                             } else {
-                                val directory = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "Greennote")
+                                val basePublicDir = if (isVideo) {
+                                    android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MOVIES)
+                                } else {
+                                    android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES)
+                                }
+                                val directory = if (sanitizedSub.isNotEmpty()) java.io.File(basePublicDir, sanitizedSub) else java.io.File(basePublicDir, "GreenNote")
                                 if (!directory.isDirectory && !directory.mkdirs()) error("Cannot create directory")
-                                val image = java.io.File(directory, name)
-                                try { image.outputStream().use { it.write(bytes) } }
-                                catch (e: Exception) { image.delete(); throw e }
-                                android.media.MediaScannerConnection.scanFile(this, arrayOf(image.absolutePath), arrayOf(mime), null)
-                                image.absolutePath
+                                val file = java.io.File(directory, name)
+                                try { file.outputStream().use { it.write(bytes) } }
+                                catch (e: Exception) { file.delete(); throw e }
+                                android.media.MediaScannerConnection.scanFile(this, arrayOf(file.absolutePath), arrayOf(mime), null)
+                                file.absolutePath
                             }
                             runOnUiThread { result.success(saved) }
-                        } catch (_: Exception) {
-                            runOnUiThread { result.error("SAVE_FAILED", "无法保存图片", null) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("SAVE_FAILED", "无法保存媒体: ${e.message}", null) }
                         }
                     }
                 }
@@ -321,11 +519,102 @@ class MainActivity : FlutterActivity() {
         mediaExecutor.shutdown()
         super.onDestroy()
     }
+    private fun getFolderSize(file: java.io.File?): Long {
+        if (file == null || !file.exists()) return 0L
+        if (file.isFile) return file.length()
+        var size = 0L
+        val stack = java.util.ArrayDeque<java.io.File>()
+        stack.push(file)
+        while (stack.isNotEmpty()) {
+            val current = stack.pop()
+            val files = current.listFiles() ?: continue
+            for (f in files) {
+                if (f.isDirectory) {
+                    stack.push(f)
+                } else if (f.isFile) {
+                    size += f.length()
+                }
+            }
+        }
+        return size
+    }
+
+    private fun getCacheStatistics(): Map<String, Long> {
+        val cacheRoots = mutableListOf<java.io.File>()
+        cacheDir?.let { cacheRoots.add(it) }
+        codeCacheDir?.let { cacheRoots.add(it) }
+        externalCacheDirs?.filterNotNull()?.let { cacheRoots.addAll(it) }
+
+        var total = 0L
+        var images = 0L
+        var network = 0L
+        var system = 0L
+
+        val stack = java.util.ArrayDeque<java.io.File>()
+        for (root in cacheRoots) {
+            if (root.exists()) stack.push(root)
+        }
+
+        while (stack.isNotEmpty()) {
+            val current = stack.pop()
+            val files = current.listFiles() ?: continue
+            for (file in files) {
+                if (file.isDirectory) {
+                    stack.push(file)
+                } else if (file.isFile) {
+                    val len = file.length()
+                    total += len
+                    val path = file.absolutePath.lowercase()
+                    if (path.contains("image") || path.endsWith(".png") || path.endsWith(".jpg") ||
+                        path.endsWith(".jpeg") || path.endsWith(".webp") || path.endsWith(".gif")) {
+                        images += len
+                    } else if (path.contains("http") || path.contains("webview") || path.contains("dio") || path.endsWith(".tmp")) {
+                        network += len
+                    } else {
+                        system += len
+                    }
+                }
+            }
+        }
+
+        return mapOf(
+            "total" to total,
+            "images" to images,
+            "network" to network,
+            "system" to system,
+        )
+    }
+
+    private fun clearAppCache(): Long {
+        val cacheRoots = mutableListOf<java.io.File>()
+        cacheDir?.let { cacheRoots.add(it) }
+        codeCacheDir?.let { cacheRoots.add(it) }
+        externalCacheDirs?.filterNotNull()?.let { cacheRoots.addAll(it) }
+
+        var clearedBytes = 0L
+        for (root in cacheRoots) {
+            if (root.exists()) {
+                val files = root.listFiles() ?: continue
+                for (file in files) {
+                    clearedBytes += getFolderSize(file)
+                    file.deleteRecursively()
+                }
+            }
+        }
+        return clearedBytes
+    }
+
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         mediaChannel?.setMethodCallHandler(null)
         mediaChannel = null
         uiChannel?.setMethodCallHandler(null)
         uiChannel = null
+        appManagerChannel?.setMethodCallHandler(null)
+        appManagerChannel = null
+        cacheChannel?.setMethodCallHandler(null)
+        cacheChannel = null
+        linksChannel?.setMethodCallHandler(null)
+        linksChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

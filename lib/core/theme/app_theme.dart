@@ -98,7 +98,7 @@ class _StackedPageTransitionState extends State<_StackedPageTransition> {
       begin: Offset(widget.startX, 0),
       end: Offset.zero,
     ).animate(_animation),
-    child: widget.child,
+    child: RepaintBoundary(child: widget.child),
   );
 }
 

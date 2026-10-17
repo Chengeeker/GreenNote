@@ -1,3 +1,4 @@
+import '../account/anonymous_accounts_page.dart';
 import '../account/local_account_page.dart';
 
 import 'package:easy_refresh/easy_refresh.dart';
@@ -22,6 +23,8 @@ import '../../core/widgets/app_avatar.dart';
 import '../settings/app_settings_page.dart';
 import '../feed/feed_pages.dart';
 import '../shared/api_list_page.dart';
+import '../shared/app_management_page.dart';
+import '../shared/discovery_channel_page.dart';
 import '../../core/utils/haptic_feedback_util.dart';
 export '../digital/digital_page.dart';
 
@@ -44,14 +47,14 @@ class _DiscoveryPageState extends State<DiscoveryPage>
     with SingleTickerProviderStateMixin {
   static const _channels = [
     _DiscoveryChannel('酷品', '/page?url=V11_FIND_GOODS'),
-    _DiscoveryChannel('生活', null),
-    _DiscoveryChannel('二手', '#/feed/ershouList?dataListType=staggered'),
-    _DiscoveryChannel('酷图', '#/feed/coolPictureRankList'),
-    _DiscoveryChannel('宠物', null),
-    _DiscoveryChannel('运动', null),
+    _DiscoveryChannel('生活', '/page?url=V15_ZHUANTI_SHENGHUO'),
+    _DiscoveryChannel('二手', '/page?url=V11_DISCOVERY_SECOND_HAND'),
+    _DiscoveryChannel('酷图', '/page?url=V11_FIND_COOLPIC'),
+    _DiscoveryChannel('宠物', '/page?url=V15_CHONGWU'),
+    _DiscoveryChannel('运动', '/page?url=V15_YUNDONG'),
     _DiscoveryChannel('看看号', '/user/dyhSubscribe'),
-    _DiscoveryChannel('商家', null),
-    _DiscoveryChannel('好物榜', '/page?url=V11_FIND_GOOD_GOODS_HOME'),
+    _DiscoveryChannel('商家', '/page?url=V14_SALE'),
+    _DiscoveryChannel('好物榜', '/page?url=V12_FIND_KUBANG'),
   ];
 
   late final TabController _tabs = TabController(
@@ -79,26 +82,32 @@ class _DiscoveryPageState extends State<DiscoveryPage>
   }
 
   PreferredSizeWidget _buildTabBar() => PreferredSize(
-    preferredSize: const Size.fromHeight(kTextTabBarHeight),
+    preferredSize: const Size.fromHeight(40),
     child: Builder(
       builder: (context) {
         final colors = Theme.of(context).colorScheme;
+        final primary = Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF009688)
+            : colors.primary;
         return TabBar(
           controller: _tabs,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
           dividerColor: Colors.transparent,
           indicatorSize: TabBarIndicatorSize.label,
-          indicatorColor: colors.primary,
+          indicatorColor: primary,
           indicatorWeight: 3,
-          labelColor: colors.primary,
+          labelColor: primary,
           labelStyle: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
+            fontSize: 17,
+            fontWeight: FontWeight.w500,
           ),
           unselectedLabelColor: colors.onSurfaceVariant,
-          unselectedLabelStyle: const TextStyle(fontSize: 15),
-          tabs: [for (final channel in _channels) Tab(text: channel.title)],
+          unselectedLabelStyle: const TextStyle(fontSize: 16),
+          tabs: [
+            for (final channel in _channels)
+              Tab(text: channel.title, height: 40),
+          ],
         );
       },
     ),
@@ -119,13 +128,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
   }
 
   Widget _channelPage(_DiscoveryChannel channel) {
-    if (channel.title == '酷图') {
-      return CoolPicPage(api: widget.api);
-    }
-    // The configured secondhand page is only a category menu; open its default feed.
-    final route = channel.title == '二手'
-        ? channel.fallback
-        : _serverRoutes[channel.title] ?? channel.fallback;
+    final route = _serverRoutes[channel.title] ?? channel.fallback;
     if (route == null) {
       return Center(
         child: Padding(
@@ -139,35 +142,12 @@ class _DiscoveryPageState extends State<DiscoveryPage>
         ),
       );
     }
-    final parsed = _parseRoute(route);
-    return ApiListPage(
+    return DiscoveryChannelPage(
       key: ValueKey('discover-${channel.title}'),
       api: widget.api,
       title: channel.title,
-      path: parsed.$1,
-      query: parsed.$2,
-      showAppBar: false,
+      route: route,
     );
-  }
-
-  (String, Map<String, dynamic>) _parseRoute(String route) {
-    if (route.startsWith('#/')) {
-      return ('/v6/page/dataList', {'url': route});
-    }
-    final uri = Uri.parse(route);
-    if (uri.path == '/page' || uri.queryParameters.containsKey('url')) {
-      return (
-        '/v6/page/dataList',
-        Map<String, dynamic>.from(uri.queryParameters),
-      );
-    }
-    if (uri.path.startsWith('/user/')) {
-      return ('/v6${uri.path}', Map<String, dynamic>.from(uri.queryParameters));
-    }
-    if (uri.path.startsWith('/v6/')) {
-      return (uri.path, Map<String, dynamic>.from(uri.queryParameters));
-    }
-    return ('/v6/page/dataList', {'url': route});
   }
 }
 
@@ -1088,13 +1068,20 @@ class _SearchResultsPageState extends State<SearchResultsPage>
 
   Widget _buildTabView(String type) {
     if (type == 'all') {
+      final isDefaultSort = _allSortType == 'default';
       return ApiListPage(
-        key: ValueKey('search-all-$_currentQuery'),
+        key: ValueKey('search-all-$_currentQuery-$_allSortType'),
         api: widget.api,
         title: '综合',
         path: '/v6/search',
+        header: !isDefaultSort
+            ? SearchFeedSectionHeader(
+                currentSort: _allSortType,
+                onSortChanged: (s) => setState(() => _allSortType = s),
+              )
+            : null,
         query: {
-          'type': 'all',
+          'type': isDefaultSort ? 'all' : 'feed',
           'searchValue': _currentQuery,
           'sort': _allSortType == 'exact' ? 'default' : _allSortType,
           'sortType': _allSortType,
@@ -1817,7 +1804,13 @@ class _AccountPageState extends State<AccountPage> {
         if (widget.api.currentUid.isNotEmpty) _loadDashboard();
       }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        if (_login == null) {
+          setState(() => _error = error.toString());
+        } else {
+          AppToast.show(context, '刷新账户信息失败: $error');
+        }
+      }
     } finally {
       if (mounted) setState(() => _checking = false);
     }
@@ -1908,6 +1901,22 @@ class _AccountPageState extends State<AccountPage> {
     });
   }
 
+  Future<void> _refreshAccount() async {
+    if (widget.api.hasCookie) {
+      await _checkLogin();
+    } else if (widget.api.isAnonymous && _observedPublicUid.isNotEmpty) {
+      _loadDashboard();
+    }
+    await Future.wait<dynamic>([
+      ?_spaceFuture,
+      ?_topicsFuture,
+      ?_visitsFuture,
+      ?_historyFuture,
+      ?_collectionsFuture,
+      ?_questionsFuture,
+    ], eagerError: false).catchError((_) => <dynamic>[]);
+  }
+
   Future<Map<String, dynamic>> _loadSpace(String uid) async {
     final responses = await Future.wait([
       widget.api.getUserSpace(uid),
@@ -1923,13 +1932,39 @@ class _AccountPageState extends State<AccountPage> {
     final profileUser = profileData is Map
         ? (profileData['userInfo'] ?? profileData['user_info'])
         : null;
-    return {
+    final merged = <String, dynamic>{
       if (spaceUser is Map) ...Map<String, dynamic>.from(spaceUser),
       if (profileUser is Map) ...Map<String, dynamic>.from(profileUser),
       if (profileData is Map) ...Map<String, dynamic>.from(profileData),
       if (spaceData is Map) ...Map<String, dynamic>.from(spaceData),
       ...spaceResponse,
     };
+    // Preserve a valid nested count when a shallow envelope repeats it as blank.
+    final feedCount =
+        [
+              spaceUser,
+              spaceData,
+              spaceResponse,
+              profileUser,
+              profileData,
+              profileResponse,
+            ]
+            .whereType<Map>()
+            .map(
+              (source) => _first(Map<String, dynamic>.from(source), [
+                'feed_num',
+                'feedNum',
+                'feednum',
+                'feed_count',
+                'feedCount',
+                'feed_num_txt',
+                'feedNumTxt',
+                'feed',
+              ]),
+            )
+            .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    if (feedCount.isNotEmpty) merged['feed_num'] = feedCount;
+    return merged;
   }
 
   @override
@@ -1968,88 +2003,96 @@ class _AccountPageState extends State<AccountPage> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 600),
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(
-              8,
-              0,
-              8,
-              24 + MediaQuery.paddingOf(context).bottom,
-            ),
-            children: [
-              _buildProfile(user, loggedIn, uid),
-              _buildStatistics(uid, enabled: loggedIn),
-              _buildShortcuts(uid, enabled: loggedIn),
-              _buildOrders(),
-              _buildHelp(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 2, 4, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '我的卡片',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _manageCards,
-                      style: TextButton.styleFrom(
-                        foregroundColor: Theme.of(context)
-                            .colorScheme
-                            .onSurfaceVariant,
-                      ),
-                      child: const Text('卡片管理', style: TextStyle(fontSize: 12)),
-                    ),
-                  ],
-                ),
+          child: RefreshIndicator(
+            onRefresh: _refreshAccount,
+            child: ListView(
+              key: const ValueKey('account-refreshable-list'),
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(
+                8,
+                0,
+                8,
+                24 + MediaQuery.paddingOf(context).bottom,
               ),
-              if (!_hiddenCards.contains('我关注的话题'))
-                _previewSection(
-                  '我关注的话题',
-                  '/v6/topic/myFollowTopicList',
-                  _topicsFuture,
-                  icon: Icons.tag_rounded,
+              children: [
+                _buildProfile(user, loggedIn, uid),
+                _buildStatistics(uid, enabled: loggedIn),
+                _buildShortcuts(uid, enabled: loggedIn),
+                _buildOrders(),
+                _buildHelp(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 2, 4, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '我的卡片',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _manageCards,
+                        style: TextButton.styleFrom(
+                          foregroundColor: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant,
+                        ),
+                        child: const Text(
+                          '卡片管理',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              if (!_hiddenCards.contains('我的常去'))
-                _previewSection(
-                  '我的常去',
-                  '/v6/member/recentHistoryList',
-                  _visitsFuture,
-                  icon: Icons.history_rounded,
-                ),
-              if (!_hiddenCards.contains('浏览历史'))
-                _previewSection(
-                  '浏览历史',
-                  '/v6/user/hitHistoryList',
-                  _historyFuture,
-                  icon: Icons.history_rounded,
-                ),
-              if (!_hiddenCards.contains('我的收藏单'))
-                _previewSection(
-                  '我的收藏单',
-                  collectionRoute,
-                  _collectionsFuture,
-                  icon: Icons.folder_outlined,
-                  query: publicIdentity != null
-                      ? {'uid': uid, 'showDefault': 1}
-                      : const {},
-                  allowAnonymousPublicRead: publicIdentity != null,
-                ),
-              if (!_hiddenCards.contains('我的问答'))
-                _previewSection(
-                  '我的问答',
-                  '/v6/user/questionAndAnswerList',
-                  _questionsFuture,
-                  icon: Icons.question_answer_outlined,
-                  query: {'uid': uid},
-                  allowAnonymousPublicRead: publicIdentity != null,
-                ),
-              _group(context, '更多', [_CreateCollectionRow(api: widget.api)]),
-            ],
+                if (!_hiddenCards.contains('我关注的话题'))
+                  _previewSection(
+                    '我关注的话题',
+                    '/v6/topic/myFollowTopicList',
+                    _topicsFuture,
+                    icon: Icons.tag_rounded,
+                  ),
+                if (!_hiddenCards.contains('我的常去'))
+                  _previewSection(
+                    '我的常去',
+                    '/v6/member/recentHistoryList',
+                    _visitsFuture,
+                    icon: Icons.history_rounded,
+                  ),
+                if (!_hiddenCards.contains('浏览历史'))
+                  _previewSection(
+                    '浏览历史',
+                    '/v6/user/hitHistoryList',
+                    _historyFuture,
+                    icon: Icons.history_rounded,
+                  ),
+                if (!_hiddenCards.contains('我的收藏单'))
+                  _previewSection(
+                    '我的收藏单',
+                    collectionRoute,
+                    _collectionsFuture,
+                    icon: Icons.folder_outlined,
+                    query: publicIdentity != null
+                        ? {'uid': uid, 'showDefault': 1}
+                        : const {},
+                    allowAnonymousPublicRead: publicIdentity != null,
+                  ),
+                if (!_hiddenCards.contains('我的问答'))
+                  _previewSection(
+                    '我的问答',
+                    '/v6/user/questionAndAnswerList',
+                    _questionsFuture,
+                    icon: Icons.question_answer_outlined,
+                    query: {'uid': uid},
+                    allowAnonymousPublicRead: publicIdentity != null,
+                  ),
+                _group(context, '更多', [_CreateCollectionRow(api: widget.api)]),
+              ],
+            ),
           ),
         ),
       ),
@@ -2383,6 +2426,14 @@ class _AccountPageState extends State<AccountPage> {
                 ),
               ),
               const SizedBox(width: 8),
+              if (anonymous) ...[
+                IconButton(
+                  icon: const Icon(Icons.switch_account_outlined, size: 24),
+                  tooltip: '切换/管理匿名账户',
+                  onPressed: () => showAnonymousAccountSwitcher(context, widget.api),
+                ),
+                const SizedBox(width: 4),
+              ],
               if (!(anonymous && publicIdentity != null)) ...[
                 Icon(
                   anonymous
@@ -2556,14 +2607,17 @@ class _AccountPageState extends State<AccountPage> {
               color: const Color(0xFFE94848),
               enabled: enabled && (!widget.api.isAnonymous || canReadPublic),
             ),
-            _shortcut(
-              context,
-              Icons.stay_current_portrait_rounded,
-              '应用管理',
-              '/v6/apk/developerAppList',
-              query: {'uid': uid},
-              color: const Color(0xFF9862E8),
-              enabled: enabled && (!widget.api.isAnonymous || canReadPublic),
+            Expanded(
+              child: _ShortcutButton(
+                icon: Icons.stay_current_portrait_rounded,
+                label: '应用管理',
+                color: const Color(0xFF9862E8),
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AppManagementPage(),
+                  ),
+                ),
+              ),
             ),
             Expanded(
               child: _ShortcutButton(

@@ -10,6 +10,7 @@ import '../../core/widgets/app_avatar.dart';
 import '../feed/feed_pages.dart';
 import '../shared/api_list_page.dart';
 import '../shell/main_pages.dart' show CookieLoginPage;
+import 'anonymous_accounts_page.dart';
 
 Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
   final choice = await showModalBottomSheet<String>(
@@ -35,6 +36,13 @@ Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
             subtitle: const Text('本地关注、收藏和 WebDAV 备份'),
             onTap: () => Navigator.pop(context, 'local'),
           ),
+          if (api.localAccount.profiles.length > 1)
+            ListTile(
+              leading: const Icon(Icons.switch_account_outlined),
+              title: const Text('切换匿名账户'),
+              subtitle: Text('已有 ${api.localAccount.profiles.length} 个独立匿名账户'),
+              onTap: () => Navigator.pop(context, 'switch_anon'),
+            ),
         ],
       ),
     ),
@@ -44,6 +52,8 @@ Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
     await Navigator.of(
       context,
     ).push<void>(MaterialPageRoute(builder: (_) => CookieLoginPage(api: api)));
+  } else if (choice == 'switch_anon') {
+    await showAnonymousAccountSwitcher(context, api);
   } else {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
@@ -154,7 +164,16 @@ class _LocalProfilePageState extends State<LocalProfilePage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: ReviewFrostedAppBar(title: const Text('匿名账户资料')),
+    appBar: ReviewFrostedAppBar(
+      title: const Text('匿名账户资料'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.switch_account_outlined),
+          tooltip: '切换/管理其他匿名账户',
+          onPressed: () => showAnonymousAccountSwitcher(context, widget.api),
+        ),
+      ],
+    ),
     body: ListView(
       padding: const EdgeInsets.all(20),
       children: [

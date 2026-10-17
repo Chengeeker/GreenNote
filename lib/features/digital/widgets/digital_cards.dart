@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/design_system/components/review_card.dart';
+import '../../../core/design_system/components/review_frosted_app_bar.dart';
 import '../../../core/network/coolapk_api.dart';
 import '../../../core/network/coolapk_image.dart';
 import '../../../core/utils/haptic_feedback_util.dart';
+import '../../../core/utils/app_toast.dart';
 import '../../../core/widgets/cached_network_image.dart';
 import '../../shared/api_list_page.dart';
 import 'rank_ribbon.dart';
@@ -29,23 +31,47 @@ class DigitalFollowCard extends StatelessWidget {
     required this.api,
     this.items = const [],
     this.onMoreTap,
+    this.emptyText,
+    this.onEmptyTap,
     super.key,
   });
 
   final CoolapkApi api;
   final List<Map<String, dynamic>> items;
   final VoidCallback? onMoreTap;
+  final String? emptyText;
+  final VoidCallback? onEmptyTap;
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
+    if (api.isAnonymous) {
+      return ListenableBuilder(
+        listenable: api.localAccount,
+        builder: (context, _) => _buildCard(
+          context,
+          api.localAccount.productFollows.values
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList()
+              .reversed
+              .take(2)
+              .toList(),
+        ),
+      );
+    }
+    return _buildCard(context, items);
+  }
+
+  Widget _buildCard(
+    BuildContext context,
+    List<Map<String, dynamic>> effectiveItems,
+  ) {
+    if (effectiveItems.isEmpty && emptyText == null) {
       return const SizedBox.shrink();
     }
-    final effectiveItems = items;
     final colorScheme = Theme.of(context).colorScheme;
-
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Column(
@@ -57,23 +83,33 @@ class DigitalFollowCard extends StatelessWidget {
                 Text(
                   '我的关注',
                   style: Theme.of(context).textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.bold, fontSize: 16),
+                      ?.copyWith(fontWeight: FontWeight.w500, fontSize: 14),
                 ),
                 GestureDetector(
                   onTap: () {
                     HapticFeedbackUtil.selection();
                     if (onMoreTap != null) {
                       onMoreTap!();
-                    } else {
+                    } else if (api.isAnonymous) {
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              DigitalLocalProductFollowsPage(api: api),
+                        ),
+                      );
+                    } else if (api.hasCookie) {
                       Navigator.of(context).push<void>(
                         MaterialPageRoute<void>(
                           builder: (_) => ApiListPage(
                             api: api,
                             title: '我的关注',
-                            path: '/v6/user/myProductList',
+                            path: '/v6/page/dataList',
+                            query: const {'url': '#/product/followProductList'},
                           ),
                         ),
                       );
+                    } else {
+                      AppToast.show(context, api.loginRequiredMessage);
                     }
                   },
                   child: Row(
@@ -98,24 +134,106 @@ class DigitalFollowCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                for (final item in effectiveItems)
-                  _FollowChip(
-                    api: api,
-                    id: (item['id'] ?? item['productId'] ?? '').toString(),
-                    title: (item['title'] ?? item['name'] ?? '设备').toString(),
-                    logo: (item['logo'] ?? item['pic'] ?? '').toString(),
+            if (effectiveItems.isEmpty)
+              InkWell(
+                onTap: onEmptyTap,
+                child: Text(
+                  emptyText!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
                   ),
-              ],
-            ),
+                ),
+              )
+            else
+              Row(
+                children: [
+                  for (final item in effectiveItems)
+                    Expanded(
+                      child: _FollowChip(
+                        api: api,
+                        id: (item['id'] ?? item['productId'] ?? '').toString(),
+                        title: (item['title'] ?? item['name'] ?? '设备')
+                            .toString(),
+                        logo: (item['logo'] ?? item['pic'] ?? '').toString(),
+                      ),
+                    ),
+                ],
+              ),
           ],
         ),
       ),
     );
   }
+}
+
+class DigitalLocalProductFollowsPage extends StatelessWidget {
+  const DigitalLocalProductFollowsPage({required this.api, super.key});
+
+  final CoolapkApi api;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: ReviewFrostedAppBar(title: const Text('我的关注')),
+    body: ListenableBuilder(
+      listenable: api.localAccount,
+      builder: (context, _) {
+        final entries = api.localAccount.productFollows.entries
+            .toList()
+            .reversed
+            .toList();
+        if (entries.isEmpty) return const Center(child: Text('还没有关注的机型'));
+        return ListView.builder(
+          itemCount: entries.length,
+          itemBuilder: (context, index) {
+            final entry = entries[index];
+            final item = Map<String, dynamic>.from(entry.value as Map);
+            final id = entry.key;
+            final title = (item['title'] ?? id).toString();
+            final pic = (item['logo'] ?? item['pic'] ?? item['cover'] ?? '')
+                .toString();
+            final hot = item['hot_num'];
+            return ListTile(
+              leading: pic.isEmpty
+                  ? const Icon(Icons.devices_rounded)
+                  : ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: CachedNetworkImage(
+                        normalizeCoolapkImageUrl(pic),
+                        headers: coolapkImageHeaders(pic, api: api),
+                        width: 48,
+                        height: 48,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) =>
+                            const Icon(Icons.devices_rounded),
+                      ),
+                    ),
+              title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
+              subtitle: hot == null
+                  ? null
+                  : Text('热度 ${formatDigitalHot(hot)}'),
+              onTap: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => ProductPage(api: api, id: id, title: title),
+                ),
+              ),
+              trailing: IconButton(
+                tooltip: '取消本地关注',
+                icon: const Icon(Icons.remove_circle_outline),
+                onPressed: () async {
+                  try {
+                    await api.localAccount.toggle('productFollows', id, item);
+                  } catch (error) {
+                    if (context.mounted) AppToast.show(context, '$error');
+                  }
+                },
+              ),
+            );
+          },
+        );
+      },
+    ),
+  );
 }
 
 class _FollowChip extends StatelessWidget {
@@ -133,8 +251,6 @@ class _FollowChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: () {
@@ -146,11 +262,7 @@ class _FollowChip extends StatelessWidget {
         );
       },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(10),
-        ),
+        padding: const EdgeInsets.symmetric(vertical: 2),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -160,8 +272,8 @@ class _FollowChip extends StatelessWidget {
                 child: CachedNetworkImage(
                   normalizeCoolapkImageUrl(logo),
                   headers: coolapkImageHeaders(logo, api: api),
-                  width: 26,
-                  height: 26,
+                  width: 20,
+                  height: 20,
                   fit: BoxFit.contain,
                   errorBuilder: (_, _, _) =>
                       const Icon(Icons.devices_rounded, size: 20),
@@ -170,9 +282,16 @@ class _FollowChip extends StatelessWidget {
             else
               const Icon(Icons.devices_rounded, size: 20),
             const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            Flexible(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ),
           ],
         ),
@@ -242,7 +361,8 @@ class DigitalCategoryGridCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
         child: Column(
@@ -346,8 +466,8 @@ class _CategoryItem extends StatelessWidget {
                     ? CachedNetworkImage(
                         normalizeCoolapkImageUrl(pic),
                         headers: coolapkImageHeaders(pic, api: api),
-                        width: 30,
-                        height: 30,
+                        width: 38,
+                        height: 38,
                         fit: BoxFit.contain,
                         errorBuilder: (_, _, _) => Icon(
                           iconData ?? Icons.devices_rounded,
@@ -397,7 +517,8 @@ class DigitalBannerCard extends StatelessWidget {
     final effectiveUrl = imageUrl!;
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       clipBehavior: Clip.antiAlias,
       onTap: () {
         HapticFeedbackUtil.selection();
@@ -470,76 +591,30 @@ class DigitalRankGridCard extends StatelessWidget {
     required this.api,
     this.title = '今日热门',
     this.subTitle = '榜单',
-    this.items,
+    this.items = const [],
     this.onMoreTap,
+    this.showRanking = true,
+    this.onItemTap,
     super.key,
   });
 
   final CoolapkApi api;
   final String title;
   final String subTitle;
-  final List<Map<String, dynamic>>? items;
+  final List<Map<String, dynamic>> items;
   final VoidCallback? onMoreTap;
-
-  static const defaultRankItems = [
-    {
-      'id': '34676',
-      'title': '一加16',
-      'hot_num_txt': '102.9万',
-      'logo': 'https://img.coolapk.com/picture/2024/1031/17/303108_1730367252_0179.png',
-    },
-    {
-      'id': '34677',
-      'title': '荣耀 Magic9 Pro',
-      'hot_num_txt': '29.7万',
-      'logo': 'https://img.coolapk.com/picture/2024/1030/19/303108_1730286820_0834.png',
-    },
-    {
-      'id': '34678',
-      'title': '小米18 Pro Max',
-      'hot_num_txt': '25.2万',
-      'logo': 'https://img.coolapk.com/picture/2024/1029/20/303108_1730203598_0987.png',
-    },
-    {
-      'id': '34679',
-      'title': 'iPhone 18 Pro Max',
-      'hot_num_txt': '22.9万',
-      'logo': 'https://img.coolapk.com/picture/2024/0910/02/303108_1725906234_0123.png',
-    },
-    {
-      'id': '34680',
-      'title': '华为Mate 90 Pro Max',
-      'hot_num_txt': '21.5万',
-      'logo': 'https://img.coolapk.com/picture/2024/0910/02/303108_1725906234_0123.png',
-    },
-    {
-      'id': '34681',
-      'title': '一加15',
-      'hot_num_txt': '19.8万',
-      'logo': 'https://img.coolapk.com/picture/2024/1031/17/303108_1730367252_0179.png',
-    },
-    {
-      'id': '34682',
-      'title': 'REDMI K100 Pro',
-      'hot_num_txt': '18.2万',
-      'logo': 'https://img.coolapk.com/picture/2024/1029/20/303108_1730203598_0987.png',
-    },
-    {
-      'id': '34683',
-      'title': 'OPPO Find X8 Ultra',
-      'hot_num_txt': '16.9万',
-      'logo': 'https://img.coolapk.com/picture/2024/1024/18/303108_1729764512_0456.png',
-    },
-  ];
+  final bool showRanking;
+  final ValueChanged<Map<String, dynamic>>? onItemTap;
 
   @override
   Widget build(BuildContext context) {
-    final list = items ?? defaultRankItems;
+    final list = items;
     if (list.isEmpty) return const SizedBox.shrink();
     final colorScheme = Theme.of(context).colorScheme;
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Column(
@@ -551,7 +626,7 @@ class DigitalRankGridCard extends StatelessWidget {
                 Text(
                   title,
                   style: Theme.of(context).textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.bold, fontSize: 16),
+                      ?.copyWith(fontWeight: FontWeight.w500, fontSize: 14),
                 ),
                 GestureDetector(
                   onTap: () {
@@ -599,23 +674,35 @@ class DigitalRankGridCard extends StatelessWidget {
                 for (var i = 0; i < 4; i++)
                   Expanded(
                     child: i < list.length
-                        ? _RankProductItem(api: api, rank: i + 1, item: list[i])
+                        ? _RankProductItem(
+                            api: api,
+                            rank: showRanking ? i + 1 : 0,
+                            item: list[i],
+                            onTap: onItemTap,
+                          )
                         : const SizedBox.shrink(),
                   ),
               ],
             ),
-            const SizedBox(height: 8),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 4; i < 8; i++)
-                  Expanded(
-                    child: i < list.length
-                        ? _RankProductItem(api: api, rank: i + 1, item: list[i])
-                        : const SizedBox.shrink(),
-                  ),
-              ],
-            ),
+            if (list.length > 4) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 4; i < 8; i++)
+                    Expanded(
+                      child: i < list.length
+                          ? _RankProductItem(
+                              api: api,
+                              rank: showRanking ? i + 1 : 0,
+                              item: list[i],
+                              onTap: onItemTap,
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -628,11 +715,13 @@ class _RankProductItem extends StatelessWidget {
     required this.api,
     required this.rank,
     required this.item,
+    this.onTap,
   });
 
   final CoolapkApi api;
   final int rank;
   final Map<String, dynamic> item;
+  final ValueChanged<Map<String, dynamic>>? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -643,14 +732,24 @@ class _RankProductItem extends StatelessWidget {
             .toString();
     final logo = (item['logo'] ?? item['pic'] ?? item['icon'] ?? '').toString();
     final hot = formatDigitalHot(
-      item['hot_num_txt'] ?? item['hot_num'] ?? item['hotNum'] ?? '',
+      item['hot_num_txt'] ??
+          item['hot_num'] ??
+          item['hotNum'] ??
+          item['subTitle'] ??
+          '',
     );
     final colorScheme = Theme.of(context).colorScheme;
+    final topic = item['entityType'] == 'topic';
+    final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
 
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: () {
         HapticFeedbackUtil.selection();
+        if (onTap != null) {
+          onTap!(item);
+          return;
+        }
         Navigator.of(context).push<void>(
           MaterialPageRoute<void>(
             builder: (_) => ProductPage(api: api, id: id, title: title),
@@ -668,26 +767,38 @@ class _RankProductItem extends StatelessWidget {
                   height: 50,
                   alignment: Alignment.center,
                   child: logo.isNotEmpty
-                      ? CachedNetworkImage(
-                          normalizeCoolapkImageUrl(logo),
-                          headers: coolapkImageHeaders(logo, api: api),
-                          height: 44,
-                          width: 42,
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, _, _) =>
-                              const Icon(Icons.smartphone_rounded, size: 34),
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(topic ? 6 : 0),
+                          child: CachedNetworkImage(
+                            normalizeCoolapkImageUrl(logo),
+                            headers: coolapkImageHeaders(logo, api: api),
+                            height: 48,
+                            width: 48,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, _, _) =>
+                                const Icon(Icons.smartphone_rounded, size: 34),
+                          ),
                         )
                       : const Icon(Icons.smartphone_rounded, size: 34),
                 ),
-                Positioned(left: 0, top: 0, child: RankRibbon(rank: rank)),
+                if (rank > 0)
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    child: RankRibbon(
+                      rank: rank,
+                      width: 10 * textScale,
+                      height: 14 * textScale,
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 4),
             SizedBox(
-              height: 32,
+              height: (topic ? 16 : 32) * textScale,
               child: Text(
                 title,
-                maxLines: 2,
+                maxLines: topic ? 1 : 2,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
@@ -709,11 +820,15 @@ class _RankProductItem extends StatelessWidget {
                     color: colorScheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 2),
-                  Text(
-                    hot,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: colorScheme.onSurfaceVariant,
+                  Flexible(
+                    child: Text(
+                      hot.replaceAll('热度', ''),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ],
@@ -733,28 +848,46 @@ class DigitalTimelineCard extends StatelessWidget {
     required this.api,
     this.title = '新品日历',
     this.items = const [],
+    this.onMoreTap,
     super.key,
   });
 
   final CoolapkApi api;
   final String title;
   final List<Map<String, dynamic>> items;
+  final VoidCallback? onMoreTap;
 
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) return const SizedBox.shrink();
 
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Padding(
         padding: const EdgeInsets.all(10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.bold, fontSize: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w500, fontSize: 14),
+                  ),
+                ),
+                InkWell(
+                  onTap: onMoreTap,
+                  child: const Row(
+                    children: [
+                      Text('更多', style: TextStyle(fontSize: 12)),
+                      Icon(Icons.chevron_right_rounded, size: 16),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             for (final item in items) _TimelineRow(api: api, item: item),
@@ -778,7 +911,16 @@ class _TimelineRow extends StatelessWidget {
     final logo = (item['logo'] ?? item['pic'] ?? '').toString();
     final release = (item['release_time'] ?? item['releaseTime'] ?? '')
         .toString();
-    final hot = formatDigitalHot(item['hot_num_txt'] ?? item['hot_num'] ?? '');
+    final hot = (item['entityTemplate'] ?? '') == 'productTimeline'
+        ? ''
+        : formatDigitalHot(item['hot_num_txt'] ?? item['hot_num'] ?? '');
+    final dateParts = RegExp(r'^(\d{4})年(\d{1,2})月(?:(\d{1,2})日)?')
+        .firstMatch(release);
+    final date = dateParts == null
+        ? release
+        : dateParts.group(3) == null
+        ? '${dateParts[2]}月'
+        : '${dateParts[2]!.padLeft(2, '0')}.${dateParts[3]!.padLeft(2, '0')}';
     final colorScheme = Theme.of(context).colorScheme;
 
     return InkWell(
@@ -795,26 +937,45 @@ class _TimelineRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
           children: [
-            if (release.isNotEmpty)
-              Container(
-                width: 60,
-                padding: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  border: Border(
-                    right: BorderSide(
-                      color: colorScheme.outlineVariant.withValues(alpha: 0.3),
-                    ),
-                  ),
-                ),
-                child: Text(
-                  release,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: colorScheme.primary,
-                  ),
+            if (release.isNotEmpty) ...[
+              SizedBox(
+                width: 42,
+                child: Column(
+                  children: [
+                    Text(date, style: const TextStyle(fontSize: 12)),
+                    if (dateParts != null)
+                      Text(
+                        dateParts[1]!,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
                 ),
               ),
+              SizedBox(
+                width: 10,
+                height: 40,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      width: 1,
+                      color: colorScheme.outlineVariant.withValues(alpha: .3),
+                    ),
+                    Container(
+                      width: 4,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: colorScheme.onSurfaceVariant,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(width: 8),
             if (logo.isNotEmpty)
               ClipRRect(
@@ -876,7 +1037,8 @@ class DigitalSectionHeaderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ReviewCard(
-      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       onTap: () {
         HapticFeedbackUtil.selection();
         onTap?.call();

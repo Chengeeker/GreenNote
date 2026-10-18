@@ -30,6 +30,7 @@ void main() async {
   PaintingBinding.instance.imageCache.maximumSize = 3000;
   PaintingBinding.instance.imageCache.maximumSizeBytes =
       512 * 1024 * 1024; // 512MB
+  ErrorWidget.builder = (details) => const SizedBox.shrink();
   await LiquidGlassWidgets.initialize(enablePerformanceMonitor: false);
   runApp(
     LiquidGlassWidgets.wrap(
@@ -106,15 +107,15 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
   int _selectedIndex = 0;
   int _previousIndex = 0;
   int _accountRevision = 0;
-  bool _isTabTransitioning = false;
   final Set<int> _visitedTabs = {0};
   final Set<int> _pageTabBarsReady = {};
   final List<PreferredSizeWidget?> _pageTabBars = List.filled(4, null);
+  CoolapkApi? _initializedApi;
   late final AnimationController _tabTransitionController;
   late final CurvedAnimation _tabTransitionCurve;
   late Animation<Offset> _tabIncomingTransition;
   late Animation<Offset> _tabOutgoingTransition;
-  CoolapkApi? _initializedApi;
+  bool _isTabTransitioning = false;
 
   @override
   void initState() {
@@ -148,13 +149,11 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
 
   void _selectTab(int index) {
     if (index == _selectedIndex) return;
-    final isFirstVisit = !_visitedTabs.contains(index);
     HapticFeedbackUtil.selection();
-    if (isFirstVisit || MediaQuery.disableAnimationsOf(context)) {
-      // Keep a page's first layout out of the two-page transition composite.
+    _visitedTabs.add(index);
+    if (MediaQuery.disableAnimationsOf(context)) {
       _tabTransitionController.stop();
       setState(() {
-        _visitedTabs.add(index);
         _previousIndex = index;
         _selectedIndex = index;
         _isTabTransitioning = false;
@@ -171,7 +170,6 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
     var direction = index > _selectedIndex ? 1.0 : -1.0;
     if (Directionality.of(context) == TextDirection.rtl) direction *= -1;
     setState(() {
-      _visitedTabs.add(index);
       _previousIndex = _selectedIndex;
       _selectedIndex = index;
       _isTabTransitioning = true;
@@ -238,6 +236,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
     ];
     final pageOrder = _visitedTabs.toList()
       ..sort((a, b) => _tabPageLayer(a).compareTo(_tabPageLayer(b)));
+
     return Stack(
       clipBehavior: Clip.hardEdge,
       children: [
@@ -398,19 +397,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
       );
     }
 
-    final String hint;
-    switch (_selectedIndex) {
-      case 0:
-        hint = '搜索动态/话题/应用/酷友...';
-        break;
-      case 1:
-        hint = '搜索动态/机型...';
-        break;
-      case 2:
-      default:
-        hint = '搜索应用、游戏、好物与精选...';
-        break;
-    }
+    const hint = '搜索动态/话题/应用/酷友...';
 
     return ReviewFrostedAppBar(
       titleSpacing: 8,
@@ -489,7 +476,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                 appBar: _buildAppBar(context, client),
                 // Skia fallback needs the live page registered as its backdrop.
                 body: GlassBackgroundSource(
-                  enabled: floating && useLiquidGlassNavBar,
+                  enabled: useLiquidGlassNavBar,
                   child: KeyedSubtree(
                     key: ValueKey('${client.isAnonymous}:${client.hasCookie}'),
                     child: _buildTabContent(context, client),

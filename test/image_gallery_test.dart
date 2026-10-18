@@ -7,9 +7,13 @@ import 'package:flutter/rendering.dart';
 import 'package:greennote/core/utils/spring_page_route.dart';
 import 'package:extended_image/extended_image.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/core/network/coolapk_image.dart';
+import 'package:greennote/core/settings/app_settings.dart';
 import 'package:greennote/features/feed/image_gallery_page.dart';
 import 'package:greennote/features/feed/nine_grid_view.dart';
 
@@ -1253,6 +1257,89 @@ void main() {
 
         // Page should still be open (not dismissed)
         expect(find.byType(ImageGalleryPage), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'ImageGalleryPage renders GlassAdaptiveScope, GlassPage, and GlassButton controls when useLiquidGlass=true',
+      (tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: ImageGalleryPage(
+              api: GalleryApi(),
+              pics: [galleryTestPic],
+              initialIndex: 0,
+              statusId: 'liquid-glass-explicit',
+              useLiquidGlass: true,
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(find.byType(GlassAdaptiveScope), findsOneWidget);
+        expect(find.byType(GlassPage), findsOneWidget);
+        expect(find.byType(GlassBackgroundSource), findsOneWidget);
+
+        final glassButtons = tester.widgetList<GlassButton>(
+          find.byType(GlassButton),
+        ).toList();
+        expect(glassButtons.length, 2);
+
+        final backButton = glassButtons.firstWhere((b) => b.label == '返回');
+        expect(backButton.width, 48);
+        expect(backButton.height, 48);
+        expect(backButton.stretch, 0.8);
+        expect(backButton.quality, GlassQuality.premium);
+        expect(backButton.settings!.thickness, 32);
+        expect(backButton.settings!.refractiveIndex, 1.24);
+
+        final saveButton = glassButtons.firstWhere((b) => b.label == '保存高清大图到相册');
+        expect(saveButton.width, 48);
+        expect(saveButton.height, 48);
+        expect(saveButton.stretch, 0.8);
+        expect(saveButton.quality, GlassQuality.premium);
+        expect(saveButton.settings!.thickness, 32);
+        expect(saveButton.settings!.refractiveIndex, 1.24);
+      },
+    );
+
+    testWidgets(
+      'ImageGalleryPage binds to appSettingsProvider.useLiquidGlassNavBar in ProviderScope',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({
+          'greennote.liquid_glass_nav': true,
+        });
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const MaterialApp(
+              home: ImageGalleryPage(
+                api: GalleryApi(),
+                pics: [galleryTestPic],
+                initialIndex: 0,
+                statusId: 'scope-liquid-glass',
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(find.byType(GlassButton), findsNWidgets(2));
+
+        // Switch setting to false
+        await tester.runAsync(() async {
+          await container
+              .read(appSettingsProvider.notifier)
+              .setLiquidGlassNavBar(false);
+        });
+        await tester.pump();
+
+        expect(find.byType(GlassButton), findsNothing);
       },
     );
   });

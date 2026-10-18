@@ -245,14 +245,16 @@ class _FeedHomePageState extends State<FeedHomePage>
           controller: _tabs,
           children: [
             for (final channel in _channels)
-              _FeedListPage(
-                key: ValueKey(channel.id),
-                api: widget.api,
-                channel: channel,
-                route: channel.id == 'topic'
-                    ? channel.route
-                    : _serverRoutes[channel.id] ?? channel.route,
-                onLoginRequested: widget.onLoginRequested,
+              RepaintBoundary(
+                child: _FeedListPage(
+                  key: ValueKey(channel.id),
+                  api: widget.api,
+                  channel: channel,
+                  route: channel.id == 'topic'
+                      ? channel.route
+                      : _serverRoutes[channel.id] ?? channel.route,
+                  onLoginRequested: widget.onLoginRequested,
+                ),
               ),
           ],
         ),
@@ -457,6 +459,7 @@ class _FeedListPageState extends State<_FeedListPage>
     with AutomaticKeepAliveClientMixin {
   final _scrollController = ScrollController();
   final _feeds = <CoolapkFeed>[];
+  final _bufferedFeeds = <CoolapkFeed>[];
   List<Map<String, dynamic>> _banners = const [];
   String? _error;
   String _firstItem = '';
@@ -468,6 +471,9 @@ class _FeedListPageState extends State<_FeedListPage>
   String? _activeCategoryUrl;
   int _activeCategoryIndex = 0;
 
+  static List<CoolapkFeed>? _cachedHeadlineFeeds;
+  static List<Map<String, dynamic>>? _cachedHeadlineBanners;
+
   @override
   bool get wantKeepAlive => true;
 
@@ -475,10 +481,50 @@ class _FeedListPageState extends State<_FeedListPage>
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    if (widget.channel.id == 'headline') {
+      if (_cachedHeadlineFeeds != null && _cachedHeadlineFeeds!.isNotEmpty) {
+        _feeds.addAll(_cachedHeadlineFeeds!);
+        _banners = _cachedHeadlineBanners ?? const [];
+      } else {
+        unawaited(_loadInitialHeadlineCache());
+      }
+    }
     if (widget.channel.id != 'topic' &&
         (widget.channel.id != 'follow' || widget.api.hasCookie)) {
       _load(refresh: true);
     }
+  }
+
+  Future<void> _loadInitialHeadlineCache() async {
+    if (_feeds.isNotEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedRaw = prefs.getString('cached_home_headline_v1');
+      if (cachedRaw != null && cachedRaw.isNotEmpty && mounted && _feeds.isEmpty) {
+        final decoded = jsonDecode(cachedRaw);
+        if (decoded is Map) {
+          final rawFeeds = decoded['feeds'];
+          final rawBanners = decoded['banners'];
+          if (rawFeeds is List && rawFeeds.isNotEmpty) {
+            final feeds = rawFeeds
+                .whereType<Map>()
+                .map((m) => CoolapkFeed.fromJson(Map<String, dynamic>.from(m)))
+                .toList();
+            final banners = rawBanners is List
+                ? rawBanners.whereType<Map>().map(Map<String, dynamic>.from).toList()
+                : <Map<String, dynamic>>[];
+            if (mounted && _feeds.isEmpty && feeds.isNotEmpty) {
+              setState(() {
+                _cachedHeadlineFeeds = feeds;
+                _cachedHeadlineBanners = banners;
+                _feeds.addAll(feeds);
+                _banners = banners;
+              });
+            }
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -492,7 +538,9 @@ class _FeedListPageState extends State<_FeedListPage>
     _activeCategoryUrl = null;
     _activeCategoryIndex = 0;
     if (_busy) {
-      _reloadAfterRouteChange = true;
+      if (_feeds.isEmpty) {
+        _reloadAfterRouteChange = true;
+      }
     } else {
       unawaited(_load(refresh: true));
     }
@@ -507,8 +555,19 @@ class _FeedListPageState extends State<_FeedListPage>
   }
 
   void _onScroll() {
-    if (_scrollController.hasClients &&
-        _scrollController.position.extentAfter < 650) {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    // 渐进式线性加载：当用户滑动消耗掉当前批次的一半（约 45% 或剩余未展示区域有限）时，无缝释放内存缓冲区
+    if (_bufferedFeeds.isNotEmpty) {
+      if (pos.extentAfter < 900 || pos.pixels >= pos.maxScrollExtent * 0.45) {
+        setState(() {
+          _feeds.addAll(_bufferedFeeds);
+          _bufferedFeeds.clear();
+        });
+      }
+    }
+    // 缓冲区清空后，当接近底部时，无缝触发下一页网络请求
+    if (_bufferedFeeds.isEmpty && pos.extentAfter < 520) {
       _loadMore();
     }
   }
@@ -525,7 +584,14 @@ class _FeedListPageState extends State<_FeedListPage>
   }
 
   Future<void> _load({required bool refresh}) async {
-    if (_busy || (!refresh && !_hasMore)) return;
+    if (_busy || (!refresh && !_hasMore && _bufferedFeeds.isEmpty)) return;
+    if (!refresh && _bufferedFeeds.isNotEmpty) {
+      setState(() {
+        _feeds.addAll(_bufferedFeeds);
+        _bufferedFeeds.clear();
+      });
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -534,6 +600,7 @@ class _FeedListPageState extends State<_FeedListPage>
         _firstItem = '';
         _lastItem = '';
         _hasMore = true;
+        _bufferedFeeds.clear();
       }
     });
     try {
@@ -545,21 +612,64 @@ class _FeedListPageState extends State<_FeedListPage>
         firstItem: _firstItem,
         lastItem: _lastItem,
       );
-      if (!mounted) return;
+      final existingIds = <String>{
+        ..._feeds.map((feed) => feed.id),
+        ..._bufferedFeeds.map((feed) => feed.id),
+      };
+      final newItems = result.items.where((feed) => existingIds.add(feed.id)).toList();
+
       setState(() {
-        if (refresh) _feeds.clear();
+        if (refresh) {
+          _feeds.clear();
+          _bufferedFeeds.clear();
+        }
         if (refresh && (_banners.isEmpty || _activeCategoryUrl == null)) {
           _banners = result.cards;
         }
-        final ids = _feeds.map((feed) => feed.id).toSet();
-        _feeds.addAll(result.items.where((feed) => ids.add(feed.id)));
+
+        // 渐进式加载模型：先呈现 ~60%（50%~70%区间），剩余 ~40% 暂存内存缓冲
+        if (newItems.length <= 4) {
+          _feeds.addAll(newItems);
+        } else {
+          final stage1Count = (newItems.length * 0.6).round().clamp(1, newItems.length);
+          _feeds.addAll(newItems.take(stage1Count));
+          _bufferedFeeds.addAll(newItems.skip(stage1Count));
+        }
+
         _page = nextPage;
         _firstItem = result.firstItem.isEmpty ? _firstItem : result.firstItem;
         _lastItem = result.lastItem.isEmpty ? _lastItem : result.lastItem;
         _hasMore = result.hasMore;
-        if (_feeds.isEmpty) _hasMore = false;
+        if (_feeds.isEmpty && _bufferedFeeds.isEmpty) _hasMore = false;
       });
-      precacheFeedImages(result.items, context, api: widget.api);
+
+      if (widget.channel.id == 'headline' && refresh && newItems.isNotEmpty) {
+        _cachedHeadlineFeeds = List.from(_feeds);
+        _cachedHeadlineBanners = List.from(_banners);
+        unawaited(() async {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            final jsonPayload = jsonEncode({
+              'feeds': newItems.take(20).map((f) => f.raw).toList(),
+              'banners': _banners.take(5).toList(),
+            });
+            await prefs.setString('cached_home_headline_v1', jsonPayload);
+          } catch (_) {}
+        }());
+      }
+
+      // 若当前视口无法滚动（高度不足一屏），自动平滑释放缓冲区填满视口
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _bufferedFeeds.isEmpty) return;
+        if (_scrollController.hasClients &&
+            (_scrollController.position.maxScrollExtent <= 0 ||
+             _scrollController.position.extentAfter < 500)) {
+          setState(() {
+            _feeds.addAll(_bufferedFeeds);
+            _bufferedFeeds.clear();
+          });
+        }
+      });
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
@@ -580,6 +690,86 @@ class _FeedListPageState extends State<_FeedListPage>
     if (mounted && widget.api.hasCookie) await _load(refresh: true);
   }
 
+  Widget _buildFeedSkeleton(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final barColor = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.black.withValues(alpha: 0.06);
+    return ListView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: 4,
+      itemBuilder: (context, _) => Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: barColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 90,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: barColor,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      width: 60,
+                      height: 9,
+                      decoration: BoxDecoration(
+                        color: barColor,
+                        borderRadius: BorderRadius.circular(4.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              height: 13,
+              decoration: BoxDecoration(
+                color: barColor,
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: 220,
+              height: 13,
+              decoration: BoxDecoration(
+                color: barColor,
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -591,7 +781,7 @@ class _FeedListPageState extends State<_FeedListPage>
       return _FollowLoginPrompt(onLogin: _login);
     }
     if (_feeds.isEmpty && _banners.isEmpty && _busy) {
-      return const Center(child: CircularProgressIndicator());
+      return _buildFeedSkeleton(context);
     }
     if (_feeds.isEmpty && _banners.isEmpty && _error != null) {
       if (_isCaptchaError(_error!)) {
@@ -630,7 +820,7 @@ class _FeedListPageState extends State<_FeedListPage>
         ListView.builder(
           controller: _scrollController,
           physics: const AlwaysScrollableScrollPhysics(),
-          scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+          scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
           padding: EdgeInsets.fromLTRB(
             0,
             6,
@@ -670,6 +860,7 @@ class _FeedListPageState extends State<_FeedListPage>
                 ? (feedIndex + 1)
                 : null;
             return FeedCard(
+              key: ValueKey('feed-${_feeds[feedIndex].id}'),
               api: widget.api,
               feed: _feeds[feedIndex],
               rankNumber: rankNumber,
@@ -1042,7 +1233,7 @@ class _LocalFollowTimelineState extends State<_LocalFollowTimeline> {
       ListView.builder(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
-        scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+        scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
         padding: EdgeInsets.only(
           bottom: 20 + MediaQuery.paddingOf(context).bottom,
         ),
@@ -3205,6 +3396,7 @@ void openHeadlineTarget(
             tag: title.replaceAll('#', '').trim(),
             initialTitle: title,
             initialLogo: pic.isNotEmpty ? pic : null,
+            initialCover: pic.isNotEmpty ? pic : null,
           ),
         ),
       );
@@ -3217,22 +3409,6 @@ void openHeadlineTarget(
       value.contains('feed/compose')) {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(builder: (_) => ComposeFeedPage(api: api)),
-    );
-    return;
-  }
-
-  if (value.startsWith('#/') &&
-      !value.contains('/rankList') &&
-      !value.contains('coolPictureRankList')) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => ApiListPage(
-          api: api,
-          title: title.isEmpty ? '酷安内容' : title,
-          path: '/v6/page/dataList',
-          query: {'url': value},
-        ),
-      ),
     );
     return;
   }
@@ -3266,11 +3442,28 @@ void openHeadlineTarget(
             tag: tag,
             initialTitle: tag,
             initialLogo: pic.isNotEmpty ? pic : null,
+            initialCover: pic.isNotEmpty ? pic : null,
           ),
         ),
       );
       return;
     }
+  }
+
+  if (value.startsWith('#/') &&
+      !value.contains('/rankList') &&
+      !value.contains('coolPictureRankList')) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ApiListPage(
+          api: api,
+          title: title.isEmpty ? '酷安内容' : title,
+          path: '/v6/page/dataList',
+          query: {'url': value},
+        ),
+      ),
+    );
+    return;
   }
 
   // 2. Rank List routes
@@ -3441,6 +3634,7 @@ void openHeadlineTarget(
             tag: title.replaceAll('#', '').trim(),
             initialTitle: title,
             initialLogo: pic.isNotEmpty ? pic : null,
+            initialCover: pic.isNotEmpty ? pic : null,
           ),
         ),
       );
@@ -3487,6 +3681,7 @@ void openHeadlineTarget(
           tag: title.replaceAll('#', '').trim(),
           initialTitle: title,
           initialLogo: pic.isNotEmpty ? pic : null,
+          initialCover: pic.isNotEmpty ? pic : null,
         ),
       ),
     );
@@ -3508,6 +3703,7 @@ class _SearchPageState extends State<SearchPage>
   final _queryController = TextEditingController();
   final _scrollController = ScrollController();
   final _feeds = <CoolapkFeed>[];
+  final _bufferedFeeds = <CoolapkFeed>[];
   String _query = '';
   String? _error;
   int _page = 0;
@@ -3540,8 +3736,17 @@ class _SearchPageState extends State<SearchPage>
   }
 
   void _onScroll() {
-    if (_scrollController.hasClients &&
-        _scrollController.position.extentAfter < 650) {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    if (_bufferedFeeds.isNotEmpty) {
+      if (pos.extentAfter < 900 || pos.pixels >= pos.maxScrollExtent * 0.45) {
+        setState(() {
+          _feeds.addAll(_bufferedFeeds);
+          _bufferedFeeds.clear();
+        });
+      }
+    }
+    if (_bufferedFeeds.isEmpty && pos.extentAfter < 520) {
       _loadMore();
     }
   }
@@ -3556,12 +3761,21 @@ class _SearchPageState extends State<SearchPage>
       _hasMore = true;
       _error = null;
       _feeds.clear();
+      _bufferedFeeds.clear();
     });
     await _loadMore();
   }
 
   Future<void> _loadMore() async {
-    if (_busy || !_hasMore || _query.isEmpty) return;
+    if (_busy || _query.isEmpty) return;
+    if (_bufferedFeeds.isNotEmpty) {
+      setState(() {
+        _feeds.addAll(_bufferedFeeds);
+        _bufferedFeeds.clear();
+      });
+      return;
+    }
+    if (!_hasMore) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -3571,11 +3785,32 @@ class _SearchPageState extends State<SearchPage>
       final result = await widget.api.searchFeeds(_query, nextPage);
       if (!mounted) return;
       setState(() {
-        final ids = _feeds.map((feed) => feed.id).toSet();
-        _feeds.addAll(result.items.where((feed) => ids.add(feed.id)));
+        final existingIds = <String>{
+          ..._feeds.map((feed) => feed.id),
+          ..._bufferedFeeds.map((feed) => feed.id),
+        };
+        final newItems = result.items.where((feed) => existingIds.add(feed.id)).toList();
+        if (newItems.length <= 4) {
+          _feeds.addAll(newItems);
+        } else {
+          final stage1Count = (newItems.length * 0.6).round().clamp(1, newItems.length);
+          _feeds.addAll(newItems.take(stage1Count));
+          _bufferedFeeds.addAll(newItems.skip(stage1Count));
+        }
         _page = nextPage;
         _hasMore = result.hasMore;
-        if (result.items.isEmpty) _hasMore = false;
+        if (result.items.isEmpty && _bufferedFeeds.isEmpty) _hasMore = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _bufferedFeeds.isEmpty) return;
+        if (_scrollController.hasClients &&
+            (_scrollController.position.maxScrollExtent <= 0 ||
+             _scrollController.position.extentAfter < 500)) {
+          setState(() {
+            _feeds.addAll(_bufferedFeeds);
+            _bufferedFeeds.clear();
+          });
+        }
       });
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -3651,7 +3886,7 @@ class _SearchPageState extends State<SearchPage>
         ListView.builder(
           controller: _scrollController,
           physics: const AlwaysScrollableScrollPhysics(),
-          scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+          scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
           padding: EdgeInsets.fromLTRB(
             0,
             6,
@@ -3676,7 +3911,11 @@ class _SearchPageState extends State<SearchPage>
               }
               return const SizedBox(height: 12);
             }
-            return FeedCard(api: widget.api, feed: _feeds[index]);
+            return FeedCard(
+              key: ValueKey('feed-${_feeds[index].id}'),
+              api: widget.api,
+              feed: _feeds[index],
+            );
           },
         ),
       ),
@@ -3781,11 +4020,17 @@ class FeedCard extends StatefulWidget {
   State<FeedCard> createState() => _FeedCardState();
 }
 
-class _FeedCardState extends State<FeedCard> {
+class _FeedCardState extends State<FeedCard> with AutomaticKeepAliveClientMixin {
   late bool _liked = widget.feed.liked;
   late int _likes = int.tryParse(widget.feed.likeCount) ?? 0;
   late bool _favorited = _extractFavorited(widget.api, widget.feed);
+  late String _articleCover = _extractArticleCover(widget.feed);
+  late String _articleSummary = _extractArticleSummary(widget.feed);
+  late _FeedVideoInfo? _videoInfo = _extractFeedVideo(widget.feed);
   bool _working = false;
+
+  @override
+  bool get wantKeepAlive => true;
 
   static bool _extractFavorited(CoolapkApi api, CoolapkFeed feed) {
     try {
@@ -3857,6 +4102,9 @@ class _FeedCardState extends State<FeedCard> {
       _liked = widget.feed.liked;
       _likes = int.tryParse(widget.feed.likeCount) ?? 0;
       _favorited = _extractFavorited(widget.api, widget.feed);
+      _articleCover = _extractArticleCover(widget.feed);
+      _articleSummary = _extractArticleSummary(widget.feed);
+      _videoInfo = _extractFeedVideo(widget.feed);
     }
   }
 
@@ -4411,6 +4659,7 @@ class _FeedCardState extends State<FeedCard> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final feed = widget.feed;
     final scheme = Theme.of(context).colorScheme;
     final isDetail = widget.isDetail;
@@ -4425,7 +4674,7 @@ class _FeedCardState extends State<FeedCard> {
         (feed.raw['entityTemplate'] ?? feed.raw['entity_template'] ?? '')
             .toString()
             .toLowerCase();
-    final articleCover = _extractArticleCover(feed);
+    final articleCover = _articleCover;
     final feedTitle = (feed.raw['title'] ?? '').toString().trim();
     final isGenericFeedTitle =
         feedTitle.contains('动态') ||
@@ -4732,7 +4981,7 @@ class _FeedCardState extends State<FeedCard> {
               ),
             Builder(
               builder: (context) {
-                final summary = _extractArticleSummary(feed);
+                final summary = _articleSummary;
                 if (summary.isEmpty) return const SizedBox.shrink();
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
@@ -5072,7 +5321,7 @@ class _FeedCardState extends State<FeedCard> {
                     );
                   }
                 }
-                final video = _extractFeedVideo(feed);
+                final video = _videoInfo;
                 if (video != null) {
                   return _FeedVideoPreview(
                     api: widget.api,
@@ -6678,7 +6927,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
       _replies.addAll(initialEmbedded);
     }
     _scroll.addListener(_onScroll);
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _load();
+    });
   }
 
   @override
@@ -7346,8 +7597,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   Widget build(BuildContext context) {
     final useLiquidGlass = ref.watch(
       appSettingsProvider.select(
-        (settings) =>
-            settings.useFloatingNavBar && settings.useLiquidGlassNavBar,
+        (settings) => settings.useLiquidGlassNavBar,
       ),
     );
     final displayUsername =
@@ -7553,7 +7803,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
             ListView(
               controller: _scroll,
               physics: const AlwaysScrollableScrollPhysics(),
-              scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+              scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
               padding: EdgeInsets.fromLTRB(
                 0,
                 0,

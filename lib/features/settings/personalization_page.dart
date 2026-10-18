@@ -514,26 +514,47 @@ class PersonalizationPage extends ConsumerWidget {
                         .setFloatingNavBar(val);
                   },
                 ),
-                if (themeState.useFloatingNavBar)
-                  ReviewSwitchTile(
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 3,
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 材质效果
+          AppSectionCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                  child: Text(
+                    '材质效果',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: context.adjustWeight(FontWeight.bold),
+                      color: colorScheme.onSurfaceVariant,
+                      letterSpacing: 0.0,
                     ),
-                    leading: Icon(
-                      Icons.blur_on_rounded,
-                      color: colorScheme.primary,
-                    ),
-                    title: '使用液态玻璃效果',
-                    summary: '为悬浮底栏启用实验性玻璃材质',
-                    value: themeState.useLiquidGlassNavBar,
-                    onChanged: (val) {
-                      HapticFeedbackUtil.light();
-                      ref
-                          .read(appSettingsProvider.notifier)
-                          .setLiquidGlassNavBar(val);
-                    },
                   ),
+                ),
+                ReviewSwitchTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 3,
+                  ),
+                  leading: Icon(
+                    Icons.blur_on_rounded,
+                    color: colorScheme.primary,
+                  ),
+                  title: '使用液态玻璃效果',
+                  summary: '为底栏、悬浮按钮及操作条启用液态玻璃质感',
+                  value: themeState.useLiquidGlassNavBar,
+                  onChanged: (val) {
+                    HapticFeedbackUtil.light();
+                    ref
+                        .read(appSettingsProvider.notifier)
+                        .setLiquidGlassNavBar(val);
+                  },
+                ),
               ],
             ),
           ),

@@ -77,6 +77,7 @@ class _ApiListPageState extends State<ApiListPage>
   bool get wantKeepAlive => true;
   final _scroll = ScrollController();
   final _items = <Map<String, dynamic>>[];
+  final _bufferedItems = <Map<String, dynamic>>[];
   String? _error;
   String _first = '';
   String _last = '';
@@ -134,7 +135,17 @@ class _ApiListPageState extends State<ApiListPage>
   }
 
   void _onScroll() {
-    if (_scroll.hasClients && _scroll.position.extentAfter < 520) {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (_bufferedItems.isNotEmpty) {
+      if (pos.extentAfter < 900 || pos.pixels >= pos.maxScrollExtent * 0.45) {
+        setState(() {
+          _items.addAll(_bufferedItems);
+          _bufferedItems.clear();
+        });
+      }
+    }
+    if (_bufferedItems.isEmpty && pos.extentAfter < 520) {
       _load(refresh: false);
     }
   }
@@ -144,6 +155,13 @@ class _ApiListPageState extends State<ApiListPage>
       if (refresh) _pendingRefresh = true;
       return;
     }
+    if (!refresh && _bufferedItems.isNotEmpty) {
+      setState(() {
+        _items.addAll(_bufferedItems);
+        _bufferedItems.clear();
+      });
+      return;
+    }
     if (!refresh && (!_more || _error != null)) return;
     final requestVersion = ++_requestVersion;
     final path = widget.path;
@@ -151,6 +169,9 @@ class _ApiListPageState extends State<ApiListPage>
     setState(() {
       _loading = true;
       _error = null;
+      if (refresh) {
+        _bufferedItems.clear();
+      }
     });
     final next = refresh ? 1 : _page + 1;
     try {
@@ -190,26 +211,47 @@ class _ApiListPageState extends State<ApiListPage>
       setState(() {
         if (refresh) {
           _items.clear();
+          _bufferedItems.clear();
           if (widget.initialItems.isNotEmpty) {
             _items.addAll(widget.initialItems);
           }
           _first = '';
           _last = '';
         }
-        final known = _items.map(_entityKey).toSet();
-        _items.addAll(
-          page.items.where(
-            (item) =>
-                (widget.itemFilter?.call(item) ?? true) &&
-                known.add(_entityKey(item)),
-          ),
-        );
+        final known = {
+          ..._items.map(_entityKey),
+          ..._bufferedItems.map(_entityKey),
+        };
+        final newItems = page.items.where(
+          (item) =>
+              (widget.itemFilter?.call(item) ?? true) &&
+              known.add(_entityKey(item)),
+        ).toList();
+
+        if (newItems.length <= 4) {
+          _items.addAll(newItems);
+        } else {
+          final stage1Count = (newItems.length * 0.6).round().clamp(1, newItems.length);
+          _items.addAll(newItems.take(stage1Count));
+          _bufferedItems.addAll(newItems.skip(stage1Count));
+        }
+
         _page = next;
         if (page.firstItem.isNotEmpty) _first = page.firstItem;
         if (page.lastItem.isNotEmpty) _last = page.lastItem;
-        _more = page.hasMore && page.items.isNotEmpty;
+        _more = page.hasMore && (page.items.isNotEmpty || _bufferedItems.isNotEmpty);
       });
-      precacheFeedImages(page.items, context, api: widget.api);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _bufferedItems.isEmpty) return;
+        if (_scroll.hasClients &&
+            (_scroll.position.maxScrollExtent <= 0 ||
+             _scroll.position.extentAfter < 500)) {
+          setState(() {
+            _items.addAll(_bufferedItems);
+            _bufferedItems.clear();
+          });
+        }
+      });
       final isSearchAll = path.contains('/v6/search') && query['type'] == 'all';
       final hasNoFeedsInSearchAll = isSearchAll && !_items.any(_isFeedEntity);
       final shouldPreloadNext = refresh &&
@@ -526,14 +568,14 @@ class _ApiListPageState extends State<ApiListPage>
         ? ListView.custom(
             controller: widget.nested ? null : _scroll,
             physics: const AlwaysScrollableScrollPhysics(),
-            scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+            scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
             padding: listPadding,
             childrenDelegate: delegate,
           )
         : CustomScrollView(
             key: PageStorageKey(widget.key),
             physics: const AlwaysScrollableScrollPhysics(),
-            scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+            scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
             slivers: [
               SliverOverlapInjector(handle: widget.overlapHandle!),
               SliverPadding(
@@ -1007,7 +1049,12 @@ class ApiEntityCard extends StatelessWidget {
         } catch (_) {}
       }
       if (feed.id.isNotEmpty) {
-        return FeedCard(api: api, feed: feed, articleLayout: isArticle);
+        return FeedCard(
+          key: ValueKey('feed-${feed.id}'),
+          api: api,
+          feed: feed,
+          articleLayout: isArticle,
+        );
       }
     }
     final isTopic = type.contains('topic') || type.contains('tag');
@@ -3516,6 +3563,7 @@ class TopicPage extends StatefulWidget {
     required this.tag,
     this.initialTitle,
     this.initialLogo,
+    this.initialCover,
     super.key,
   });
 
@@ -3523,6 +3571,7 @@ class TopicPage extends StatefulWidget {
   final String tag;
   final String? initialTitle;
   final String? initialLogo;
+  final String? initialCover;
 
   @override
   State<TopicPage> createState() => _TopicPageState();
@@ -6143,9 +6192,16 @@ class _TopicPageState extends State<TopicPage>
     String displayTitle,
     Color accentColor,
   ) {
+    final initialImage = (widget.initialLogo?.isNotEmpty == true)
+        ? widget.initialLogo!
+        : ((widget.initialCover?.isNotEmpty == true)
+            ? widget.initialCover!
+            : '');
     final resolvedLogo = logoUrl.isNotEmpty
         ? logoUrl
-        : (DigitalSystemHelper.getSystemPresetLogo(displayTitle) ?? '');
+        : (initialImage.isNotEmpty
+            ? initialImage
+            : (DigitalSystemHelper.getSystemPresetLogo(displayTitle) ?? ''));
 
     if (resolvedLogo.isNotEmpty) {
       return GestureDetector(
@@ -6159,7 +6215,18 @@ class _TopicPageState extends State<TopicPage>
             height: 62,
             fit: BoxFit.cover,
             errorBuilder: (_, _, _) =>
-                _buildFallbackLogo(displayTitle, accentColor),
+                (initialImage.isNotEmpty && initialImage != resolvedLogo)
+                    ? CachedNetworkImage(
+                        normalizeCoolapkImageUrl(initialImage),
+                        headers:
+                            coolapkImageHeaders(initialImage, api: widget.api),
+                        width: 62,
+                        height: 62,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            _buildFallbackLogo(displayTitle, accentColor),
+                      )
+                    : _buildFallbackLogo(displayTitle, accentColor),
           ),
         ),
       );
@@ -6843,18 +6910,44 @@ class _TopicPageState extends State<TopicPage>
         : (widget.initialTitle != null && widget.initialTitle!.isNotEmpty
               ? widget.initialTitle!
               : _cleanTag);
-    final cover = _first(_detail, [
+    final initialImage = (widget.initialLogo?.isNotEmpty == true)
+        ? widget.initialLogo!
+        : ((widget.initialCover?.isNotEmpty == true)
+            ? widget.initialCover!
+            : '');
+
+    var serverLogo = _first(_detail, ['logo', 'icon']);
+    if (serverLogo.contains('none.gif') || serverLogo.contains('default_tag')) {
+      serverLogo = '';
+    }
+
+    var logo = initialImage.isNotEmpty
+        ? initialImage
+        : (serverLogo.isNotEmpty
+            ? serverLogo
+            : _first(_detail, ['pic', 'avatar']));
+
+    var serverCover = _first(_detail, [
       'cover',
       'banner',
       'background',
       'bg_pic',
       'background_url',
     ]);
-    var logo = _first(_detail, ['logo', 'icon', 'pic', 'avatar']);
-    if (logo.isEmpty &&
-        widget.initialLogo != null &&
-        widget.initialLogo!.isNotEmpty) {
-      logo = widget.initialLogo!;
+    if (serverCover.contains('none.gif') || serverCover.contains('default_tag')) {
+      serverCover = '';
+    }
+
+    // A top banner is only displayed when there is a distinct, non-empty cover that does NOT duplicate the logo
+    var cover = serverCover;
+    if (cover == logo) {
+      cover = '';
+    }
+    if (cover.isEmpty &&
+        widget.initialCover != null &&
+        widget.initialCover!.isNotEmpty &&
+        widget.initialCover != logo) {
+      cover = widget.initialCover!;
     }
     final description = _first(_detail, ['description', 'intro', 'content']);
 
@@ -6919,7 +7012,7 @@ class _TopicPageState extends State<TopicPage>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (cover.isNotEmpty)
+                      if (cover.isNotEmpty && cover != logo)
                         GestureDetector(
                           onTap: () => _openImage(
                             cover,

@@ -110,4 +110,66 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'continuous deliberate drag from home to profile selects profile without being truncated to digital',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      await tester.runAsync(() async {
+        await container
+            .read(appSettingsProvider.notifier)
+            .setFloatingNavBar(true);
+        await container
+            .read(appSettingsProvider.notifier)
+            .setLiquidGlassNavBar(true);
+      });
+      var selected = 0;
+      final selections = <int>[];
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: AppTheme.darkTheme(colorIndex: 3),
+            home: StatefulBuilder(
+              builder: (context, setState) => Scaffold(
+                extendBody: true,
+                body: const ColoredBox(color: Color(0xFF1C1C1C)),
+                bottomNavigationBar: ReviewNavigationBar(
+                  selectedIndex: selected,
+                  hasBottomInset: false,
+                  onSelected: (index) {
+                    selections.add(index);
+                    if (index != 2) setState(() => selected = index);
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Start drag at Tab 0 (首页, center x ≈ 52)
+      final gesture = await tester.startGesture(const Offset(52, 751));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Drag deliberately across the entire bar to Tab 4 (我的, center x ≈ 308)
+      await gesture.moveTo(const Offset(308, 751));
+      await tester.pump(const Duration(milliseconds: 150));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      // Must land on Tab 4 (我的), NOT truncated to Tab 1 (数码)
+      expect(selected, 4);
+      expect(selections.last, 4);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

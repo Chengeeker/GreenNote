@@ -210,5 +210,37 @@ void main() {
         expect(find.textContaining('叫我小张 创建'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'retains initialLogo as topic theme logo without fallback letter and without duplicating as 120px top banner',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(
+              api: mockApi,
+              tag: '风景',
+              initialTitle: '风景',
+              initialCover: 'https://image.coolapk.com/scenery_pic.jpg',
+              initialLogo: 'https://image.coolapk.com/scenery_pic.jpg',
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(find.text('#风景#'), findsAtLeastNWidgets(1));
+        expect(find.byType(TopicPage), findsOneWidget);
+
+        // Fallback text "风" should NOT be displayed
+        expect(find.text('风'), findsNothing);
+
+        // Top banner should NOT duplicate the logo (no 120-height banner)
+        final topBannerFinder = find.byWidgetPredicate(
+          (widget) => widget is SizedBox && widget.height == 120,
+        );
+        expect(topBannerFinder, findsNothing);
+      },
+    );
   });
 }

@@ -10,7 +10,6 @@ import 'package:flutter/foundation.dart' show FlutterError;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:html/parser.dart' as html;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'coolapk_image.dart';
@@ -1529,7 +1528,7 @@ class CoolapkFeed {
             userInfo['userAvatar'] ??
             userInfo['avatar'],
       ),
-      message: html.parse(rawMessage).body?.text.trim() ?? rawMessage,
+      message: sanitizeCoolapkMessage(rawMessage),
       date: _relativeTime(dateline),
       likeCount: _string(
         json['likenum'] ?? json['likeNum'] ?? json['like_num'],
@@ -1701,6 +1700,29 @@ String coolapkEntityKey(Map<String, dynamic> value) {
     id = (value['entities'] as List).whereType<Map>().map(identity).join('|');
   }
   return '${_string(value['entityType'] ?? value['entity_type'])}:${_string(value['entityTemplate'] ?? value['entity_template'])}:$id:${_string(value['title'])}';
+}
+
+String sanitizeCoolapkMessage(String raw) {
+  if (raw.isEmpty) return '';
+  if (!raw.contains('<') && !raw.contains('&')) return raw.trim();
+
+  var result = raw;
+  result = result.replaceAll(
+    RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false),
+    '',
+  );
+  result = result.replaceAll(
+    RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false),
+    '',
+  );
+  result = result.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n');
+  result = result.replaceAll(RegExp(r'</?p[^>]*>', caseSensitive: false), '\n');
+  result = result.replaceAllMapped(
+    RegExp(r'''<img[^>]*alt=["'](\[[^\]]+\])["'][^>]*>''', caseSensitive: false),
+    (m) => m.group(1) ?? '',
+  );
+  result = result.replaceAll(RegExp(r'<(?!/?a\b)[^>]+>', caseSensitive: false), '');
+  return result.trim();
 }
 
 String _string(dynamic value) => value == null ? '' : value.toString().trim();

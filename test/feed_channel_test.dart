@@ -329,4 +329,68 @@ void main() {
       },
     );
   });
+
+  group('Progressive Linear Feed Loading Tests', () {
+    testWidgets(
+      'SearchPage reveals feeds progressively (60% initial stage, then remaining 40% on scroll)',
+      (tester) async {
+        final mockList = List.generate(
+          10,
+          (i) => CoolapkFeed(
+            id: 'feed_item_$i',
+            uid: 'uid_$i',
+            username: 'User $i',
+            avatar: '',
+            message: 'UniqueFeedMessageIndex_$i',
+            date: '刚刚',
+            likeCount: '0',
+            replyCount: '0',
+            pictures: [],
+            raw: {'id': 'feed_item_$i'},
+          ),
+        );
+
+        final api = _ProgressiveSearchFakeApi(mockList);
+
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: SearchPage(api: api, initialQuery: 'Flutter'),
+            ),
+          ),
+        );
+
+        // Run post-frame callbacks & search API call
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        // Initial stage: feeds in visible viewport (e.g. index 0) are rendered,
+        // while offscreen and buffered items are not eagerly built
+        expect(find.text('UniqueFeedMessageIndex_0'), findsOneWidget);
+        expect(find.text('UniqueFeedMessageIndex_9'), findsNothing);
+
+        // Scroll to trigger progressive release and bring later items into view
+        await tester.drag(find.byType(ListView), const Offset(0, -800));
+        await tester.pumpAndSettle();
+
+        // After scrolling, all items including the buffered 40% are smoothly revealed
+        expect(find.text('UniqueFeedMessageIndex_9'), findsOneWidget);
+      },
+    );
+  });
+}
+
+class _ProgressiveSearchFakeApi extends FakeFeedApi {
+  _ProgressiveSearchFakeApi(this.mockFeeds);
+  final List<CoolapkFeed> mockFeeds;
+
+  @override
+  Future<FeedPage> searchFeeds(String query, int page) async {
+    return FeedPage(
+      items: mockFeeds,
+      hasMore: false,
+      firstItem: '',
+      lastItem: '',
+    );
+  }
 }

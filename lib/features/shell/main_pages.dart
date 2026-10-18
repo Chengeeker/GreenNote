@@ -82,7 +82,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
   }
 
   PreferredSizeWidget _buildTabBar() => PreferredSize(
-    preferredSize: const Size.fromHeight(40),
+    preferredSize: const Size.fromHeight(kTextTabBarHeight),
     child: Builder(
       builder: (context) {
         final colors = Theme.of(context).colorScheme;
@@ -106,7 +106,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
           unselectedLabelStyle: const TextStyle(fontSize: 16),
           tabs: [
             for (final channel in _channels)
-              Tab(text: channel.title, height: 40),
+              Tab(text: channel.title),
           ],
         );
       },

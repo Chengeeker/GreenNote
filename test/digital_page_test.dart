@@ -437,7 +437,7 @@ void main() {
         Offset.zero,
       );
       await tester.pump(const Duration(milliseconds: 300));
-      expect(find.text('搜索动态/机型...'), findsOneWidget);
+      expect(find.text('搜索动态/话题/应用/酷友...'), findsOneWidget);
       expect(find.text('APP'), findsOneWidget);
 
       // Tab 3 (My)

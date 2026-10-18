@@ -455,13 +455,68 @@ class CoolapkRichText extends StatelessWidget {
   final List<InlineSpan> suffixSpans;
 
   static final RegExp _markupRegex = RegExp(
-    r'(\[([^\]\n]+)\])|(#[^#\n\r\t]+#)|(https?:\/\/[^\s]+)',
+    r'''(<a\s+[^>]*?href=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)</a>)|(\[([^\]\n]+)\])|(#[^#\n\r\t]+#)|(https?://[^\s<>"']+)|(@[a-zA-Z0-9_-]+|@[\u4e00-\u9fa5]{2,12}(?=[\s:：，。、！？/,\.!?#@\n\r]|$))''',
+    caseSensitive: false,
   );
 
   static final Map<String, List<_RichToken>> _tokenCache = {};
   static const int _maxCacheEntries = 500;
 
-  static List<_RichToken> _tokenize(String text) {
+  static String _preprocessText(String raw) {
+    if (raw.isEmpty) return raw;
+    if (!raw.contains('<') && !raw.contains('&')) return raw;
+
+    var s = raw;
+    s = s.replaceAll(
+      RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false),
+      '',
+    );
+    s = s.replaceAll(
+      RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false),
+      '',
+    );
+    s = s.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n');
+    s = s.replaceAll(RegExp(r'</?p[^>]*>', caseSensitive: false), '\n');
+
+    // Emotion image fallback: <img ... alt="[滑稽]" ...> -> [滑稽]
+    s = s.replaceAllMapped(
+      RegExp(r'''<img[^>]*alt=["'](\[[^\]]+\])["'][^>]*>''', caseSensitive: false),
+      (m) => m.group(1) ?? '',
+    );
+
+    // Strip other HTML tags that are not <a> or </a>
+    s = s.replaceAll(RegExp(r'<(?!/?a\b)[^>]+>', caseSensitive: false), '');
+    return s;
+  }
+
+  static String _decodeHtmlEntities(String s) {
+    if (!s.contains('&')) return s;
+    return s
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&#039;', "'")
+        .replaceAll('&apos;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&amp;', '&');
+  }
+
+  static String _safeDecodeUriComponent(String s) {
+    if (s.isEmpty) return s;
+    try {
+      return Uri.decodeComponent(s);
+    } catch (_) {
+      try {
+        return Uri.decodeFull(s);
+      } catch (_) {
+        return s;
+      }
+    }
+  }
+
+  static List<_RichToken> _tokenize(String rawText) {
+    final text = _preprocessText(rawText);
     final cached = _tokenCache[text];
     if (cached != null) return cached;
 
@@ -473,15 +528,124 @@ class CoolapkRichText extends StatelessWidget {
         tokens.add(
           _RichToken(
             type: _RichTokenType.text,
-            text: text.substring(lastIndex, match.start),
+            text: _decodeHtmlEntities(text.substring(lastIndex, match.start)),
           ),
         );
       }
 
       final fullMatch = match.group(0)!;
 
-      // 1. Emotion: [xxx]
-      if (fullMatch.startsWith('[') && fullMatch.endsWith(']')) {
+      // 1. HTML Link: <a href="...">...</a>
+      if (fullMatch.toLowerCase().startsWith('<a') &&
+          fullMatch.toLowerCase().endsWith('</a>')) {
+        var href = match.group(2) ?? '';
+        var inner = match.group(3) ?? '';
+        href = _decodeHtmlEntities(href.trim());
+        inner = _decodeHtmlEntities(
+          inner.replaceAll(RegExp(r'<[^>]+>'), '').trim(),
+        );
+
+        final isTopicTag = inner.startsWith('#') ||
+            href.contains('/t/') ||
+            href.contains('/topic/');
+        final isMention = inner.startsWith('@') ||
+            href.contains('/u/') ||
+            href.contains('/user/');
+
+        if (isTopicTag) {
+          String tagName;
+          if (inner.startsWith('#')) {
+            final cleaned = inner.replaceAll('#', '').trim();
+            tagName = cleaned.isNotEmpty ? cleaned : inner;
+          } else {
+            final segment = href.contains('/t/')
+                ? href.split('/t/').last
+                : href.split('/topic/').last;
+            final rawSegment = segment.split('?').first.split('#').first;
+            tagName = _safeDecodeUriComponent(rawSegment).replaceAll('#', '').trim();
+          }
+          final displayText = inner.isNotEmpty ? inner : '#$tagName#';
+          tokens.add(
+            _RichToken(
+              type: _RichTokenType.tag,
+              text: displayText,
+              tagName: tagName,
+            ),
+          );
+        } else if (isMention) {
+          String handle;
+          String trailing = '';
+
+          if (inner.startsWith('@')) {
+            final mentionMatch =
+                RegExp(r'^(@[a-zA-Z0-9_-]+)([\s\S]*)$').firstMatch(inner);
+            if (mentionMatch != null) {
+              handle = mentionMatch.group(1)!;
+              trailing = mentionMatch.group(2)!;
+            } else {
+              final cnMatch =
+                  RegExp(r'^(@[\u4e00-\u9fa5]{2,12})([\s\S]*)$').firstMatch(inner);
+              if (cnMatch != null) {
+                handle = cnMatch.group(1)!;
+                trailing = cnMatch.group(2)!;
+              } else {
+                handle = inner;
+              }
+            }
+          } else {
+            handle = inner.isNotEmpty ? '@$inner' : '';
+          }
+
+          String? targetUid;
+          if (href.contains('/u/') || href.contains('/user/')) {
+            final uPart = href.contains('/u/')
+                ? href.split('/u/').last
+                : href.split('/user/').last;
+            targetUid = _safeDecodeUriComponent(
+              uPart.split('?').first.split('#').first,
+            ).trim();
+          }
+
+          if (handle.isNotEmpty) {
+            tokens.add(
+              _RichToken(
+                type: _RichTokenType.mention,
+                text: handle,
+                displayText: handle,
+                targetUid: targetUid,
+                targetUsername: handle.replaceAll('@', '').trim(),
+              ),
+            );
+          }
+          if (trailing.isNotEmpty) {
+            tokens.add(
+              _RichToken(
+                type: _RichTokenType.text,
+                text: trailing,
+              ),
+            );
+          }
+        } else if (href.isNotEmpty) {
+          final resolvedUrl =
+              href.startsWith('/') ? 'https://www.coolapk.com$href' : href;
+          tokens.add(
+            _RichToken(
+              type: _RichTokenType.url,
+              text: resolvedUrl,
+              displayText: inner.isNotEmpty ? inner : resolvedUrl,
+            ),
+          );
+        } else if (inner.isNotEmpty) {
+          tokens.add(
+            _RichToken(
+              type: _RichTokenType.text,
+              text: inner,
+            ),
+          );
+        }
+      }
+      // 2. Emotion: [xxx]
+      else if (fullMatch.startsWith('[') && fullMatch.endsWith(']')) {
         final emotionName = fullMatch.substring(1, fullMatch.length - 1);
         final emotionCode = getCoolapkEmotionCode(emotionName);
         final unicodeFallback =
@@ -496,7 +660,7 @@ class CoolapkRichText extends StatelessWidget {
           ),
         );
       }
-      // 2. Topic tag: #xxx#
+      // 3. Topic tag: #xxx#
       else if (fullMatch.startsWith('#') &&
           fullMatch.endsWith('#') &&
           fullMatch.length > 2) {
@@ -509,20 +673,49 @@ class CoolapkRichText extends StatelessWidget {
           ),
         );
       }
-      // 3. Web URL: http://... or https://...
+      // 4. Plain text mention: @handle
+      else if (fullMatch.startsWith('@')) {
+        // If preceded by an alphanumeric character or underscore, it is an email or identifier, not a mention.
+        final prevChar = match.start > 0 ? text.codeUnitAt(match.start - 1) : null;
+        final isAlphaNum = prevChar != null &&
+            ((prevChar >= 48 && prevChar <= 57) ||
+                (prevChar >= 65 && prevChar <= 90) ||
+                (prevChar >= 97 && prevChar <= 122) ||
+                prevChar == 95);
+
+        if (isAlphaNum) {
+          tokens.add(
+            _RichToken(
+              type: _RichTokenType.text,
+              text: _decodeHtmlEntities(fullMatch),
+            ),
+          );
+        } else {
+          tokens.add(
+            _RichToken(
+              type: _RichTokenType.mention,
+              text: fullMatch,
+              displayText: fullMatch,
+              targetUsername: fullMatch.replaceAll('@', '').trim(),
+            ),
+          );
+        }
+      }
+      // 5. Web URL: http://... or https://...
       else if (fullMatch.startsWith('http://') ||
           fullMatch.startsWith('https://')) {
         tokens.add(
           _RichToken(
             type: _RichTokenType.url,
             text: fullMatch,
+            displayText: fullMatch,
           ),
         );
       } else {
         tokens.add(
           _RichToken(
             type: _RichTokenType.text,
-            text: fullMatch,
+            text: _decodeHtmlEntities(fullMatch),
           ),
         );
       }
@@ -534,7 +727,7 @@ class CoolapkRichText extends StatelessWidget {
       tokens.add(
         _RichToken(
           type: _RichTokenType.text,
-          text: text.substring(lastIndex),
+          text: _decodeHtmlEntities(text.substring(lastIndex)),
         ),
       );
     }
@@ -552,12 +745,15 @@ class CoolapkRichText extends StatelessWidget {
       return Text('', style: style);
     }
 
-    // Optimization: if text has no bracket, hash, or http, return standard Text directly
+    // Optimization: if text has no bracket, hash, at, http, or html markup, return standard Text directly
     if (prefixSpans.isEmpty &&
         suffixSpans.isEmpty &&
         !text.contains('[') &&
         !text.contains('#') &&
-        !text.contains('http')) {
+        !text.contains('@') &&
+        !text.contains('http') &&
+        !text.contains('<') &&
+        !text.contains('&')) {
       return Text(text, style: style, maxLines: maxLines, overflow: overflow);
     }
 
@@ -565,111 +761,160 @@ class CoolapkRichText extends StatelessWidget {
     final baseStyle = style ?? theme.textTheme.bodyMedium ?? const TextStyle();
     final tagColor = theme.colorScheme.primary;
 
-    final spans = <InlineSpan>[...prefixSpans];
-    final tokens = _tokenize(text);
+    try {
+      final spans = <InlineSpan>[...prefixSpans];
+      final tokens = _tokenize(text);
 
-    for (final token in tokens) {
-      switch (token.type) {
-        case _RichTokenType.text:
-          spans.add(TextSpan(text: token.text, style: baseStyle));
-          break;
-        case _RichTokenType.emotion:
-          if (token.emotionCode != null) {
-            spans.add(
-              WidgetSpan(
-                alignment: PlaceholderAlignment.middle,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 1.5),
-                  child: _EmotionImage(
-                    code: token.emotionCode!,
-                    size: (baseStyle.fontSize ?? 16) * 1.25,
-                    fallbackText: token.text,
-                    textStyle: baseStyle,
-                    unicodeFallback: token.unicodeFallback,
+      for (final token in tokens) {
+        switch (token.type) {
+          case _RichTokenType.text:
+            spans.add(TextSpan(text: token.text, style: baseStyle));
+            break;
+          case _RichTokenType.emotion:
+            if (token.emotionCode != null) {
+              spans.add(
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                    child: _EmotionImage(
+                      code: token.emotionCode!,
+                      size: (baseStyle.fontSize ?? 16) * 1.25,
+                      fallbackText: token.text,
+                      textStyle: baseStyle,
+                      unicodeFallback: token.unicodeFallback,
+                    ),
                   ),
                 ),
-              ),
-            );
-          } else if (token.unicodeFallback != null) {
+              );
+            } else if (token.unicodeFallback != null) {
+              spans.add(
+                TextSpan(
+                  text: token.unicodeFallback!,
+                  style: baseStyle.copyWith(
+                    fontSize: (baseStyle.fontSize ?? 16) * 1.15,
+                  ),
+                ),
+              );
+            } else {
+              spans.add(TextSpan(text: token.text, style: baseStyle));
+            }
+            break;
+          case _RichTokenType.tag:
+            final tagName = token.tagName ?? token.text.replaceAll('#', '').trim();
             spans.add(
               TextSpan(
-                text: token.unicodeFallback!,
+                text: token.text,
                 style: baseStyle.copyWith(
-                  fontSize: (baseStyle.fontSize ?? 16) * 1.15,
+                  color: tagColor,
+                  fontWeight: FontWeight.w600,
                 ),
+                recognizer: TapGestureRecognizer()
+                  ..onTap = () {
+                    if (onTapTag != null) {
+                      onTapTag!(tagName);
+                    } else {
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => TopicPage(api: api, tag: tagName),
+                        ),
+                      );
+                    }
+                  },
               ),
             );
-          } else {
-            spans.add(TextSpan(text: token.text, style: baseStyle));
-          }
-          break;
-        case _RichTokenType.tag:
-          final tagName = token.tagName ?? '';
-          spans.add(
-            TextSpan(
-              text: token.text,
-              style: baseStyle.copyWith(
-                color: tagColor,
-                fontWeight: FontWeight.w600,
+            break;
+          case _RichTokenType.mention:
+            final target = (token.targetUid != null && token.targetUid!.isNotEmpty)
+                ? token.targetUid!
+                : (token.targetUsername ?? token.text.replaceAll('@', '').trim());
+            spans.add(
+              TextSpan(
+                text: token.text,
+                style: baseStyle.copyWith(
+                  color: tagColor,
+                  fontWeight: FontWeight.w600,
+                ),
+                recognizer: TapGestureRecognizer()
+                  ..onTap = () {
+                    if (target.isNotEmpty) {
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => UserSpacePage(api: api, uid: target),
+                        ),
+                      );
+                    }
+                  },
               ),
-              recognizer: TapGestureRecognizer()
-                ..onTap = () {
-                  if (onTapTag != null) {
-                    onTapTag!(tagName);
-                  } else {
-                    Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) => TopicPage(api: api, tag: tagName),
-                      ),
-                    );
-                  }
-                },
-            ),
-          );
-          break;
-        case _RichTokenType.url:
-          final url = token.text;
-          spans.add(
-            TextSpan(
-              text: url,
-              style: baseStyle.copyWith(
-                color: tagColor,
-                decoration: TextDecoration.underline,
+            );
+            break;
+          case _RichTokenType.url:
+            final url = token.text;
+            final displayText = token.displayText ?? url;
+            final isButton = displayText == '查看链接' || displayText == '网页链接';
+            spans.add(
+              TextSpan(
+                text: displayText,
+                style: baseStyle.copyWith(
+                  color: tagColor,
+                  fontWeight: isButton ? FontWeight.w600 : FontWeight.normal,
+                  decoration: TextDecoration.underline,
+                  decorationColor: tagColor,
+                ),
+                recognizer: TapGestureRecognizer()
+                  ..onTap = () async {
+                    await CoolapkUrlHandler.handleUrl(context, api, url);
+                  },
               ),
-              recognizer: TapGestureRecognizer()
-                ..onTap = () async {
-                  await CoolapkUrlHandler.handleUrl(context, api, url);
-                },
-            ),
-          );
-          break;
+            );
+            break;
+        }
       }
-    }
-    spans.addAll(suffixSpans);
+      spans.addAll(suffixSpans);
 
-    return Text.rich(
-      TextSpan(children: spans),
-      style: baseStyle,
-      maxLines: maxLines,
-      overflow: overflow,
-    );
+      return Text.rich(
+        TextSpan(children: spans),
+        style: baseStyle,
+        maxLines: maxLines,
+        overflow: overflow,
+      );
+    } catch (_) {
+      return Text.rich(
+        TextSpan(
+          children: [
+            ...prefixSpans,
+            TextSpan(text: text),
+            ...suffixSpans,
+          ],
+        ),
+        style: baseStyle,
+        maxLines: maxLines,
+        overflow: overflow,
+      );
+    }
   }
 }
 
-enum _RichTokenType { text, emotion, tag, url }
+enum _RichTokenType { text, emotion, tag, mention, url }
 
 class _RichToken {
   const _RichToken({
     required this.type,
     required this.text,
+    this.displayText,
     this.emotionCode,
     this.unicodeFallback,
     this.tagName,
+    this.targetUid,
+    this.targetUsername,
   });
 
   final _RichTokenType type;
   final String text;
+  final String? displayText;
   final String? emotionCode;
   final String? unicodeFallback;
   final String? tagName;
+  final String? targetUid;
+  final String? targetUsername;
 }

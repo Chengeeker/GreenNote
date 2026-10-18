@@ -436,7 +436,7 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
-  testWidgets('liquid glass setting follows the floating bar setting', (
+  testWidgets('liquid glass setting is independent of floating bar setting', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -452,11 +452,9 @@ void main() {
     ).read(appSettingsProvider.notifier);
     await settings.setFloatingNavBar(false);
     await tester.pumpAndSettle();
-    expect(find.text('使用液态玻璃效果'), findsNothing);
+    expect(find.text('使用液态玻璃效果'), findsOneWidget);
 
-    await settings.setFloatingNavBar(true);
-    await tester.pumpAndSettle();
-    await tester.drag(find.byType(ListView).first, const Offset(0, -4000));
+    await settings.setLiquidGlassNavBar(false);
     await tester.pumpAndSettle();
     expect(find.text('使用液态玻璃效果'), findsOneWidget);
   });

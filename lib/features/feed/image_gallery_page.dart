@@ -19,10 +19,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show RenderImage, RenderClipRRect, PlatformViewHitTestBehavior;
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
+import '../../core/settings/app_settings.dart';
 import '../../core/storage/storage_path_resolver.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/utils/haptic_feedback_util.dart';
@@ -398,6 +401,7 @@ class ImageGalleryPage extends StatefulWidget {
   final bool isDetail;
   final String? authorName;
   final Object? heroScope;
+  final bool? useLiquidGlass;
 
   const ImageGalleryPage({
     required this.api,
@@ -408,6 +412,7 @@ class ImageGalleryPage extends StatefulWidget {
     this.isDetail = false,
     this.authorName,
     this.heroScope,
+    this.useLiquidGlass,
   });
 
   @override
@@ -1009,16 +1014,41 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final hasScope = context
+            .getElementForInheritedWidgetOfExactType<
+              UncontrolledProviderScope
+            >() !=
+        null;
+    if (hasScope) {
+      return Consumer(
+        builder: (context, ref, _) {
+          final useLiquidGlass = (widget.useLiquidGlass ??
+              ref.watch(
+                appSettingsProvider.select(
+                  (AppSettingsState s) => s.useLiquidGlassNavBar,
+                ),
+              )) == true;
+          return _buildGallery(context, useLiquidGlass);
+        },
+      );
+    }
+    final useLiquidGlass = widget.useLiquidGlass ?? false;
+    return _buildGallery(context, useLiquidGlass);
+  }
+
+  Widget _buildGallery(BuildContext context, bool useLiquidGlass) {
+    final galleryPage = Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
           // Gesture PageView with Physics-based Spring Morphing
-          Listener(
-            onPointerDown: _handleGalleryPointerDown,
-            onPointerMove: _handleGalleryPointerMove,
-            onPointerUp: _handleGalleryPointerUp,
-            onPointerCancel: _handleGalleryPointerCancel,
+          GlassBackgroundSource(
+            enabled: useLiquidGlass,
+            child: Listener(
+              onPointerDown: _handleGalleryPointerDown,
+              onPointerMove: _handleGalleryPointerMove,
+              onPointerUp: _handleGalleryPointerUp,
+              onPointerCancel: _handleGalleryPointerCancel,
             child: NotificationListener<ScrollNotification>(
               onNotification: (notification) {
                 if (notification.depth == 0) {
@@ -1424,6 +1454,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
               ),
             ),
           ),
+        ),
 
           if (widget.pics.length > 1)
             Positioned(
@@ -1474,6 +1505,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                               Icons.arrow_back_rounded,
                               color: Colors.white,
                             ),
+                            useLiquidGlass: useLiquidGlass,
                             // 返回动作不再依赖水波纹触感。
                             onPressed: () => Navigator.of(context).pop(),
                           ),
@@ -1521,6 +1553,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                                     Icons.download_rounded,
                                     color: Colors.white,
                                   ),
+                            useLiquidGlass: useLiquidGlass,
                             onPressed: _isSaving ? null : _saveCurrentImage,
                           ),
                         ],
@@ -1533,6 +1566,16 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
         ],
       ),
     );
+
+    return useLiquidGlass
+        ? GlassAdaptiveScope(
+            minQuality: GlassQuality.standard,
+            child: GlassPage(
+              enableBackgroundSampling: true,
+              child: galleryPage,
+            ),
+          )
+        : galleryPage;
   }
 }
 
@@ -1543,6 +1586,7 @@ class _GalleryGlassIconButton extends StatefulWidget {
     required this.onPressed,
     required this.opacity,
     required this.opacityKey,
+    required this.useLiquidGlass,
   });
 
   final Widget icon;
@@ -1550,6 +1594,7 @@ class _GalleryGlassIconButton extends StatefulWidget {
   final VoidCallback? onPressed;
   final double opacity;
   final Key opacityKey;
+  final bool useLiquidGlass;
 
   @override
   State<_GalleryGlassIconButton> createState() =>
@@ -1563,7 +1608,21 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
   @override
   void initState() {
     super.initState();
-    if (ui.ImageFilter.isShaderFilterSupported) _loadShader();
+    if (!widget.useLiquidGlass && ui.ImageFilter.isShaderFilterSupported) {
+      _loadShader();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _GalleryGlassIconButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.useLiquidGlass == widget.useLiquidGlass) return;
+    if (widget.useLiquidGlass) {
+      _shader?.dispose();
+      _shader = null;
+    } else if (ui.ImageFilter.isShaderFilterSupported) {
+      _loadShader();
+    }
   }
 
   Future<void> _loadShader() async {
@@ -1571,9 +1630,14 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
       final program = await (_programFuture ??= ui.FragmentProgram.fromAsset(
         'shaders/gallery_glass_button.frag',
       ));
-      if (mounted) setState(() => _shader = program.fragmentShader());
+      final shader = program.fragmentShader();
+      if (!mounted || widget.useLiquidGlass) {
+        shader.dispose();
+        return;
+      }
+      setState(() => _shader = shader);
     } catch (_) {
-      // Keep the glass surface usable when shader filters are unavailable.
+      // Blur and the highlight surface remain usable if shader loading fails.
     }
   }
 
@@ -1586,6 +1650,46 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
   @override
   Widget build(BuildContext context) {
     final opacity = widget.opacity;
+    if (widget.useLiquidGlass) {
+      return GestureDetector(
+        excludeFromSemantics: true,
+        // Long holds are reserved for exploring the liquid effect.
+        onLongPress: () {},
+        child: GlassButton(
+          label: widget.tooltip,
+          width: 48,
+          height: 48,
+          icon: widget.icon,
+          iconSize: 22,
+          iconColor: Colors.white,
+          onTap: () => widget.onPressed?.call(),
+          enabled: widget.onPressed != null,
+          useOwnLayer: true,
+          stretch: 0.8,
+          anchorStretchSettings: const AnchorStretchSettings(
+            intensity: 0.8,
+            squashFactor: 0.3,
+            translationDamping: 0.15,
+            bounciness: 0.2,
+          ),
+          glowColor: const Color(0x20FFFFFF),
+          glowOpacity: 1,
+          quality: GlassQuality.premium,
+          settings: LiquidGlassSettings(
+            visibility: opacity,
+            glassColor: const Color(0x66000000),
+            bodyMode: GlassBodyMode.clear,
+            thickness: 32,
+            blur: 2,
+            lightIntensity: 0.25,
+            ambientStrength: 0,
+            refractiveIndex: 1.24,
+            chromaticAberration: 0.025,
+            shadowElevation: 0,
+          ),
+        ),
+      );
+    }
     final blur = ui.ImageFilter.blur(
       sigmaX: 2.5 * opacity,
       sigmaY: 2.5 * opacity,

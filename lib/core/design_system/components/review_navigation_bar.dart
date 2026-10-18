@@ -1,14 +1,24 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart'
+    show
+        PointerCancelEvent,
+        PointerDownEvent,
+        PointerMoveEvent,
+        PointerUpEvent,
+        VelocityTracker,
+        kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
-import '../../theme/app_theme.dart';
 import '../../settings/app_settings.dart';
+import '../../theme/app_theme.dart';
+import '../../utils/haptic_feedback_util.dart';
 
 /// Material 3 navigation shared by the app shell.
-class ReviewNavigationBar extends ConsumerWidget {
+class ReviewNavigationBar extends ConsumerStatefulWidget {
   const ReviewNavigationBar({
     super.key,
     required this.selectedIndex,
@@ -63,7 +73,167 @@ class ReviewNavigationBar extends ConsumerWidget {
   ];
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReviewNavigationBar> createState() =>
+      _ReviewNavigationBarState();
+}
+
+class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
+  static const _longPressThreshold = Duration(milliseconds: 500);
+  static const _flickVelocityThreshold = 800.0;
+
+  final GlobalKey _barKey = GlobalKey();
+  int? _activePointer;
+  VelocityTracker? _velocityTracker;
+  Duration? _pointerDownAt;
+  Offset? _pointerDownPosition;
+  int _selectedIndexAtPointerDown = 0;
+  int? _pendingIndex;
+  bool _movedBeyondSlop = false;
+  bool _draggedHorizontally = false;
+  bool _cancelled = false;
+  int _gestureId = 0;
+
+  static int _nextTab(int current, bool forward) {
+    // Valid business tab indices: 0 (首页), 1 (数码), 3 (发现), 4 (我的)
+    const validTabs = [0, 1, 3, 4];
+    final currentPos = validTabs.indexOf(current);
+    if (currentPos == -1) {
+      return forward ? 1 : 0;
+    }
+    if (forward) {
+      final nextPos = (currentPos + 1).clamp(0, validTabs.length - 1);
+      return validTabs[nextPos];
+    } else {
+      final prevPos = (currentPos - 1).clamp(0, validTabs.length - 1);
+      return validTabs[prevPos];
+    }
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (_activePointer != null) return;
+    _activePointer = event.pointer;
+    _velocityTracker = VelocityTracker.withKind(event.kind)
+      ..addPosition(event.timeStamp, event.position);
+    _pointerDownAt = event.timeStamp;
+    _pointerDownPosition = event.position;
+    _selectedIndexAtPointerDown = widget.selectedIndex;
+    _pendingIndex = null;
+    _movedBeyondSlop = false;
+    _draggedHorizontally = false;
+    _cancelled = false;
+    _gestureId++;
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (event.pointer != _activePointer) return;
+    _velocityTracker?.addPosition(event.timeStamp, event.position);
+    final origin = _pointerDownPosition;
+    if (origin == null) return;
+    final delta = event.position - origin;
+    if (delta.distance > kTouchSlop) {
+      _movedBeyondSlop = true;
+      if (delta.dx.abs() > delta.dy.abs()) _draggedHorizontally = true;
+    }
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    final velocity = _velocityTracker?.getVelocity().pixelsPerSecond.dx ?? 0.0;
+    _finishPointer(
+      event.pointer,
+      event.timeStamp,
+      event.position,
+      horizontalVelocity: velocity,
+    );
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _finishPointer(
+      event.pointer,
+      event.timeStamp,
+      event.position,
+      cancelled: true,
+    );
+  }
+
+  void _finishPointer(
+    int pointer,
+    Duration releasedAt,
+    Offset releasePosition, {
+    bool cancelled = false,
+    double horizontalVelocity = 0.0,
+  }) {
+    if (pointer != _activePointer) return;
+    _cancelled |= cancelled;
+    final gestureId = _gestureId;
+
+    scheduleMicrotask(() {
+      if (!mounted || gestureId != _gestureId) return;
+
+      final target = _pendingIndex;
+      final wasLongPress =
+          _pointerDownAt != null &&
+          releasedAt - _pointerDownAt! >= _longPressThreshold;
+      final wasDrag = _draggedHorizontally;
+      final movedVertically = _movedBeyondSlop && !wasDrag;
+      final wasCancelled = _cancelled;
+      final startingIndex = _selectedIndexAtPointerDown;
+
+      _activePointer = null;
+      _velocityTracker = null;
+      _pointerDownAt = null;
+      _pointerDownPosition = null;
+      _pendingIndex = null;
+      _movedBeyondSlop = false;
+      _draggedHorizontally = false;
+      _cancelled = false;
+
+      if (wasCancelled || movedVertically || target == null) return;
+      if (target == 2) return;
+
+      int? releaseSlot;
+      final renderBox =
+          _barKey.currentContext?.findRenderObject() as RenderBox?;
+      if (renderBox != null && renderBox.hasSize) {
+        final localPos = renderBox.globalToLocal(releasePosition);
+        final slotFraction = localPos.dx / renderBox.size.width;
+        releaseSlot = (slotFraction * 5).floor().clamp(0, 4);
+      }
+
+      final isFastFlick =
+          wasDrag && horizontalVelocity.abs() >= _flickVelocityThreshold;
+      final reachedTargetSlot = releaseSlot != null && releaseSlot == target;
+
+      int selectedTarget = target;
+      if (isFastFlick && !reachedTargetSlot) {
+        if (horizontalVelocity > 0 || target > startingIndex) {
+          selectedTarget = _nextTab(startingIndex, true);
+        } else if (horizontalVelocity < 0 || target < startingIndex) {
+          selectedTarget = _nextTab(startingIndex, false);
+        }
+      }
+
+      if ((wasDrag || wasLongPress) && selectedTarget == startingIndex) return;
+
+      _select(selectedTarget);
+    });
+  }
+
+  void _handleTabSelected(int index) {
+    if (index == 2) return;
+    if (_activePointer != null) {
+      _pendingIndex = index;
+    } else {
+      _select(index);
+    }
+  }
+
+  void _select(int index) {
+    HapticFeedbackUtil.light();
+    widget.onSelected(index);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final useFloating = ref.watch(
       appSettingsProvider.select((state) => state.useFloatingNavBar),
     );
@@ -74,12 +244,12 @@ class ReviewNavigationBar extends ConsumerWidget {
 
     if (!useFloating) {
       return NavigationBar(
-        selectedIndex: selectedIndex,
+        selectedIndex: widget.selectedIndex,
         elevation: 0,
         height: 68,
-        onDestinationSelected: onSelected,
+        onDestinationSelected: widget.onSelected,
         destinations: [
-          for (final destination in _destinations)
+          for (final destination in ReviewNavigationBar._destinations)
             NavigationDestination(
               icon: Icon(destination.icon),
               selectedIcon: Icon(destination.selectedIcon),
@@ -98,7 +268,7 @@ class ReviewNavigationBar extends ConsumerWidget {
         heightFactor: 1,
         alignment: Alignment.bottomCenter,
         child: Padding(
-          padding: EdgeInsets.only(bottom: hasBottomInset ? 6 : 14),
+          padding: EdgeInsets.only(bottom: widget.hasBottomInset ? 6 : 14),
           child: Container(
             // Five business slots retain Review's per-slot width where space permits.
             width: math.min(440, MediaQuery.sizeOf(context).width - 32),
@@ -119,13 +289,37 @@ class ReviewNavigationBar extends ConsumerWidget {
                 ),
               ],
             ),
-            child: Row(
-              children: List.generate(
-                _destinations.length,
-                (index) => Expanded(
-                  child: _buildFloatingItem(context, index, colorScheme),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                AnimatedAlign(
+                  alignment: Alignment(-1 + widget.selectedIndex * 0.5, 0),
+                  duration: Duration(
+                    milliseconds: MediaQuery.disableAnimationsOf(context)
+                        ? 0
+                        : 220,
+                  ),
+                  curve: Curves.easeOutCubic,
+                  child: FractionallySizedBox(
+                    widthFactor: 1 / ReviewNavigationBar._destinations.length,
+                    heightFactor: 1,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(28),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                Row(
+                  children: List.generate(
+                    ReviewNavigationBar._destinations.length,
+                    (index) => Expanded(
+                      child: _buildFloatingItem(context, index, colorScheme),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -134,8 +328,8 @@ class ReviewNavigationBar extends ConsumerWidget {
   }
 
   Widget _buildLiquidGlassBar(BuildContext context) {
-    const accent = Color(0xFF159F97);
-    const indicatorColor = Color(0x20FFFFFF);
+    const indicatorColor = Color(0x66000000);
+    const interactionGlowColor = Color(0x20FFFFFF);
 
     return SafeArea(
       minimum: const EdgeInsets.only(bottom: 21),
@@ -143,60 +337,73 @@ class ReviewNavigationBar extends ConsumerWidget {
         heightFactor: 1,
         alignment: Alignment.bottomCenter,
         child: SizedBox(
+          key: _barKey,
           width: math.min(440, MediaQuery.sizeOf(context).width - 40),
           child: Stack(
             alignment: Alignment.center,
             children: [
-              ExcludeSemantics(
-                child: GlassTabBar.bottom(
-                  selectedIndex: selectedIndex,
-                  onTabSelected: (index) {
-                    if (index != 2) onSelected(index);
-                  },
-                  tabs: [
-                    for (var index = 0; index < _destinations.length; index++)
-                      GlassTab(
-                        icon: index == 2
-                            ? const SizedBox.shrink()
-                            : _LiquidGlassTabIcon(index: index),
-                        activeIcon: index == 2
-                            ? const SizedBox.shrink()
-                            : _LiquidGlassTabIcon(index: index),
-                        label: index == 2 ? '' : _destinations[index].label,
-                        semanticLabel: _destinations[index].label,
-                      ),
-                  ],
-                  iconSize: 24,
-                  labelFontSize: 10.5,
-                  textStyle: const TextStyle(
-                    fontSize: 10.5,
-                    height: 1.1,
-                    fontWeight: FontWeight.w500,
+              Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: _onPointerDown,
+                onPointerMove: _onPointerMove,
+                onPointerUp: _onPointerUp,
+                onPointerCancel: _onPointerCancel,
+                child: ExcludeSemantics(
+                  child: GlassTabBar.bottom(
+                    selectedIndex: widget.selectedIndex,
+                    onTabSelected: _handleTabSelected,
+                    tabs: [
+                      for (
+                        var index = 0;
+                        index < ReviewNavigationBar._destinations.length;
+                        index++
+                      )
+                        GlassTab(
+                          icon: index == 2
+                              ? const SizedBox.shrink()
+                              : _LiquidGlassTabIcon(index: index),
+                          activeIcon: index == 2
+                              ? const SizedBox.shrink()
+                              : _LiquidGlassTabIcon(index: index),
+                          label: index == 2
+                              ? ''
+                              : ReviewNavigationBar._destinations[index].label,
+                          semanticLabel:
+                              ReviewNavigationBar._destinations[index].label,
+                        ),
+                    ],
+                    iconSize: 24,
+                    labelFontSize: 10.5,
+                    textStyle: const TextStyle(
+                      fontSize: 10.5,
+                      height: 1.1,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    iconLabelSpacing: 2,
+                    horizontalPadding: 0,
+                    barHeight: 56,
+                    // Keep full end arcs when the pressed lens expands.
+                    barBorderRadius: 9999,
+                    indicatorBorderRadius: 9999,
+                    verticalPadding: 0,
+                    // GlassTabBar's own preset overrides GlassTheme settings.
+                    settings: ReviewNavigationBar.liquidGlassSettings,
+                    quality: ReviewNavigationBar.liquidGlassQuality,
+                    backgroundQuality: ReviewNavigationBar.liquidGlassQuality,
+                    indicatorSettings: const LiquidGlassSettings(
+                      refractiveIndex: 1.18,
+                      chromaticAberration: 0.025,
+                    ),
+                    innerBlur: 6,
+                    indicatorColor: indicatorColor,
+                    interactionGlowColor: interactionGlowColor,
+                    indicatorPinchStrength: 0.7,
+                    pressScale: 1.06,
+                    selectedIconColor: Colors.white,
+                    selectedLabelColor: Colors.white,
+                    unselectedIconColor: Colors.white,
+                    unselectedLabelColor: Colors.white,
                   ),
-                  iconLabelSpacing: 2,
-                  horizontalPadding: 0,
-                  barHeight: 56,
-                  // Keep full end arcs when the pressed lens expands.
-                  barBorderRadius: 9999,
-                  indicatorBorderRadius: 9999,
-                  verticalPadding: 0,
-                  // GlassTabBar's own preset overrides GlassTheme settings.
-                  settings: liquidGlassSettings,
-                  quality: liquidGlassQuality,
-                  backgroundQuality: liquidGlassQuality,
-                  indicatorSettings: const LiquidGlassSettings(
-                    refractiveIndex: 1.18,
-                    chromaticAberration: 0.025,
-                  ),
-                  innerBlur: 6,
-                  indicatorColor: indicatorColor,
-                  interactionGlowColor: indicatorColor,
-                  indicatorPinchStrength: 0.7,
-                  pressScale: 1.06,
-                  selectedIconColor: accent,
-                  selectedLabelColor: accent,
-                  unselectedIconColor: Colors.white,
-                  unselectedLabelColor: Colors.white,
                 ),
               ),
               // The library's extraButton only supports a left or right slot.
@@ -205,14 +412,20 @@ class ReviewNavigationBar extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Row(
                     children: [
-                      for (var index = 0; index < _destinations.length; index++)
+                      for (
+                        var index = 0;
+                        index < ReviewNavigationBar._destinations.length;
+                        index++
+                      )
                         Expanded(
                           child: Semantics(
                             button: true,
-                            selected: index != 2 && selectedIndex == index,
+                            selected:
+                                index != 2 && widget.selectedIndex == index,
                             inMutuallyExclusiveGroup: index != 2,
-                            label: _destinations[index].label,
-                            onTap: () => onSelected(index),
+                            label:
+                                ReviewNavigationBar._destinations[index].label,
+                            onTap: () => widget.onSelected(index),
                             child: index == 2
                                 ? GestureDetector(
                                     key: const ValueKey(
@@ -220,7 +433,7 @@ class ReviewNavigationBar extends ConsumerWidget {
                                     ),
                                     behavior: HitTestBehavior.opaque,
                                     excludeFromSemantics: true,
-                                    onTap: () => onSelected(index),
+                                    onTap: () => widget.onSelected(index),
                                     child: Center(
                                       child: Container(
                                         width: 50,
@@ -263,9 +476,8 @@ class ReviewNavigationBar extends ConsumerWidget {
     int index,
     ColorScheme colorScheme,
   ) {
-    final selected = selectedIndex == index;
-    final destination = _destinations[index];
-    final activeBackground = colorScheme.secondaryContainer;
+    final selected = widget.selectedIndex == index;
+    final destination = ReviewNavigationBar._destinations[index];
     final activeContent = colorScheme.onSecondaryContainer;
     final inactiveContent = colorScheme.onSurfaceVariant;
 
@@ -276,31 +488,11 @@ class ReviewNavigationBar extends ConsumerWidget {
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
         hoverColor: Colors.transparent,
-        onTap: () => onSelected(index),
+        onTap: () => widget.onSelected(index),
         child: Stack(
           fit: StackFit.expand,
           alignment: Alignment.center,
           children: [
-            if (selected)
-              TweenAnimationBuilder<double>(
-                key: ValueKey(index),
-                tween: Tween<double>(begin: 0, end: 1),
-                duration: Duration(
-                  milliseconds: MediaQuery.disableAnimationsOf(context)
-                      ? 0
-                      : 160,
-                ),
-                curve: Curves.easeOutCubic,
-                builder: (context, value, child) => Opacity(
-                  opacity: value,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: activeBackground,
-                      borderRadius: BorderRadius.circular(28),
-                    ),
-                  ),
-                ),
-              ),
             Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [

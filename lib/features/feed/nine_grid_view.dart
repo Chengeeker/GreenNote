@@ -37,11 +37,21 @@ class NineGridView extends StatefulWidget {
 
 class _NineGridViewState extends State<NineGridView> {
   final Object _heroScope = Object();
+  late int _knownHdrCount;
 
   @override
   void initState() {
     super.initState();
+    _knownHdrCount = _countKnownHdr();
     HdrImageDetector.notifier.addListener(_onHdrUpdated);
+  }
+
+  @override
+  void didUpdateWidget(covariant NineGridView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pics != widget.pics) {
+      _knownHdrCount = _countKnownHdr();
+    }
   }
 
   @override
@@ -50,8 +60,19 @@ class _NineGridViewState extends State<NineGridView> {
     super.dispose();
   }
 
+  int _countKnownHdr() {
+    var count = 0;
+    for (final p in widget.pics) {
+      if (HdrImageDetector.isKnownHdr(p.url)) count++;
+    }
+    return count;
+  }
+
   void _onHdrUpdated() {
-    if (mounted && pics.any((p) => HdrImageDetector.isKnownHdr(p.url))) {
+    if (!mounted) return;
+    final currentCount = _countKnownHdr();
+    if (currentCount != _knownHdrCount) {
+      _knownHdrCount = currentCount;
       setState(() {});
     }
   }

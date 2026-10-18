@@ -20,10 +20,10 @@ class _StackedPageTransitionsBuilder extends PageTransitionsBuilder {
   const _StackedPageTransitionsBuilder();
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 320);
+  Duration get transitionDuration => const Duration(milliseconds: 240);
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 220);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 190);
 
   @override
   Widget buildTransitions<T>(

@@ -45,6 +45,7 @@ class CoolapkUrlHandler {
     final clean = url.trim().toLowerCase();
     if (clean.isEmpty) return false;
     if (clean.startsWith('coolmarket://')) return true;
+    if (clean.startsWith('/')) return true;
 
     final uri = Uri.tryParse(clean);
     if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
@@ -63,8 +64,12 @@ class CoolapkUrlHandler {
     CoolapkApi api,
     String rawUrl,
   ) async {
-    final url = rawUrl.trim();
+    var url = rawUrl.trim();
     if (url.isEmpty) return false;
+
+    if (url.startsWith('/')) {
+      url = 'https://www.coolapk.com$url';
+    }
 
     final targetContext = context ?? rootNavigatorKey.currentContext;
 
@@ -77,6 +82,10 @@ class CoolapkUrlHandler {
             mode: LaunchMode.externalApplication,
           );
         }
+        return await launchUrlString(
+          url,
+          mode: LaunchMode.externalApplication,
+        );
       } catch (_) {}
       return false;
     }
@@ -104,11 +113,11 @@ class CoolapkUrlHandler {
     }
 
     // 2.2 用户主页 (User / Space)
-    // 匹配: /u/12345, /user/12345, coolmarket://u/12345
-    final userRegex = RegExp(r'(?:/u/|/user/|coolmarket://u/|coolmarket://user/)(\d+)', caseSensitive: false);
+    // 匹配: /u/12345, /u/username, /user/12345, coolmarket://u/12345
+    final userRegex = RegExp(r'(?:/u/|/user/|coolmarket://u/|coolmarket://user/)([^/?#]+)', caseSensitive: false);
     final userMatch = userRegex.firstMatch(full);
     if (userMatch != null) {
-      final uid = userMatch.group(1)!;
+      final uid = Uri.decodeComponent(userMatch.group(1)!).trim();
       Navigator.of(targetContext).push<void>(
         MaterialPageRoute<void>(
           builder: (_) => UserSpacePage(api: api, uid: uid),

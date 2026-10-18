@@ -117,12 +117,19 @@ void precacheFeedImages(
 class HdrImageDetector {
   static final Set<String> _knownHdrUrls = <String>{};
   static final Set<String> _checkingHdrUrls = <String>{};
+  static final Set<String> _checkedUrls = <String>{};
   static final ValueNotifier<int> notifier = ValueNotifier<int>(0);
 
   static bool isKnownHdr(String url) {
     if (url.isEmpty) return false;
     final normalized = normalizeCoolapkImageUrl(url);
     return _knownHdrUrls.contains(url) || _knownHdrUrls.contains(normalized);
+  }
+
+  static bool isChecked(String url) {
+    if (url.isEmpty) return true;
+    final normalized = normalizeCoolapkImageUrl(url);
+    return _checkedUrls.contains(url) || _checkedUrls.contains(normalized);
   }
 
   static void markHdr(String url) {
@@ -169,9 +176,9 @@ class HdrImageDetector {
     String url, {
     Map<String, String>? headers,
   }) async {
-    if (url.isEmpty || isKnownHdr(url)) return;
+    if (url.isEmpty || isKnownHdr(url) || isChecked(url)) return;
     final normalized = normalizeCoolapkImageUrl(url);
-    if (normalized.isEmpty || isKnownHdr(normalized)) return;
+    if (normalized.isEmpty || isKnownHdr(normalized) || isChecked(normalized)) return;
     if (!_checkingHdrUrls.add(normalized)) return;
     try {
       Uint8List? data;
@@ -199,6 +206,8 @@ class HdrImageDetector {
     } catch (_) {
     } finally {
       _checkingHdrUrls.remove(normalized);
+      _checkedUrls.add(url);
+      _checkedUrls.add(normalized);
     }
   }
 
@@ -206,6 +215,7 @@ class HdrImageDetector {
   static void reset() {
     _knownHdrUrls.clear();
     _checkingHdrUrls.clear();
+    _checkedUrls.clear();
     notifier.value = 0;
   }
 }

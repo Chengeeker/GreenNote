@@ -242,7 +242,7 @@ class _DigitalHomeViewState extends State<DigitalHomeView>
         onLoad: () => _loadData(refresh: false),
         child: filterHorizontalScrollNotifications(
           ListView.builder(
-            scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+            scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
             physics: const AlwaysScrollableScrollPhysics(),
             padding: EdgeInsets.only(
               top: 4,

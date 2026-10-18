@@ -300,7 +300,7 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
           onRefresh: () => _load(refresh: true),
           child: filterHorizontalScrollNotifications(
             CustomScrollView(
-              scrollCacheExtent: const ScrollCacheExtent.pixels(1000.0),
+              scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
               controller: _scroll,
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [

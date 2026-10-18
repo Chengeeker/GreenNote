@@ -15,6 +15,11 @@ void main() {
       expect(CoolapkUrlHandler.isCoolapkUrl('https://m.coolapk.com/product/123'), isTrue);
       expect(CoolapkUrlHandler.isCoolapkUrl('https://m.coolapk.com/apk/com.coolapk.market'), isTrue);
 
+      // Relative Coolapk URLs
+      expect(CoolapkUrlHandler.isCoolapkUrl('/feed/12345'), isTrue);
+      expect(CoolapkUrlHandler.isCoolapkUrl('/u/10001'), isTrue);
+      expect(CoolapkUrlHandler.isCoolapkUrl('/topic/123'), isTrue);
+
       // Custom scheme
       expect(CoolapkUrlHandler.isCoolapkUrl('coolmarket://feed/12345'), isTrue);
       expect(CoolapkUrlHandler.isCoolapkUrl('coolmarket://u/10001'), isTrue);

@@ -13,6 +13,7 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/core/network/coolapk_image.dart';
+import 'package:greennote/core/utils/haptic_feedback_util.dart';
 import 'package:greennote/core/settings/app_settings.dart';
 import 'package:greennote/features/feed/image_gallery_page.dart';
 import 'package:greennote/features/feed/nine_grid_view.dart';
@@ -44,7 +45,78 @@ class RecordingNavigatorObserver extends NavigatorObserver {
   }
 }
 
+class _DoubleTapState extends Fake implements ExtendedImageGestureState {
+  @override
+  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) =>
+      '_DoubleTapState';
+  double scale = 1;
+  @override
+  Offset get pointerDownPosition => const Offset(100, 100);
+  @override
+  GestureDetails get gestureDetails => GestureDetails(totalScale: scale);
+  @override
+  void handleDoubleTap({double? scale, Offset? doubleTapPosition}) {
+    this.scale = scale ?? this.scale;
+  }
+}
+
 void main() {
+  testWidgets(
+    'double tap zoom emits one medium haptic per action and respects disabled feedback',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final calls = <MethodCall>[];
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'HapticFeedback.vibrate') calls.add(call);
+        return null;
+      });
+      final wasEnabled = HapticFeedbackUtil.isEnabled;
+      addTearDown(() {
+        messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+        HapticFeedbackUtil.isEnabled = wasEnabled;
+        HapticFeedbackUtil.resetForTesting();
+      });
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: ImageGalleryPage(
+            api: GalleryApi(),
+            pics: [galleryTestPic],
+            initialIndex: 0,
+            statusId: 'double-tap-feedback',
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      final image = tester
+          .widgetList<ExtendedImage>(find.byType(ExtendedImage))
+          .firstWhere((image) => image.onDoubleTap != null);
+      final state = _DoubleTapState();
+      for (final target in [2.5, 6.0, 1.0]) {
+        HapticFeedbackUtil.isEnabled = true;
+        HapticFeedbackUtil.resetForTesting();
+        calls.clear();
+        image.onDoubleTap!(state);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        expect(state.scale, closeTo(target, .01));
+        expect(calls, hasLength(1));
+        expect(calls.single.arguments, 'HapticFeedbackType.mediumImpact');
+      }
+      HapticFeedbackUtil.isEnabled = false;
+      HapticFeedbackUtil.resetForTesting();
+      calls.clear();
+      image.onDoubleTap!(state);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(state.scale, closeTo(2.5, .01));
+      expect(calls, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   for (final finishDecode in [false, true]) {
     testWidgets('Hero keeps preview until original decodes ($finishDecode)', (
       tester,
@@ -1281,9 +1353,9 @@ void main() {
         expect(find.byType(GlassPage), findsOneWidget);
         expect(find.byType(GlassBackgroundSource), findsOneWidget);
 
-        final glassButtons = tester.widgetList<GlassButton>(
-          find.byType(GlassButton),
-        ).toList();
+        final glassButtons = tester
+            .widgetList<GlassButton>(find.byType(GlassButton))
+            .toList();
         expect(glassButtons.length, 2);
 
         final backButton = glassButtons.firstWhere((b) => b.label == '返回');
@@ -1294,7 +1366,9 @@ void main() {
         expect(backButton.settings!.thickness, 32);
         expect(backButton.settings!.refractiveIndex, 1.24);
 
-        final saveButton = glassButtons.firstWhere((b) => b.label == '保存高清大图到相册');
+        final saveButton = glassButtons.firstWhere(
+          (b) => b.label == '保存高清大图到相册',
+        );
         expect(saveButton.width, 48);
         expect(saveButton.height, 48);
         expect(saveButton.stretch, 0.8);

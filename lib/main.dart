@@ -12,7 +12,6 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'core/network/coolapk_api.dart';
 import 'core/services/reply_notification_service.dart';
 import 'features/settings/notification_center_page.dart';
-import 'features/shared/reply_notifications_page.dart';
 import 'core/network/http_overrides.dart';
 import 'core/settings/app_settings.dart';
 import 'core/design_system/components/review_navigation_bar.dart';
@@ -324,12 +323,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
       tooltip: '消息',
       icon: const Icon(Icons.mail_outline_rounded),
       onPressed: () => Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => Scaffold(
-            appBar: ReviewFrostedAppBar(title: const Text('消息')),
-            body: MessageCenterPage(api: client),
-          ),
-        ),
+        MaterialPageRoute<void>(builder: (_) => MessageCenterPage(api: client)),
       ),
     );
   }
@@ -490,8 +484,8 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                 Navigator.of(context).push<void>(
                   MaterialPageRoute(
                     builder: (_) => replies
-                        ? ReplyNotificationsPage(api: client)
-                        : NotificationCenterPage(api: client),
+                        ? MessageCenterPage(api: client)
+                        : ReplyNotificationSettingsPage(api: client),
                   ),
                 );
               });
@@ -511,7 +505,13 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                 body: GlassBackgroundSource(
                   enabled: useLiquidGlassNavBar,
                   child: KeyedSubtree(
-                    key: ValueKey('${client.isAnonymous}:${client.hasCookie}'),
+                    key: ValueKey(
+                      '${client.isAnonymous}:${client.hasCookie}:${client.isAnonymous
+                          ? client.localAccount.activeProfileId
+                          : client.hasCookie
+                          ? client.notificationSessionKey
+                          : ''}',
+                    ),
                     child: _buildTabContent(context, client),
                   ),
                 ),

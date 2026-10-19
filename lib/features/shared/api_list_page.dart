@@ -56,6 +56,7 @@ class ApiListPage extends StatefulWidget {
     this.itemBuilderWithIndex,
     this.itemFilter,
     this.onPageItemsLoaded,
+    this.onPageLoaded,
     this.initialItems = const [],
     super.key,
   });
@@ -74,6 +75,7 @@ class ApiListPage extends StatefulWidget {
   itemBuilderWithIndex;
   final bool Function(Map<String, dynamic>)? itemFilter;
   final void Function(List<Map<String, dynamic>>)? onPageItemsLoaded;
+  final void Function(ApiPage)? onPageLoaded;
   final List<Map<String, dynamic>> initialItems;
 
   @override
@@ -217,6 +219,7 @@ class _ApiListPageState extends State<ApiListPage>
       }
       if (!mounted || requestVersion != _requestVersion) return;
       widget.onPageItemsLoaded?.call(page.items);
+      widget.onPageLoaded?.call(page);
       setState(() {
         if (refresh) {
           _items.clear();
@@ -5985,12 +5988,25 @@ class _TopicPageState extends State<TopicPage>
       final detailMap = data is Map
           ? Map<String, dynamic>.from(data)
           : response;
+      final action = detailMap['userAction'] ?? detailMap['user_action'];
+      final follow = action is Map ? action['follow'] : null;
+      final isFollow = follow != null
+          ? follow == true || '$follow' == '1'
+          : _flag(detailMap, [
+              'isFollow',
+              'is_follow',
+              'followed',
+              'isFollowed',
+              'follow',
+            ]);
+
       if (isActivityTopic(detailMap)) {
-        setState(() => _detail = detailMap);
+        setState(() {
+          _detail = detailMap;
+          _following = isFollow;
+        });
         return;
       }
-      final isFollow = _flag(detailMap, ['isFollow', 'is_follow', 'followed']);
-
       final title = _first(detailMap, ['title', 'tag', 'name']);
       final displayTitle = title.isNotEmpty
           ? title

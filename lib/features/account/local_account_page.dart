@@ -9,7 +9,6 @@ import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_avatar.dart';
 import '../feed/feed_pages.dart';
 import '../shared/api_list_page.dart';
-import '../shell/main_pages.dart' show CookieLoginPage;
 import 'anonymous_accounts_page.dart';
 import 'official_login_page.dart';
 
@@ -22,14 +21,8 @@ Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            title: const Text('选择登录方式'),
+            title: const Text('登录方式与账号管理'),
             subtitle: const Text('匿名资料保留在本机，切换账号不会删除本地收藏。'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.cookie_outlined),
-            title: const Text('Cookie 登录'),
-            subtitle: const Text('使用酷安账号及云端功能'),
-            onTap: () => Navigator.pop(context, 'cookie'),
           ),
           ListTile(
             leading: const Icon(Icons.login),
@@ -43,28 +36,15 @@ Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
             subtitle: const Text('本地关注、收藏和 WebDAV 备份'),
             onTap: () => Navigator.pop(context, 'local'),
           ),
-          if (api.localAccount.profiles.length > 1)
-            ListTile(
-              leading: const Icon(Icons.switch_account_outlined),
-              title: const Text('切换匿名账户'),
-              subtitle: Text('已有 ${api.localAccount.profiles.length} 个独立匿名账户'),
-              onTap: () => Navigator.pop(context, 'switch_anon'),
-            ),
         ],
       ),
     ),
   );
   if (!context.mounted || choice == null) return;
-  if (choice == 'cookie') {
-    await Navigator.of(
-      context,
-    ).push<void>(MaterialPageRoute(builder: (_) => CookieLoginPage(api: api)));
-  } else if (choice == 'official') {
+  if (choice == 'official') {
     await Navigator.of(context).push<bool>(
       MaterialPageRoute(builder: (_) => OfficialLoginPage(api: api)),
     );
-  } else if (choice == 'switch_anon') {
-    await showAnonymousAccountSwitcher(context, api);
   } else {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
@@ -175,16 +155,7 @@ class _LocalProfilePageState extends State<LocalProfilePage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: ReviewFrostedAppBar(
-      title: const Text('匿名账户资料'),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.switch_account_outlined),
-          tooltip: '切换/管理其他匿名账户',
-          onPressed: () => showAnonymousAccountSwitcher(context, widget.api),
-        ),
-      ],
-    ),
+    appBar: ReviewFrostedAppBar(title: const Text('匿名账户资料')),
     body: ListView(
       padding: const EdgeInsets.all(20),
       children: [
@@ -240,6 +211,35 @@ class _LocalProfilePageState extends State<LocalProfilePage> {
                 ? '进入匿名账户'
                 : '保存资料',
           ),
+        ),
+        const SizedBox(height: 24),
+        const Divider(),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.manage_accounts_outlined),
+          title: const Text('管理已有匿名账户'),
+          subtitle: Text('共 ${widget.api.localAccount.profiles.length} 个独立账户'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _busy
+              ? null
+              : () async {
+                  final previous = widget.api.localAccount.activeProfileId;
+                  await Navigator.push<void>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AnonymousAccountsPage(api: widget.api),
+                    ),
+                  );
+                  if (!mounted) return;
+                  setState(() {
+                    if (previous != widget.api.localAccount.activeProfileId) {
+                      _name.text = widget.api.localAccount.name;
+                      _publicUid.text =
+                          '${widget.api.localAccount.publicIdentity?['uid'] ?? ''}';
+                      _avatar = widget.api.localAccount.avatar;
+                    }
+                  });
+                },
         ),
       ],
     ),

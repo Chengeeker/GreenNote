@@ -308,7 +308,7 @@ void main() {
     );
     await tester.tap(find.text('登录'));
     await tester.pumpAndSettle();
-    expect(find.text('Cookie 登录'), findsOneWidget);
+    expect(find.text('Cookie 登录'), findsNothing);
     expect(find.text('账号登录'), findsOneWidget);
     await tester.tap(find.text('匿名登录'));
     await tester.pumpAndSettle();

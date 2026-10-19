@@ -1,3 +1,5 @@
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'dart:io';
 
 import 'package:extended_image/extended_image.dart';
@@ -40,6 +42,7 @@ class CacheBreakdown {
 }
 
 class CacheService {
+  static final revision = ValueNotifier<int>(0);
   static const MethodChannel _channel = MethodChannel('com.green.note/cache');
 
   /// Fetches cache statistics from native platform or falls back to Dart file calculation.
@@ -97,6 +100,14 @@ class CacheService {
       clearedBytes = await _clearCacheFallback();
     }
 
+    try {
+      await (await SharedPreferences.getInstance()).remove(
+        'cached_home_headline_v1',
+      );
+    } catch (error) {
+      debugPrint('Unable to clear cached headline snapshot: $error');
+    }
+    revision.value++;
     return clearedBytes;
   }
 

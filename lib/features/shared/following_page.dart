@@ -220,7 +220,7 @@ class _CoolFriendListPageState extends State<CoolFriendListPage>
                 : () {
                     if (!widget.api.hasCookie ||
                         widget.api.notificationSessionKey != _session) {
-                      AppToast.show(context, '请先使用酷安官方 Cookie 登录');
+                      AppToast.show(context, '请先使用酷安账号登录');
                       return;
                     }
                     Navigator.push(
@@ -230,6 +230,8 @@ class _CoolFriendListPageState extends State<CoolFriendListPage>
                           api: widget.api,
                           uid: uid,
                           ukey: '',
+                          username: communityText(user, ['username']),
+                          avatar: communityText(user, ['userAvatar']),
                         ),
                       ),
                     );
@@ -460,7 +462,9 @@ class FollowingChannelHeader extends StatelessWidget {
                               url: communityText(user, ['userAvatar']),
                               size: 52,
                               verified: communityFlag(user['verify_status']),
-                              verifiedType: int.tryParse('${user['verify_show_type']}') ?? 0,
+                              verifiedType:
+                                  int.tryParse('${user['verify_show_type']}') ??
+                                  0,
                             ),
                             const SizedBox(height: 7),
                             Text(

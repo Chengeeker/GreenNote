@@ -1,3 +1,5 @@
+import '../shell/main_pages.dart' show MessageCenterPage;
+
 import 'package:flutter/material.dart';
 
 import '../../core/network/coolapk_api.dart';
@@ -7,12 +9,9 @@ import '../../core/utils/app_dialog.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_section_card.dart';
 import '../../core/utils/haptic_feedback_util.dart';
-import '../account/anonymous_accounts_page.dart';
 import 'cache_management_page.dart';
-import 'device_identity_page.dart';
 import 'personalization_page.dart';
 import 'notification_center_page.dart';
-import 'official_profile_page.dart';
 import '../shared/community_library_page.dart';
 import 'storage_settings_page.dart';
 import 'webdav_backup_page.dart';
@@ -35,6 +34,13 @@ class AppSettingsPage extends StatefulWidget {
 
 class _AppSettingsPageState extends State<AppSettingsPage> {
   bool _working = false;
+  String get _loginLabel => widget.api.isAnonymous
+      ? (widget.api.localAccount.publicIdentity == null
+            ? '匿名登录'
+            : '匿名登录（绑定公开 UID）')
+      : widget.api.hasCookie
+      ? '账号登录'
+      : '游客（未登录）';
 
   Future<void> _openCookieManager() async {
     HapticFeedbackUtil.light();
@@ -97,74 +103,26 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
                 title: '登录方式与账号管理',
-                subtitle: widget.api.isAnonymous
-                    ? '匿名账户：关注和收藏保存在本地'
-                    : widget.api.hasCookie
-                    ? '管理本机安全保存的酷安登录凭据'
-                    : '登录并管理本机保存的酷安 Cookie',
+                subtitle: '当前登录方式：$_loginLabel',
                 onTap: _openCookieManager,
               ),
               const Divider(height: 1, indent: 56),
               ReviewPreferenceTile(
-                leading: const Icon(Icons.phonelink_setup_outlined),
-                title: '导入官方设备标识',
-                subtitle: widget.api.hasOfficialDeviceIdentity
-                    ? '已导入数盟 ID，可恢复原设备码'
-                    : '手动导入 ShuzlmID，尝试改善重复人机验证',
-                onTap: () async {
-                  await Navigator.of(context).push<void>(
-                    MaterialPageRoute(
-                      builder: (_) => DeviceIdentityPage(api: widget.api),
-                    ),
-                  );
-                  if (mounted) setState(() {});
-                },
-              ),
-              const Divider(height: 1, indent: 56),
-              ReviewPreferenceTile(
-                leading: Icon(
-                  Icons.switch_account_outlined,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-                title: '多匿名账户管理',
-                subtitle: widget.api.isAnonymous
-                    ? '当前: ${widget.api.localAccount.name} · 共 ${widget.api.localAccount.profiles.length} 个账户'
-                    : '管理或切换本机独立匿名账户（共 ${widget.api.localAccount.profiles.length} 个）',
-                onTap: () {
-                  HapticFeedbackUtil.light();
-                  Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(
-                      builder: (_) => AnonymousAccountsPage(api: widget.api),
-                    ),
-                  );
-                },
-              ),
-              if (widget.api.hasCookie) ...[
-                const Divider(height: 1),
-                ReviewPreferenceTile(
-                  title: '酷安个人资料',
-                  leading: const Icon(Icons.person_outline),
-                  onTap: () => Navigator.push<void>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => OfficialProfilePage(api: widget.api),
-                    ),
-                  ),
-                ),
-                ReviewPreferenceTile(
-                  title: '屏蔽与黑名单',
-                  leading: const Icon(Icons.block),
-                  onTap: () => Navigator.push<void>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => CommunityLibraryPage(
-                        api: widget.api,
-                        library: CommunityLibrary.blacklist,
+                title: '屏蔽与黑名单',
+                leading: const Icon(Icons.block),
+                subtitle: widget.api.hasCookie ? null : '需要酷安官方账号登录',
+                onTap: !widget.api.hasCookie
+                    ? null
+                    : () => Navigator.push<void>(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => CommunityLibraryPage(
+                            api: widget.api,
+                            library: CommunityLibrary.blacklist,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
               if (widget.api.hasAccount) ...[
                 const Divider(height: 1, indent: 56),
                 ReviewPreferenceTile(
@@ -172,7 +130,7 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                     Icons.logout_rounded,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
-                  title: widget.api.isAnonymous ? '退出匿名账户' : '退出登录',
+                  title: '退出登录',
                   subtitle: widget.api.isAnonymous
                       ? '退出后保留本地资料、关注和收藏'
                       : '清除本机保存的登录凭据',
@@ -213,10 +171,22 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
               ReviewPreferenceTile(
                 leading: const Icon(Icons.notifications_outlined),
                 title: '通知中心',
-                subtitle: '官方 Cookie 账号的评论与回复提醒',
+                subtitle: '评论回复、点赞、关注与私信',
                 onTap: () => Navigator.of(context).push<void>(
                   MaterialPageRoute(
-                    builder: (_) => NotificationCenterPage(api: widget.api),
+                    builder: (_) => MessageCenterPage(api: widget.api),
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              ReviewPreferenceTile(
+                leading: const Icon(Icons.notifications_active_outlined),
+                title: '回复提醒设置',
+                subtitle: '自动检查、后台方式与通知权限',
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ReplyNotificationSettingsPage(api: widget.api),
                   ),
                 ),
               ),

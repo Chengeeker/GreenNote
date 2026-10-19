@@ -1,3 +1,5 @@
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'dart:async' show Completer;
 
 import 'package:flutter/material.dart';
@@ -112,6 +114,7 @@ class _Platform extends WebViewPlatform {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   TestWidgetsFlutterBinding.ensureInitialized();
   late _Platform platform;
   late _Api api;

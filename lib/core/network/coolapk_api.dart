@@ -702,6 +702,7 @@ class CoolapkApi {
         : _extractEntities(root);
     return ApiPage(
       items: items,
+      total: _int(root['total']) ?? _int(root['totalCount']),
       page: _int(root['page']) ?? _int(query['page']) ?? 1,
       hasMore: _hasMore(
         root,
@@ -1060,7 +1061,7 @@ class CoolapkApi {
       lastItem: _string(root['lastItem']).isNotEmpty
           ? _string(root['lastItem'])
           : items.lastOrNull?.id ?? '',
-      hasMore: _hasMore(root, items.length),
+      hasMore: _hasMore(root, items.length, allowShortPage: headline),
     );
   }
 
@@ -1119,7 +1120,11 @@ class CoolapkApi {
   }
 
   Future<Map<String, dynamic>> getFeedDetail(String feedId) async {
-    final root = await _get('/v6/feed/detail', {'id': feedId});
+    final id = feedId.trim();
+    if (!RegExp(r'^[1-9]\d*$').hasMatch(id)) {
+      throw const CoolapkApiException('动态标识无效，请从原帖链接重新打开');
+    }
+    final root = await _get('/v6/feed/detail', {'id': id});
     return _feedDetailData(root);
   }
 
@@ -1314,7 +1319,7 @@ class CoolapkApi {
         scope != notificationSessionKey ||
         !await notificationSessionMatches(scope) ||
         scope != notificationSessionKey) {
-      throw const CoolapkApiException('请先使用酷安官方 Cookie 登录');
+      throw const CoolapkApiException('请先使用酷安账号登录');
     }
     if (!const [
       '/v6/collection/create',
@@ -1362,7 +1367,23 @@ class CoolapkApi {
     );
   }
 
-  Future<String> uploadMessageImage(Uint8List bytes, String toUid) async {
+  Future<String> uploadMessageImage(Uint8List bytes, String toUid) =>
+      _uploadImage(bytes, toUid, message: true);
+
+  Future<String> uploadReplyImage(Uint8List bytes) async {
+    final session = notificationSessionKey;
+    if (currentUid.isEmpty) await checkLogin();
+    if (notificationSessionKey != session) {
+      throw const CoolapkApiException('账号已变更');
+    }
+    return _uploadImage(bytes, currentUid, message: false);
+  }
+
+  Future<String> _uploadImage(
+    Uint8List bytes,
+    String toUid, {
+    required bool message,
+  }) async {
     final scope = notificationSessionKey;
     if (!hasCookie ||
         !RegExp(r'^[1-9]\d*$').hasMatch(toUid) ||
@@ -1379,19 +1400,19 @@ class CoolapkApi {
       '/v6/upload/ossUploadPrepare',
       method: 'POST',
       body: {
-        'uploadBucket': 'message',
-        'uploadDir': 'message',
+        'uploadBucket': message ? 'message' : 'image',
+        'uploadDir': message ? 'message' : 'feed',
         'is_anonymous': 0,
         'uploadFileList': jsonEncode([
           {
-            'name': 'message.png',
+            'name': message ? 'message.png' : 'feed.png',
             'resolution': '${width}x$height',
             'md5': md5.convert(bytes).toString(),
             'hdr': 0,
           },
         ]),
         'toUid': toUid,
-        'feed_type': '',
+        'feed_type': message ? '' : 'feed',
       },
     );
     if (!await notificationSessionMatches(scope)) {
@@ -1757,11 +1778,17 @@ class CoolapkApi {
     return users;
   }
 
-  static bool _hasMore(Map<String, dynamic> root, int itemCount) {
+  static bool _hasMore(
+    Map<String, dynamic> root,
+    int itemCount, {
+    bool allowShortPage = false,
+  }) {
     final value = root['hasMore'] ?? root['has_more'] ?? root['hasNextPage'];
     if (value is bool) return value;
     if (value is num) return value != 0;
-    return itemCount >= 10;
+    if (value == '1' || value == 'true') return true;
+    if (value == '0' || value == 'false') return false;
+    return allowShortPage ? itemCount > 0 : itemCount >= 10;
   }
 }
 
@@ -1803,7 +1830,8 @@ Map<String, dynamic> coolapkReplyForm(
   bool replyAndForward = false,
 }) {
   final target = rid != null && rid.isNotEmpty ? rid : id;
-  if (target.trim().isEmpty || message.trim().isEmpty) {
+  if (target.trim().isEmpty ||
+      (message.trim().isEmpty && (pic?.trim().isEmpty ?? true))) {
     throw const CoolapkApiException('评论内容或目标无效');
   }
   return {
@@ -1817,6 +1845,7 @@ Map<String, dynamic> coolapkReplyForm(
 
 class ApiPage {
   const ApiPage({
+    this.total,
     required this.items,
     required this.page,
     required this.hasMore,
@@ -1825,6 +1854,7 @@ class ApiPage {
   });
 
   final List<Map<String, dynamic>> items;
+  final int? total;
   final int page;
   final bool hasMore;
   final String firstItem;
@@ -1873,7 +1903,11 @@ class CoolapkFeed {
         (raw['entityTemplate'] ?? raw['entity_template'] ?? '')
             .toString()
             .toLowerCase();
-    return entityType == 'article' ||
+    return raw['isHtmlArticle'] == 1 ||
+        raw['isHtmlArticle'] == '1' ||
+        raw['is_html_article'] == 1 ||
+        raw['is_html_article'] == '1' ||
+        entityType == 'article' ||
         entityType == 'feedarticle' ||
         entityType == 'feed_article' ||
         entityType == 'dyharticle' ||

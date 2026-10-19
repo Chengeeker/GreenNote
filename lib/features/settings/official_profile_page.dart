@@ -68,7 +68,7 @@ class _OfficialProfilePageState extends State<OfficialProfilePage> {
   Widget build(BuildContext context) => Scaffold(
     appBar: ReviewFrostedAppBar(title: const Text('酷安个人资料')),
     body: !widget.api.hasCookie
-        ? const Center(child: Text('请先使用酷安官方 Cookie 登录'))
+        ? const Center(child: Text('请先使用酷安账号登录'))
         : _data == null
         ? Center(
             child: _error == null

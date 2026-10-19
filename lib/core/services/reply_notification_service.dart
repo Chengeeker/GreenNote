@@ -166,7 +166,7 @@ Future<String> checkForReplyNotifications({
     if (!settings.enabled) return '自动检查已关闭';
     client = api ?? await CoolapkApi.create();
     scope = client.notificationSessionKey;
-    if (!client.hasCookie || scope.isEmpty) return '请使用酷安官方 Cookie 登录';
+    if (!client.hasCookie || scope.isEmpty) return '请使用酷安账号登录';
     status = _readJson(prefs, _statusKey);
     if (status['scope'] != scope) status = {};
     final failures = status['failures'] is int ? status['failures'] as int : 0;
@@ -286,7 +286,7 @@ class _ReplyResidentTask extends fg.TaskHandler {
         return;
       }
       final message = await checkForReplyNotifications();
-      if (message == '请使用酷安官方 Cookie 登录' || message == '系统通知权限未开启') {
+      if (message == '请使用酷安账号登录' || message == '系统通知权限未开启') {
         await fg.FlutterForegroundTask.stopService();
       }
       fg.FlutterForegroundTask.sendDataToMain(message);

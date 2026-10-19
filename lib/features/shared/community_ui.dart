@@ -168,7 +168,7 @@ class _CommunityActionState extends State<CommunityAction> {
         ? null
         : () async {
             if (!widget.api.hasCookie) {
-              AppToast.show(context, '请先使用酷安官方 Cookie 登录');
+              AppToast.show(context, '请先使用酷安账号登录');
               return;
             }
             setState(() => _busy = true);

@@ -18,6 +18,9 @@ class FakeFeedApi implements CoolapkApi {
   final String currentUid;
 
   @override
+  String get notificationSessionKey => 'test-session';
+
+  @override
   String get currentUserAvatar => '';
 
   @override

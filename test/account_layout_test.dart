@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:greennote/features/feed/feed_pages.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:greennote/core/accounts/local_account.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
@@ -14,6 +16,16 @@ class AccountLayoutApi implements CoolapkApi {
   final LocalAccount localAccount;
   final reads = <String>[];
   int loginChecks = 0;
+  bool historyFeed = false;
+  final detailReads = <String>[];
+  @override
+  String get notificationSessionKey => 'layout-test-session';
+  @override
+  Future<Map<String, dynamic>> getFeedDetail(String id) async {
+    detailReads.add(id);
+    return {'id': id, 'message': '历史原帖正文', 'uid': '456'};
+  }
+
   int spaceRequests = 0;
   Map<String, dynamic>? spaceData;
   @override
@@ -96,7 +108,7 @@ class AccountLayoutApi implements CoolapkApi {
         (i) => {
           'id': '${500 + i}',
           'entityType': 'history',
-          'url': '/u/${701 + i}',
+          'url': historyFeed ? '/feed/detail?id=12345' : '/u/${701 + i}',
           'title': '访问用户${i + 1}',
           'typeName': '用户',
           'subTitle': '最近浏览的内容',
@@ -153,6 +165,7 @@ Future<AccountLayoutApi> mountAccount(
   bool anonymous = false,
   double textScale = 1,
   Map<String, dynamic>? spaceData,
+  bool historyFeed = false,
 }) async {
   tester.view.physicalSize = const Size(360, 800);
   tester.view.devicePixelRatio = 1;
@@ -170,21 +183,25 @@ Future<AccountLayoutApi> mountAccount(
     }
     return account;
   }))!;
-  final api = AccountLayoutApi(account)..spaceData = spaceData;
+  final api = AccountLayoutApi(account)
+    ..spaceData = spaceData
+    ..historyFeed = historyFeed;
   await tester.pumpWidget(
-    MaterialApp(
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.green,
-          brightness: Brightness.dark,
+    ProviderScope(
+      child: MaterialApp(
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.green,
+            brightness: Brightness.dark,
+          ),
         ),
-      ),
-      home: MediaQuery(
-        data: MediaQueryData(
-          size: const Size(360, 800),
-          textScaler: TextScaler.linear(textScale),
+        home: MediaQuery(
+          data: MediaQueryData(
+            size: const Size(360, 800),
+            textScaler: TextScaler.linear(textScale),
+          ),
+          child: Scaffold(body: AccountPage(api: api)),
         ),
-        child: Scaffold(body: AccountPage(api: api)),
       ),
     ),
   );
@@ -196,6 +213,30 @@ Future<AccountLayoutApi> mountAccount(
 }
 
 void main() {
+  testWidgets(
+    'history dashboard opens URL target rather than history record ID',
+    (tester) async {
+      final api = await mountAccount(tester, historyFeed: true);
+      await tester.scrollUntilVisible(
+        find.text('访问用户1'),
+        400,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.text('访问用户1'));
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.byType(FeedDetailPage), findsOneWidget);
+      expect(
+        tester.widget<FeedDetailPage>(find.byType(FeedDetailPage)).feed.id,
+        '12345',
+      );
+      expect(api.detailReads, isNotEmpty);
+      expect(api.detailReads.toSet(), {'12345'});
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets(
     'official collections use list with the account UID at every entry',
     (tester) async {

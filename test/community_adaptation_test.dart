@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -13,7 +14,7 @@ import 'package:greennote/core/network/coolapk_captcha.dart';
 import 'package:greennote/core/utils/coolapk_url_handler.dart';
 import 'package:greennote/features/feed/feed_pages.dart';
 import 'package:greennote/features/shared/api_list_page.dart'
-    show UserSpacePage;
+    show UserSpacePage, ApiEntityCard;
 import 'package:greennote/features/shared/community_detail_page.dart';
 import 'package:greennote/features/shared/discovery_channel_page.dart';
 import 'package:greennote/features/shared/community_library_page.dart';
@@ -23,6 +24,8 @@ import 'package:greennote/features/shared/following_page.dart';
 import 'package:greennote/features/shared/goods_ranking_body.dart';
 import 'package:greennote/features/shared/download_center_page.dart';
 import 'package:greennote/features/shared/reply_notifications_page.dart';
+import 'package:greennote/features/shared/in_app_browser_page.dart';
+import 'package:greennote/features/feed/image_gallery_page.dart';
 import 'package:greennote/features/settings/official_profile_page.dart';
 import 'package:greennote/features/shell/main_pages.dart'
     show MessageChatPage, MessageCenterPage;
@@ -43,6 +46,11 @@ class _Api implements CoolapkApi {
         })
       >[];
   bool failAnswer = false;
+  bool failReply = false;
+  int uploads = 0;
+  List<Map<String, dynamic>> collectionItems = [];
+  int? blacklistTotal;
+  List<Map<String, dynamic>> replyItems = [];
   bool failDetail = false;
   CoolapkCaptchaException? captcha;
   final detailRequests = <String>[];
@@ -102,6 +110,49 @@ class _Api implements CoolapkApi {
   Future<Map<String, dynamic>> getUserSpace(String uid) async => {
     'data': {...detail, 'uid': uid, 'isSpecialFollow': 1, 'username': '接口测试酷友'},
   };
+  @override
+  Future<String> uploadReplyImage(Uint8List bytes) async {
+    uploads++;
+    return 'https://image.coolapk.com/feed/photo.png';
+  }
+
+  @override
+  Future<void> reply(
+    String id,
+    String message, {
+    String? rid,
+    String? pic,
+    bool replyAndForward = false,
+  }) async {
+    calls.add((
+      path: '/v6/feed/reply',
+      method: 'POST',
+      query: {},
+      body: {'id': id, 'message': message, 'pic': pic},
+    ));
+    if (failReply) throw StateError('发送失败');
+  }
+
+  @override
+  Future<ApiPage> getReplyPage(
+    String id,
+    int page, {
+    String listType = 'lastupdate_desc',
+    String? firstItem,
+    String? lastItem,
+    String feedType = 'feed',
+    bool fromFeedAuthor = false,
+  }) async => ApiPage(
+    items: replyItems,
+    page: page,
+    hasMore: false,
+    firstItem: '',
+    lastItem: '',
+  );
+  @override
+  Future<ApiPage> getHotReplyPage(String id, int page) =>
+      getReplyPage(id, page);
+
   @override
   Future<String> uploadMessageImage(Uint8List bytes, String toUid) async {
     calls.add((
@@ -167,6 +218,25 @@ class _Api implements CoolapkApi {
           'lastMessage': '消息内容',
         },
       ];
+    } else if (path == '/v6/user/hitHistoryList') {
+      items = [
+        {
+          'id': '901',
+          'uid': '20',
+          'username': '历史作者',
+          'entityType': 'feed',
+          'message': '历史卡片应该与外面一样宽',
+          'dateline': '1700000000',
+        },
+      ];
+    } else if (path == '/v6/collection/itemlist') {
+      items = collectionItems
+          .where(
+            (item) =>
+                query['listType'] == 'allFeedType' ||
+                item['feedType'] == query['listType'],
+          )
+          .toList();
     } else if (path.contains('answerList')) {
       items = [
         {
@@ -204,6 +274,7 @@ class _Api implements CoolapkApi {
       items = [];
     }
     return ApiPage(
+      total: path.contains('blackList') ? blacklistTotal : null,
       items: items,
       page: 1,
       hasMore: false,
@@ -250,6 +321,7 @@ void main() {
     double scale = 1.0,
     bool dark = false,
     GlobalKey? capture,
+    bool settle = true,
   }) async {
     tester.view.physicalSize = const Size(360, 900);
     tester.view.devicePixelRatio = 1;
@@ -276,7 +348,11 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
   }
 
   test(
@@ -704,6 +780,8 @@ void main() {
       tester,
       CommunityDetailPage(api: api, id: '100', kind: CommunityKind.collection),
     );
+    await tester.tap(find.byTooltip('收藏单操作'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('编辑'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextFormField).first, '新的收藏单标题');
@@ -751,7 +829,7 @@ void main() {
       tester,
       CommunityLibraryPage(api: api, library: CommunityLibrary.blacklist),
     );
-    await tester.tap(find.text('移出'));
+    await tester.tap(find.text('取消').first);
     await tester.pumpAndSettle();
     expect(api.calls.where((call) => call.method == 'POST'), isEmpty);
     await tester.tap(find.text('确认'));
@@ -822,7 +900,9 @@ void main() {
   testWidgets('message deletion confirms before using deleteChat GET', (
     tester,
   ) async {
-    await mount(tester, Scaffold(body: MessageCenterPage(api: api)));
+    await mount(tester, MessageCenterPage(api: api));
+    await tester.tap(find.text('私信'));
+    await tester.pumpAndSettle();
     expect(find.text('待删除的会话'), findsOneWidget);
     await tester.tap(find.byType(PopupMenuButton<String>).first);
     await tester.pumpAndSettle();
@@ -848,7 +928,7 @@ void main() {
       CommunityLibraryPage(api: api, library: CommunityLibrary.blacklist),
     );
     api.scope = 'b' * 64;
-    await tester.tap(find.text('移出'));
+    await tester.tap(find.text('取消').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('确认'));
     await tester.pumpAndSettle();
@@ -926,6 +1006,362 @@ void main() {
     expect(find.text('图片将在点击发送后上传'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+  testWidgets(
+    'collection has official header, real filter counts and feed cards',
+    (tester) async {
+      api.detail.addAll({
+        'title': '美女',
+        'description': '',
+        'follow_num': 1,
+        'feed_num': 99,
+        'article_num': 3,
+        'lastupdate':
+            DateTime.now()
+                .subtract(const Duration(days: 2))
+                .millisecondsSinceEpoch ~/
+            1000,
+      });
+      api.collectionItems = [
+        {
+          'id': '501',
+          'uid': '20',
+          'username': '摄影作者',
+          'message': '这是收藏单里的动态',
+          'entityType': 'feed',
+          'feedType': 'feed',
+        },
+        {
+          'id': '502',
+          'uid': '21',
+          'username': '图文作者',
+          'message': '这是收藏单里的图文',
+          'entityType': 'feed',
+          'feedType': 'feedArticle',
+        },
+      ];
+      final capture = GlobalKey();
+      await mount(
+        tester,
+        CommunityDetailPage(
+          api: api,
+          id: '100',
+          kind: CommunityKind.collection,
+        ),
+        dark: true,
+        capture: capture,
+      );
+      expect(find.text('美女'), findsOneWidget);
+      expect(find.text('1人关注'), findsOneWidget);
+      expect(find.text('动态(99)'), findsOneWidget);
+      expect(find.text('图文(3)'), findsOneWidget);
+      expect(
+        tester
+            .widgetList<FeedCard>(find.byType(FeedCard))
+            .every((card) => card.officialLayout),
+        isTrue,
+      );
+      await tester.runAsync(() async {
+        final image =
+            await (capture.currentContext!.findRenderObject()
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 2);
+        File('tmp/collection-official-dark.png').writeAsBytesSync(
+          (await image.toByteData(format: ui.ImageByteFormat.png))!.buffer
+              .asUint8List(),
+        );
+        image.dispose();
+      });
+      await tester.tap(find.text('图文(3)'));
+      await tester.pumpAndSettle();
+      expect(api.calls.last.query['listType'], 'feedArticle');
+      expect(find.text('这是收藏单里的动态', findRichText: true), findsNothing);
+      expect(find.text('这是收藏单里的图文', findRichText: true), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'blacklist renders official cancel rows and real server count with other lists reachable',
+    (tester) async {
+      api.blacklistTotal = 34;
+      final capture = GlobalKey();
+      await mount(
+        tester,
+        CommunityLibraryPage(api: api, library: CommunityLibrary.blacklist),
+        dark: true,
+        scale: 1.5,
+        capture: capture,
+      );
+      expect(find.text('黑名单管理 (34/500)'), findsOneWidget);
+      expect(find.byType(OutlinedButton), findsOneWidget);
+      expect(find.text('资料简介'), findsNothing);
+      await tester.runAsync(() async {
+        final image =
+            await (capture.currentContext!.findRenderObject()
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 2);
+        File('tmp/blacklist-official-dark.png').writeAsBytesSync(
+          (await image.toByteData(format: ui.ImageByteFormat.png))!.buffer
+              .asUint8List(),
+        );
+        image.dispose();
+      });
+      await tester.tap(find.byTooltip('切换名单'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('屏蔽管理'));
+      await tester.pumpAndSettle();
+      expect(api.calls.last.path, '/v6/user/ignoreList');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'comment picks photo, preserves draft on failure and reuses uploaded photo on retry',
+    (tester) async {
+      final png = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6xkAAAAASUVORK5CYII=',
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('com.green.note/avatar'),
+            (call) async => call.method == 'pickImage' ? png : null,
+          );
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+              const MethodChannel('com.green.note/avatar'),
+              null,
+            ),
+      );
+      api.failReply = true;
+      await mount(
+        tester,
+        FeedDetailPage(
+          api: api,
+          feed: CoolapkFeed.fromJson(api.detail),
+          adaptCommunity: false,
+        ),
+      );
+      await tester.tap(find.text('写评论'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '带图片的评论');
+      await tester.tap(find.byTooltip('从相册选择图片'));
+      await tester.pumpAndSettle();
+      expect(api.uploads, 0);
+      expect(find.byTooltip('移除评论图片'), findsOneWidget);
+      expect(find.text('图片 URL'), findsNothing);
+      await tester.tap(find.text('发送'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(api.uploads, 1);
+      api.failReply = false;
+      await tester.tap(find.text('写评论'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        '带图片的评论',
+      );
+      expect(find.byTooltip('移除评论图片'), findsOneWidget);
+      await tester.tap(find.text('发送'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 3));
+      expect(api.uploads, 1);
+      expect(
+        api.calls.lastWhere((c) => c.path == '/v6/feed/reply').body!['pic'],
+        'https://image.coolapk.com/feed/photo.png',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('copy post uses loaded plain text without HTML attributes', (
+    tester,
+  ) async {
+    api.detail['message'] = '<p>第一行 <a class="feed-link-tag" href="/t/test">#话题#</a></p><p>第二行 &amp; 正文</p>';
+    String? copied;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied = (call.arguments as Map)['text'] as String;
+          }
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+    await mount(
+      tester,
+      FeedDetailPage(
+        api: api,
+        feed: CoolapkFeed.fromJson({'id': '100'}),
+        adaptCommunity: false,
+      ),
+    );
+    await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('复制文本'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
+    expect(copied, contains('第一行 #话题#'));
+    expect(copied, contains('第二行 & 正文'));
+    expect(copied, isNot(contains('class=')));
+    expect(copied, isNot(contains('<a')));
+  });
+
+  testWidgets('article cover enters the existing image gallery', (
+    tester,
+  ) async {
+    final feed = CoolapkFeed.fromJson({
+      'id': '100',
+      'uid': '20',
+      'entityType': 'feed',
+      'feedType': 'feedArticle',
+      'message_title': '图文标题',
+      'message': '正文',
+      'message_cover': 'https://image.coolapk.com/test-cover.jpg',
+    });
+    await mount(
+      tester,
+      Scaffold(
+        body: FeedCard(api: api, feed: feed, isDetail: true),
+      ),
+      settle: false,
+    );
+    await tester.tap(find.bySemanticsLabel('查看图文题图'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byType(ImageGalleryPage), findsOneWidget);
+    expect(
+      tester
+          .widget<ImageGalleryPage>(find.byType(ImageGalleryPage))
+          .pics
+          .single
+          .url,
+      'https://image.coolapk.com/test-cover.jpg',
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('external web opens in-app and unsafe schemes are rejected', (
+    tester,
+  ) async {
+    await mount(tester, const Scaffold(body: Text('入口')));
+    final context = tester.element(find.text('入口'));
+    expect(
+      await CoolapkUrlHandler.handleUrl(context, api, 'javascript:alert(1)'),
+      isFalse,
+    );
+    expect(
+      await CoolapkUrlHandler.handleUrl(
+        context,
+        api,
+        'https://example.com/article',
+      ),
+      isTrue,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(InAppBrowserPage), findsOneWidget);
+    expect(
+      tester.widget<InAppBrowserPage>(find.byType(InAppBrowserPage)).url,
+      'https://example.com/article',
+    );
+    expect(find.text('example.com'), findsOneWidget);
+  });
+
+  testWidgets(
+    'author badge appears in collapsed subreply preview without opening thread',
+    (tester) async {
+      api.detail.remove('uid');
+      api.detail['userInfo'] = {'uid': '10', 'username': '原帖作者'};
+      api.replyItems = [
+        {
+          'id': '700',
+          'uid': '20',
+          'username': '评论人',
+          'message': '评论正文',
+          'replyRows': [
+            {'id': '701', 'uid': '10', 'username': '原帖作者', 'message': '楼主回复预览'},
+          ],
+        },
+      ];
+      await mount(
+        tester,
+        FeedDetailPage(
+          api: api,
+          feed: CoolapkFeed.fromJson({'id': '100'}),
+          adaptCommunity: false,
+        ),
+      );
+      expect(find.textContaining('楼主回复预览', findRichText: true), findsOneWidget);
+      expect(
+        find.text('楼主'),
+        findsAtLeastNWidgets(2),
+      ); // filter and preview badge
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'history feed cards have the same horizontal bounds as outside lists',
+    (tester) async {
+      final entity = {
+        'id': '901',
+        'uid': '20',
+        'username': '历史作者',
+        'entityType': 'feed',
+        'message': '历史卡片应该与外面一样宽',
+        'dateline': '1700000000',
+      };
+      await mount(
+        tester,
+        Scaffold(
+          body: ApiEntityCard(api: api, entity: entity),
+        ),
+      );
+      final normal = tester.getRect(find.byType(FeedCard));
+      final capture = GlobalKey();
+      await mount(
+        tester,
+        CommunityLibraryPage(api: api, library: CommunityLibrary.history),
+        dark: true,
+        capture: capture,
+      );
+      final history = tester.getRect(find.byType(FeedCard));
+      expect(history.left, normal.left);
+      expect(history.width, normal.width);
+      expect(find.byType(SearchBar), findsOneWidget);
+      final field = find.descendant(
+        of: find.byType(SearchBar),
+        matching: find.byType(TextField),
+      );
+      expect(
+        tester.widget<TextField>(field).decoration!.border,
+        InputBorder.none,
+      );
+      await tester.runAsync(() async {
+        final image =
+            await (capture.currentContext!.findRenderObject()
+                    as RenderRepaintBoundary)
+                .toImage(pixelRatio: 2);
+        File('tmp/history-card-width-dark.png').writeAsBytesSync(
+          (await image.toByteData(format: ui.ImageByteFormat.png))!.buffer
+              .asUint8List(),
+        );
+        image.dispose();
+      });
+      await tester.enterText(field, '找不到的内容');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+      expect(find.byType(FeedCard), findsNothing);
+      await tester.enterText(field, '');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+      expect(find.byType(FeedCard), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('export representative adapted screen previews', (tester) async {
     for (final kind in [
       CommunityKind.question,

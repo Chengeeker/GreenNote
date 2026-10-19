@@ -10,6 +10,7 @@ import 'api_list_page.dart';
 import 'community_ui.dart';
 import 'community_detail_page.dart';
 import 'following_page.dart';
+import 'home_destination_page.dart' show officialHomeTheme;
 import '../../core/utils/coolapk_url_handler.dart';
 
 enum CommunityLibrary {
@@ -46,6 +47,11 @@ class _CommunityLibraryPageState extends State<CommunityLibraryPage> {
   int _tab = 0, _revision = 0;
   late final String _session;
   String _search = '';
+  final _blacklistUsers = <String>{};
+  final _removing = <String>{};
+  int? _blacklistTotal;
+  bool _blacklistMore = false;
+
   String get _uid => widget.uid.isEmpty ? widget.api.currentUid : widget.uid;
   List<(String, String)> get _routes => switch (widget.library) {
     CommunityLibrary.blacklist => [
@@ -69,6 +75,184 @@ class _CommunityLibraryPageState extends State<CommunityLibraryPage> {
     CommunityLibrary.following,
     CommunityLibrary.fans,
   ].contains(widget.library);
+  Future<void> _removeBlacklisted(String uid) async {
+    if (uid.isEmpty || _removing.contains(uid)) return;
+    if (!await confirmCommunityAction(
+      context,
+      '移出名单？',
+      '将解除对该用户的${_tab == 0 ? '拉黑' : '屏蔽'}。',
+    )) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _removing.add(uid));
+    try {
+      await communityRequest(
+        widget.api,
+        _session,
+        _tab == 0
+            ? '/v6/user/removeFromBlackList'
+            : '/v6/user/removeFromIgnoreList',
+        query: {'uid': uid},
+      );
+      if (mounted) {
+        setState(() {
+          _blacklistUsers.remove(uid);
+          if (_blacklistTotal != null && _blacklistTotal! > 0) {
+            _blacklistTotal = _blacklistTotal! - 1;
+          }
+          _revision++;
+        });
+      }
+    } catch (_) {
+      if (mounted) AppToast.show(context, '操作失败，请确认登录有效、网络正常后重试');
+    } finally {
+      if (mounted) setState(() => _removing.remove(uid));
+    }
+  }
+
+  Widget _blacklist(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final labels = ['黑名单管理', '屏蔽管理', '限制名单'];
+    final count =
+        _blacklistTotal?.toString() ??
+        '${_blacklistUsers.length}${_blacklistMore ? '+' : ''}';
+    return Theme(
+      data: officialHomeTheme(Theme.of(context)),
+      child: Scaffold(
+        backgroundColor: dark ? const Color(0xFF101010) : null,
+        appBar: ReviewFrostedAppBar(
+          title: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '${labels[_tab]}${_tab == 0 ? ' ($count/500)' : ' ($count)'}',
+            ),
+          ),
+          leading: const BackButton(),
+          showBottomBorder: false,
+          backgroundColor: dark ? const Color(0xFF1E1E1E) : null,
+          actions: [
+            PopupMenuButton<int>(
+              tooltip: '切换名单',
+              itemBuilder: (_) => [
+                for (final entry in labels.indexed)
+                  PopupMenuItem(value: entry.$1, child: Text(entry.$2)),
+              ],
+              onSelected: (tab) => setState(() {
+                _tab = tab;
+                _blacklistUsers.clear();
+                _blacklistTotal = null;
+                _blacklistMore = false;
+              }),
+            ),
+          ],
+        ),
+        body: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+            child: ColoredBox(
+              color: dark
+                  ? const Color(0xFF1E1E1E)
+                  : Theme.of(context).colorScheme.surface,
+              child: ApiListPage(
+                key: ValueKey('blacklist:$_tab:$_revision'),
+                api: widget.api,
+                title: labels[_tab],
+                path: _routes[_tab].$2,
+                query: {'uid': _uid},
+                showAppBar: false,
+                onPageLoaded: (page) {
+                  if (!mounted) return;
+                  setState(() {
+                    if (page.page == 1) _blacklistUsers.clear();
+                    _blacklistUsers.addAll(
+                      page.items
+                          .map((item) => communityText(item, ['uid', 'id']))
+                          .where((uid) => uid.isNotEmpty),
+                    );
+                    _blacklistTotal = page.total ?? _blacklistTotal;
+                    _blacklistMore = page.hasMore;
+                  });
+                },
+                itemBuilder: (context, data) {
+                  final user = communityMap(data['userInfo']);
+                  final uid = communityText(data, ['uid', 'id']);
+                  final name =
+                      communityText(data, ['username', 'title']).isEmpty
+                      ? communityText(user, ['username'])
+                      : communityText(data, ['username', 'title']);
+                  final avatar =
+                      communityText(data, ['userAvatar', 'avatar']).isEmpty
+                      ? communityText(user, ['userAvatar'])
+                      : communityText(data, ['userAvatar', 'avatar']);
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      children: [
+                        InkWell(
+                          onTap: uid.isEmpty
+                              ? null
+                              : () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => UserSpacePage(
+                                      api: widget.api,
+                                      uid: uid,
+                                    ),
+                                  ),
+                                ),
+                          child: AppAvatar(
+                            api: widget.api,
+                            url: avatar,
+                            name: name,
+                            size: 44,
+                          ),
+                        ),
+                        const SizedBox(width: 18),
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 17),
+                          ),
+                        ),
+                        if (_tab < 2) ...[
+                          const SizedBox(width: 12),
+                          OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF009688),
+                              side: const BorderSide(color: Color(0xFF009688)),
+                              minimumSize: const Size(60, 32),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              shape: const StadiumBorder(),
+                            ),
+                            onPressed: _removing.contains(uid)
+                                ? null
+                                : () => _removeBlacklisted(uid),
+                            child: Text(_removing.contains(uid) ? '处理中' : '取消'),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _user(BuildContext context, Map<String, dynamic> data) {
     final uid = communityText(data, ['uid', 'id']);
     final name = communityText(data, ['username', 'title']);
@@ -163,6 +347,9 @@ class _CommunityLibraryPageState extends State<CommunityLibraryPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.library == CommunityLibrary.blacklist) {
+      return _blacklist(context);
+    }
     if (widget.library == CommunityLibrary.following ||
         widget.library == CommunityLibrary.fans) {
       return CoolFriendListPage(
@@ -186,7 +373,7 @@ class _CommunityLibraryPageState extends State<CommunityLibraryPage> {
               label: const Text('创建清单'),
               onPressed: () async {
                 if (!widget.api.hasCookie) {
-                  AppToast.show(context, '请先使用酷安官方 Cookie 登录');
+                  AppToast.show(context, '请先使用酷安账号登录');
                   return;
                 }
                 final created = await Navigator.push<bool>(
@@ -218,14 +405,22 @@ class _CommunityLibraryPageState extends State<CommunityLibraryPage> {
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: TextFormField(
-              decoration: const InputDecoration(
-                labelText: '筛选已加载内容',
-                prefixIcon: Icon(Icons.search),
-              ),
-              onFieldSubmitted: (value) =>
-                  setState(() => _search = value.trim()),
-            ),
+            child: widget.library == CommunityLibrary.history
+                ? SearchBar(
+                    hintText: '筛选已加载内容',
+                    leading: const Icon(Icons.search_rounded),
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (value) =>
+                        setState(() => _search = value.trim()),
+                  )
+                : TextFormField(
+                    decoration: const InputDecoration(
+                      labelText: '筛选已加载内容',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onFieldSubmitted: (value) =>
+                        setState(() => _search = value.trim()),
+                  ),
           ),
           Expanded(
             child: ApiListPage(
@@ -247,27 +442,27 @@ class _CommunityLibraryPageState extends State<CommunityLibraryPage> {
                             .contains(_search.toLowerCase()),
               itemBuilder: widget.library == CommunityLibrary.history
                   ? (context, item) => Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.history,
-                                size: 18,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                formatRelativeTime(
-                                  '${item['dateline'] ?? item['lastupdate'] ?? ''}',
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.history,
+                                  size: 18,
+                                  color: Theme.of(context).colorScheme.primary,
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 8),
+                                Text(
+                                  formatRelativeTime(
+                                    '${item['dateline'] ?? item['lastupdate'] ?? ''}',
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                           if ('${item['entityType']}'.toLowerCase() ==
                               'history')

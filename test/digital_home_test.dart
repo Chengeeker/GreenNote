@@ -20,6 +20,8 @@ List<Map<String, dynamic>> fixture() => (jsonDecode(
 ) as List).cast<Map<String, dynamic>>();
 
 class HomeApi extends Fake implements CoolapkApi {
+  @override
+  String get notificationSessionKey => 'synthetic-home-session';
   HomeApi({this.loggedIn = false});
   bool loggedIn;
   bool anonymous = false;

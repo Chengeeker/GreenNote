@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/design_system/components/review_frosted_app_bar.dart';
 import '../../core/network/coolapk_api.dart';
 import '../../core/widgets/coolapk_rich_text.dart';
+import '../../core/widgets/app_avatar.dart';
 import '../feed/feed_pages.dart';
 import '../feed/video_player_page.dart';
 import 'api_list_page.dart';
@@ -409,6 +410,165 @@ class _CommunityDetailPageState extends State<CommunityDetailPage> {
     ],
   ];
 
+  Widget _collectionHeader() {
+    final data = _data!;
+    final user = communityMap(data['userInfo']);
+    final uid = communityText(data, ['uid', 'userId']);
+    final username = communityText(data, ['username']).isNotEmpty
+        ? communityText(data, ['username'])
+        : communityText(user, ['username']);
+    final avatar = communityText(data, ['userAvatar']).isNotEmpty
+        ? communityText(data, ['userAvatar'])
+        : communityText(user, ['userAvatar']);
+    final updated = formatRelativeTime(
+      communityText(data, ['lastupdate', 'dateline']),
+    );
+    final followers = communityText(data, [
+      'follow_num',
+      'followNum',
+      'follownum',
+    ]);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    final filters = [
+      '全部',
+      '动态${_collectionCount(['feed_num', 'feedNum'])}',
+      '图文${_collectionCount(['article_num', 'articleNum', 'feedArticle_num'])}',
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          color: dark
+              ? const Color(0xFF1E1E1E)
+              : Theme.of(context).colorScheme.surface,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                communityText(data, ['title']),
+                style: const TextStyle(
+                  fontSize: 23,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 20),
+              InkWell(
+                onTap: uid.isEmpty
+                    ? null
+                    : () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => UserSpacePage(api: api, uid: uid),
+                        ),
+                      ),
+                child: Row(
+                  children: [
+                    AppAvatar(api: api, url: avatar, name: username, size: 32),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        [
+                          username,
+                          if (updated.isNotEmpty) '$updated更新',
+                        ].join('  '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 14, color: muted),
+                      ),
+                    ),
+                    if (followers.isNotEmpty) ...[
+                      const SizedBox(width: 12),
+                      Text(
+                        '$followers人关注',
+                        style: TextStyle(fontSize: 14, color: muted),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (communityText(data, ['description']).isNotEmpty) ...[
+                const SizedBox(height: 12),
+                CoolapkRichText(
+                  api: api,
+                  text: communityText(data, ['description']),
+                ),
+              ],
+              if (_error != null)
+                TextButton(onPressed: _load, child: Text(_error!)),
+            ],
+          ),
+        ),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            children: [
+              for (final entry in filters.indexed)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(entry.$2),
+                    selected: _tab == entry.$1,
+                    showCheckmark: false,
+                    selectedColor: const Color(0xFF009688),
+                    backgroundColor: dark
+                        ? const Color(0xFF1E1E1E)
+                        : Theme.of(context).colorScheme.surfaceContainer,
+                    labelStyle: TextStyle(
+                      fontSize: 16,
+                      color: _tab == entry.$1
+                          ? Colors.white
+                          : Theme.of(context).colorScheme.onSurface,
+                    ),
+                    side: BorderSide.none,
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 8,
+                    ),
+                    onSelected: (_) => setState(() => _tab = entry.$1),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _collectionCount(List<String> keys) {
+    final count = communityText(_data!, keys);
+    return count.isEmpty ? '' : '($count)';
+  }
+
+  Future<void> _collectionMenu() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (_) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            CommunityAction(
+              api: api,
+              label: '刷新详情',
+              icon: Icons.refresh,
+              action: () async {
+                Navigator.pop(context);
+                await _load();
+              },
+            ),
+            ..._actions(),
+          ],
+        ),
+      ),
+    ),
+  );
+
   Widget _header() {
     final data = _data!;
     final info = communityMap(
@@ -480,7 +640,10 @@ class _CommunityDetailPageState extends State<CommunityDetailPage> {
     ),
     CommunityKind.collection => (
       path: '/v6/collection/itemlist',
-      query: {'id': id},
+      query: {
+        'id': id,
+        'listType': ['allFeedType', 'feed', 'feedArticle'][_tab],
+      },
     ),
     CommunityKind.dyh =>
       _search.isEmpty
@@ -558,38 +721,57 @@ class _CommunityDetailPageState extends State<CommunityDetailPage> {
           ],
         ),
       );
-  Widget _collectionItem(BuildContext context, Map<String, dynamic> item) =>
-      Column(
-        children: [
-          ApiEntityCard(api: api, entity: item),
-          if (_owner && communityText(item, ['itemId', 'item_id']).isNotEmpty)
-            Align(
-              alignment: Alignment.centerRight,
-              child: CommunityAction(
-                api: api,
-                label: '移出收藏单',
-                icon: Icons.remove_circle_outline,
-                action: () async {
-                  if (!await confirmCommunityAction(
-                    context,
-                    '移出收藏单？',
-                    '此内容将从当前收藏单移除。',
-                  )) {
-                    return;
-                  }
-                  await communityRequest(
-                    api,
-                    _session,
-                    '/v6/collection/removeItem',
-                    method: 'POST',
-                    body: {'itemId': item['itemId'] ?? item['item_id']},
-                  );
-                  if (mounted) setState(() => _revision++);
-                },
+  Widget _collectionItem(
+    BuildContext context,
+    Map<String, dynamic> item,
+  ) => GestureDetector(
+    onLongPress: !_owner || communityText(item, ['itemId', 'item_id']).isEmpty
+        ? null
+        : () => showModalBottomSheet<void>(
+            context: context,
+            showDragHandle: true,
+            builder: (_) => SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _removeCollectionItem(context, item),
               ),
             ),
-        ],
+          ),
+    child:
+        (communityText(item, ['entityType']).toLowerCase().contains('feed') ||
+            item.containsKey('message'))
+        ? FeedCard(
+            api: api,
+            feed: CoolapkFeed.fromJson(item),
+            officialLayout: true,
+          )
+        : ApiEntityCard(api: api, entity: item),
+  );
+
+  Widget _removeCollectionItem(
+    BuildContext context,
+    Map<String, dynamic> item,
+  ) => CommunityAction(
+    api: api,
+    label: '移出收藏单',
+    icon: Icons.remove_circle_outline,
+    action: () async {
+      if (!await confirmCommunityAction(context, '移出收藏单？', '此内容将从当前收藏单移除。')) {
+        return;
+      }
+      await communityRequest(
+        api,
+        _session,
+        '/v6/collection/removeItem',
+        method: 'POST',
+        body: {'itemId': item['itemId'] ?? item['item_id']},
       );
+      if (mounted && context.mounted) {
+        Navigator.pop(context);
+        setState(() => _revision++);
+      }
+    },
+  );
   Future<void> _loadMoreGoods() async {
     if (_goodsBusy) return;
     setState(() => _goodsBusy = true);
@@ -908,23 +1090,33 @@ class _CommunityDetailPageState extends State<CommunityDetailPage> {
   Widget build(BuildContext context) {
     final list = _list();
     return Theme(
-      data: kind == CommunityKind.goods
+      data: [CommunityKind.goods, CommunityKind.collection].contains(kind)
           ? officialHomeTheme(Theme.of(context))
           : Theme.of(context),
       child: Scaffold(
         backgroundColor:
-            kind == CommunityKind.goods &&
+            [CommunityKind.goods, CommunityKind.collection].contains(kind) &&
                 Theme.of(context).brightness == Brightness.dark
             ? const Color(0xFF101010)
             : null,
         appBar: ReviewFrostedAppBar(
-          title: kind == CommunityKind.goods ? null : Text(_title),
-          leading: kind == CommunityKind.goods ? const BackButton() : null,
-          showBottomBorder: kind != CommunityKind.goods,
+          title: [CommunityKind.goods, CommunityKind.collection].contains(kind)
+              ? null
+              : Text(_title),
+          leading:
+              [CommunityKind.goods, CommunityKind.collection].contains(kind)
+              ? const BackButton()
+              : null,
+          showBottomBorder: ![
+            CommunityKind.goods,
+            CommunityKind.collection,
+          ].contains(kind),
           backgroundColor:
-              kind == CommunityKind.goods &&
+              [CommunityKind.goods, CommunityKind.collection].contains(kind) &&
                   Theme.of(context).brightness == Brightness.dark
-              ? const Color(0xFF101010)
+              ? (kind == CommunityKind.collection
+                    ? const Color(0xFF1E1E1E)
+                    : const Color(0xFF101010))
               : null,
           actions: [
             if (kind == CommunityKind.goods)
@@ -944,6 +1136,12 @@ class _CommunityDetailPageState extends State<CommunityDetailPage> {
                   PopupMenuItem(value: 'refresh', child: Text('刷新榜单')),
                   PopupMenuItem(value: 'web', child: Text('在官方网页查看')),
                 ],
+              )
+            else if (kind == CommunityKind.collection)
+              IconButton(
+                tooltip: '收藏单操作',
+                onPressed: _data == null ? null : _collectionMenu,
+                icon: const Icon(Icons.more_vert),
               )
             else
               IconButton(
@@ -1000,7 +1198,9 @@ class _CommunityDetailPageState extends State<CommunityDetailPage> {
                 query: list.query,
                 showAppBar: false,
                 showAccessErrors: true,
-                header: _header(),
+                header: kind == CommunityKind.collection
+                    ? _collectionHeader()
+                    : _header(),
                 itemBuilder: kind == CommunityKind.question
                     ? _answerCard
                     : kind == CommunityKind.album && _tab == 1

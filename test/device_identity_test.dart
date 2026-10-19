@@ -1,3 +1,6 @@
+import 'package:greennote/features/account/official_login_page.dart';
+import 'package:greennote/core/network/coolapk_login.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -419,24 +422,41 @@ void main() {
     );
   }
 
-  testWidgets('settings exposes device identity independently of login mode', (
-    tester,
-  ) async {
-    final api = (await tester.runAsync(CoolapkApi.create))!;
-    addTearDown(api.close);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: AppSettingsPage(
-          api: api,
-          onOpenCookieManager: () async {},
-          onAccountChanged: () {},
+  testWidgets(
+    'device identity is below account login without requiring a login',
+    (tester) async {
+      final api = (await tester.runAsync(CoolapkApi.create))!;
+      addTearDown(api.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AppSettingsPage(
+            api: api,
+            onOpenCookieManager: () async {},
+            onAccountChanged: () {},
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('导入官方设备标识'));
-    await tester.pumpAndSettle();
-    expect(find.byType(DeviceIdentityPage), findsOneWidget);
-    expect(clipboardCalls, 0);
-  });
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('导入官方设备标识'), findsNothing);
+      expect(find.text('多匿名账户管理'), findsNothing);
+      expect(find.text('酷安个人资料'), findsNothing);
+      expect(find.textContaining('当前登录方式：'), findsOneWidget);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: OfficialLoginPage(api: api, login: _PreparedLogin()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('导入官方设备标识'));
+      await tester.tap(find.text('导入官方设备标识'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DeviceIdentityPage), findsOneWidget);
+      expect(clipboardCalls, 0);
+    },
+  );
+}
+
+class _PreparedLogin extends CoolapkLogin {
+  @override
+  Future<void> prepare() async {}
 }

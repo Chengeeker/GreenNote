@@ -165,7 +165,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('回复人'), findsOneWidget);
+      expect(find.textContaining('回复人', findRichText: true), findsOneWidget);
       expect(find.textContaining('评论内容', findRichText: true), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
@@ -312,7 +312,7 @@ void main() {
                 size: Size(360, 900),
                 textScaler: TextScaler.linear(1.5),
               ),
-              child: NotificationCenterPage(
+              child: ReplyNotificationSettingsPage(
                 api: api,
                 requestPermission: () async => false,
               ),

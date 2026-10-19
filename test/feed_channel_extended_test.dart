@@ -22,6 +22,8 @@ class MockChannelApi implements CoolapkApi {
 
   @override
   final String currentUid;
+  @override
+  String get notificationSessionKey => 'session-$currentUid';
   String? openedUserSpaceUid;
 
   @override

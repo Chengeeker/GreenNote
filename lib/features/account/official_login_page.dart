@@ -1,3 +1,6 @@
+import '../shell/main_pages.dart' show CookieLoginPage;
+import '../settings/device_identity_page.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -169,7 +172,26 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
   Widget build(BuildContext context) => PopScope(
     canPop: !_validating,
     child: Scaffold(
-      appBar: const ReviewFrostedAppBar(title: Text('账号登录')),
+      appBar: ReviewFrostedAppBar(
+        title: const Text('账号登录'),
+        actions: [
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () async {
+                    await Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CookieLoginPage(api: widget.api),
+                      ),
+                    );
+                    if (mounted) setState(() {});
+                  },
+            child: const Text('Cookie 登录'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: SafeArea(
         child: Align(
           alignment: Alignment.topCenter,
@@ -283,6 +305,24 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
                   const SizedBox(height: 8),
                   const Text('需要人机验证或无法直接登录时，可在酷安官方网页中完成登录。'),
                 ],
+                const SizedBox(height: 24),
+                const Divider(),
+                OutlinedButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          await Navigator.push<void>(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  DeviceIdentityPage(api: widget.api),
+                            ),
+                          );
+                          if (mounted) setState(() {});
+                        },
+                  icon: const Icon(Icons.phonelink_setup_outlined),
+                  label: const Text('导入官方设备标识'),
+                ),
               ],
             ),
           ),

@@ -1,3 +1,5 @@
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -76,6 +78,7 @@ class _Login extends CoolapkLogin {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   test('account cookies reject incomplete, guest, expired and injected credentials', () {
     expect(
       CoolapkLogin.hasAccountCookie('uid=123; token=x=y; username=test'),

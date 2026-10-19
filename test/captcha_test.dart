@@ -95,6 +95,108 @@ void main() {
     return api;
   }
 
+  test('detail rejects missing history IDs and preserves the exact trimmed query ID', () async {
+    adapter.respond = (_) => _body({
+      'data': {'id': '12345', 'message': '原帖正文'},
+    });
+    final api = await create();
+    for (final id in ['', 'detail', 'null', '0']) {
+      await expectLater(
+        api.getFeedDetail(id),
+        throwsA(isA<CoolapkApiException>()),
+      );
+    }
+    expect(adapter.calls, isEmpty);
+    await api.getFeedDetail(' 12345 ');
+    expect(adapter.calls.single.queryParameters, {'id': '12345'});
+  });
+
+  test(
+    'headline continues on short page and honors explicit string end flag',
+    () async {
+      adapter.respond = (_) => _body({
+        'data': [
+          {'id': '1', 'entityType': 'feed', 'message': '短分页'},
+        ],
+      });
+      final api = await create();
+      expect(
+        (await api.getHomeChannelPage(
+          '/v6/main/headline',
+          2,
+          lastItem: '100',
+        )).hasMore,
+        isTrue,
+      );
+      expect(adapter.calls.last.queryParameters['lastItem'], '100');
+      adapter.respond = (_) => _body({
+        'hasMore': '0',
+        'data': [
+          {'id': '2', 'message': '最后一页'},
+        ],
+      });
+      expect(
+        (await api.getHomeChannelPage('/v6/main/headline', 3)).hasMore,
+        isFalse,
+      );
+    },
+  );
+
+  test('reply image uses image feed preparation while message upload retains its bucket', () async {
+    adapter.respond = (call) => _body({
+      'data': call.path.contains('checkLoginInfo')
+          ? {'uid': '10'}
+          : {
+              'fileInfo': [
+                {'url': 'https://image.coolapk.com/feed/photo.png'},
+              ],
+              'uploadPrepareInfo': {},
+            },
+    });
+    final api = await create();
+    final png = Uint8List(24)
+      ..[0] = 137
+      ..[1] = 80;
+    ByteData.sublistView(png).setUint32(16, 1);
+    ByteData.sublistView(png).setUint32(20, 1);
+    expect(
+      await api.uploadReplyImage(png),
+      'https://image.coolapk.com/feed/photo.png',
+    );
+    var fields = adapter.calls.last.data as Map;
+    expect(fields['uploadBucket'], 'image');
+    expect(fields['uploadDir'], 'feed');
+    expect(fields['feed_type'], 'feed');
+    expect(fields['toUid'], '10');
+    await api.uploadMessageImage(png, '20');
+    fields = adapter.calls.last.data as Map;
+    expect(fields['uploadBucket'], 'message');
+    expect(fields['uploadDir'], 'message');
+    expect(fields['toUid'], '20');
+    expect(
+      coolapkReplyForm(
+        '100',
+        '',
+        pic: 'https://image.coolapk.com/feed/photo.png',
+      )['pic'],
+      isNotEmpty,
+    );
+  });
+
+  test('list pagination preserves optional server total', () async {
+    adapter.respond = (_) => _body({
+      'total': 34,
+      'hasMore': true,
+      'data': [
+        {'uid': '21', 'username': '名单用户'},
+      ],
+    });
+    final api = await create();
+    final page = await api.getList('/v6/user/blackList');
+    expect(page.total, 34);
+    expect(page.hasMore, isTrue);
+  });
+
   test(
     'legacy personal collection cards use the supported UID list endpoint',
     () async {

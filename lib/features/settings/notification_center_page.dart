@@ -12,8 +12,8 @@ import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_section_card.dart';
 import '../shared/reply_notifications_page.dart';
 
-class NotificationCenterPage extends StatefulWidget {
-  const NotificationCenterPage({
+class ReplyNotificationSettingsPage extends StatefulWidget {
+  const ReplyNotificationSettingsPage({
     super.key,
     required this.api,
     this.requestPermission = requestReplyNotificationPermission,
@@ -22,10 +22,12 @@ class NotificationCenterPage extends StatefulWidget {
   final Future<bool> Function() requestPermission;
 
   @override
-  State<NotificationCenterPage> createState() => _NotificationCenterPageState();
+  State<ReplyNotificationSettingsPage> createState() =>
+      _ReplyNotificationSettingsPageState();
 }
 
-class _NotificationCenterPageState extends State<NotificationCenterPage> {
+class _ReplyNotificationSettingsPageState
+    extends State<ReplyNotificationSettingsPage> {
   ReplyNotificationSettings? _settings;
   String _status = '尚未检查';
   bool _permission = false;
@@ -98,7 +100,7 @@ class _NotificationCenterPageState extends State<NotificationCenterPage> {
 
   @override
   Widget build(BuildContext context) => ReviewPageScaffold(
-    title: '通知中心',
+    title: '回复提醒设置',
     bodyBuilder: (context, insets) {
       final settings = _settings;
       if (settings == null) {
@@ -111,7 +113,7 @@ class _NotificationCenterPageState extends State<NotificationCenterPage> {
           Text(
             official
                 ? '酷安官方 Cookie 账号的评论与回复提醒'
-                : '请先使用酷安官方 Cookie 登录；匿名账户与 UID 绑定不支持私有回复提醒。',
+                : '请先使用酷安账号登录；匿名账户与 UID 绑定不支持私有回复提醒。',
           ),
           const SizedBox(height: 16),
           AppSectionCard(
@@ -221,7 +223,7 @@ class _NotificationCenterPageState extends State<NotificationCenterPage> {
                       (!settings.enabled
                           ? '已关闭'
                           : !official
-                          ? '等待官方 Cookie 登录'
+                          ? '等待酷安账号登录'
                           : !_permission
                           ? '等待通知权限'
                           : _resident

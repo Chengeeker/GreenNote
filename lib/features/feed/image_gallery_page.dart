@@ -1014,7 +1014,8 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
 
   @override
   Widget build(BuildContext context) {
-    final hasScope = context
+    final hasScope =
+        context
             .getElementForInheritedWidgetOfExactType<
               UncontrolledProviderScope
             >() !=
@@ -1022,12 +1023,14 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     if (hasScope) {
       return Consumer(
         builder: (context, ref, _) {
-          final useLiquidGlass = (widget.useLiquidGlass ??
-              ref.watch(
-                appSettingsProvider.select(
-                  (AppSettingsState s) => s.useLiquidGlassNavBar,
-                ),
-              )) == true;
+          final useLiquidGlass =
+              (widget.useLiquidGlass ??
+                  ref.watch(
+                    appSettingsProvider.select(
+                      (AppSettingsState s) => s.useLiquidGlassNavBar,
+                    ),
+                  )) ==
+              true;
           return _buildGallery(context, useLiquidGlass);
         },
       );
@@ -1049,412 +1052,418 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
               onPointerMove: _handleGalleryPointerMove,
               onPointerUp: _handleGalleryPointerUp,
               onPointerCancel: _handleGalleryPointerCancel,
-            child: NotificationListener<ScrollNotification>(
-              onNotification: (notification) {
-                if (notification.depth == 0) {
-                  if (notification is ScrollStartNotification) {
-                    _mainPageScrollEndTimer?.cancel();
-                    if (notification.dragDetails != null) {
-                      if (_thumbnailScrollBottom != null) {
-                        setState(() => _thumbnailScrollBottom = null);
-                      }
-                      _thumbnailSyncEpoch++;
-                      _thumbnailUserScrolling = false;
-                      _thumbnailSettling = false;
-                      _mainUserScrolling = true;
-                      _activeMediaIndex.value = -1;
-                      _isMainPageScrolling.value = true;
-                    }
-                  } else if (notification is ScrollUpdateNotification) {
-                    if (notification.dragDetails != null &&
-                        !_isMainPageScrolling.value) {
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  if (notification.depth == 0) {
+                    if (notification is ScrollStartNotification) {
                       _mainPageScrollEndTimer?.cancel();
-                      _mainUserScrolling = true;
-                      _activeMediaIndex.value = -1;
-                      _isMainPageScrolling.value = true;
-                    }
-                  } else if (notification is ScrollEndNotification) {
-                    _mainPageScrollEndTimer?.cancel();
-                    _mainPageScrollEndTimer = Timer(
-                      const Duration(milliseconds: 140),
-                      () {
-                        if (mounted &&
-                            _pageController.hasClients &&
-                            !_pageController
-                                .position
-                                .isScrollingNotifier
-                                .value) {
-                          _isMainPageScrolling.value = false;
-                          if (_mainUserScrolling) {
-                            _mainUserScrolling = false;
-                            _activeMediaIndex.value = _currentIndex;
-                          }
+                      if (notification.dragDetails != null) {
+                        if (_thumbnailScrollBottom != null) {
+                          setState(() => _thumbnailScrollBottom = null);
                         }
-                      },
-                    );
+                        _thumbnailSyncEpoch++;
+                        _thumbnailUserScrolling = false;
+                        _thumbnailSettling = false;
+                        _mainUserScrolling = true;
+                        _activeMediaIndex.value = -1;
+                        _isMainPageScrolling.value = true;
+                      }
+                    } else if (notification is ScrollUpdateNotification) {
+                      if (notification.dragDetails != null &&
+                          !_isMainPageScrolling.value) {
+                        _mainPageScrollEndTimer?.cancel();
+                        _mainUserScrolling = true;
+                        _activeMediaIndex.value = -1;
+                        _isMainPageScrolling.value = true;
+                      }
+                    } else if (notification is ScrollEndNotification) {
+                      _mainPageScrollEndTimer?.cancel();
+                      _mainPageScrollEndTimer = Timer(
+                        const Duration(milliseconds: 140),
+                        () {
+                          if (mounted &&
+                              _pageController.hasClients &&
+                              !_pageController
+                                  .position
+                                  .isScrollingNotifier
+                                  .value) {
+                            _isMainPageScrolling.value = false;
+                            if (_mainUserScrolling) {
+                              _mainUserScrolling = false;
+                              _activeMediaIndex.value = _currentIndex;
+                            }
+                          }
+                        },
+                      );
+                    }
                   }
-                }
-                return false;
-              },
-              child: ExtendedImageGesturePageView.builder(
-                controller: _pageController,
-                physics: const BouncingScrollPhysics(),
-                canScrollPage: (gestureDetails) =>
-                    (gestureDetails?.totalScale ?? 1.0) <= 1.0,
-                shouldAccpetHorizontalOrVerticalDrag: (trackers) =>
-                    trackers.length == 1,
-                pageSnapping: !_thumbnailUserScrolling && !_thumbnailSettling,
-                itemCount: widget.pics.length,
-                onPageChanged: (index) {
-                  final didChange = index != _currentIndex;
-                  if (didChange && _thumbnailUserScrolling) {
-                    HapticFeedbackUtil.selectionTick();
-                  } else if (!_thumbnailUserScrolling &&
-                      !_thumbnailSettling &&
-                      !_mainUserScrolling) {
-                    _activeMediaIndex.value = index;
-                  }
-                  setState(() {
-                    _currentIndex = index;
-                  });
-                  _updateWindowHdr();
-                  if (!_thumbnailUserScrolling &&
-                      !_thumbnailSettling &&
-                      _thumbnailController.hasClients) {
-                    // A main-image gesture takes ownership, cancelling any
-                    // old thumbnail inertia without feeding selection back.
-                    _thumbnailController.jumpToPage(index);
-                  }
+                  return false;
                 },
-                itemBuilder: (context, index) {
-                  final pic = widget.pics[index];
-                  final isLongPic =
-                      pic.isLong ||
-                      (pic.height > 0 &&
-                          pic.width > 0 &&
-                          pic.height / pic.width > 2.0);
+                child: ExtendedImageGesturePageView.builder(
+                  controller: _pageController,
+                  physics: const BouncingScrollPhysics(),
+                  canScrollPage: (gestureDetails) =>
+                      (gestureDetails?.totalScale ?? 1.0) <= 1.0,
+                  shouldAccpetHorizontalOrVerticalDrag: (trackers) =>
+                      trackers.length == 1,
+                  pageSnapping: !_thumbnailUserScrolling && !_thumbnailSettling,
+                  itemCount: widget.pics.length,
+                  onPageChanged: (index) {
+                    final didChange = index != _currentIndex;
+                    if (didChange && _thumbnailUserScrolling) {
+                      HapticFeedbackUtil.selectionTick();
+                    } else if (!_thumbnailUserScrolling &&
+                        !_thumbnailSettling &&
+                        !_mainUserScrolling) {
+                      _activeMediaIndex.value = index;
+                    }
+                    setState(() {
+                      _currentIndex = index;
+                    });
+                    _updateWindowHdr();
+                    if (!_thumbnailUserScrolling &&
+                        !_thumbnailSettling &&
+                        _thumbnailController.hasClients) {
+                      // A main-image gesture takes ownership, cancelling any
+                      // old thumbnail inertia without feeding selection back.
+                      _thumbnailController.jumpToPage(index);
+                    }
+                  },
+                  itemBuilder: (context, index) {
+                    final pic = widget.pics[index];
+                    final isLongPic =
+                        pic.isLong ||
+                        (pic.height > 0 &&
+                            pic.width > 0 &&
+                            pic.height / pic.width > 2.0);
 
-                  final foregroundImage = ExtendedImage.network(
-                    pic.originalUrl.isNotEmpty
-                        ? pic.originalUrl
-                        : (pic.largeUrl.isNotEmpty
-                              ? pic.largeUrl
-                              : pic.bmiddleUrl),
-                    width: double.infinity,
-                    height: double.infinity,
-                    headers: coolapkImageHeaders(
-                      pic.originalUrl,
-                      api: widget.api,
-                    ),
-                    cache: true,
-                    fit: BoxFit.contain,
-                    mode: ExtendedImageMode.gesture,
-                    enableSlideOutPage: false,
-                    loadStateChanged: (state) {
-                      if (state.extendedImageLoadState == LoadState.loading &&
-                          index == widget.initialIndex &&
-                          _openingPreview != null) {
-                        return RawImage(
-                          key: const ValueKey('gallery-opening-preview'),
-                          image: _openingPreview,
-                          fit: BoxFit.contain,
-                        );
-                      }
-                      if (state.extendedImageLoadState != LoadState.completed) {
-                        return null;
-                      }
-                      HdrImageDetector.detectFromCache(
-                        pic.originalUrl.isNotEmpty
-                            ? pic.originalUrl
-                            : pic.previewUrl,
-                        headers: coolapkImageHeaders(
+                    final foregroundImage = ExtendedImage.network(
+                      pic.originalUrl.isNotEmpty
+                          ? pic.originalUrl
+                          : (pic.largeUrl.isNotEmpty
+                                ? pic.largeUrl
+                                : pic.bmiddleUrl),
+                      width: double.infinity,
+                      height: double.infinity,
+                      headers: coolapkImageHeaders(
+                        pic.originalUrl,
+                        api: widget.api,
+                      ),
+                      cache: true,
+                      fit: BoxFit.contain,
+                      mode: ExtendedImageMode.gesture,
+                      enableSlideOutPage: false,
+                      loadStateChanged: (state) {
+                        if (state.extendedImageLoadState == LoadState.loading &&
+                            index == widget.initialIndex &&
+                            _openingPreview != null) {
+                          return RawImage(
+                            key: const ValueKey('gallery-opening-preview'),
+                            image: _openingPreview,
+                            fit: BoxFit.contain,
+                          );
+                        }
+                        if (state.extendedImageLoadState !=
+                            LoadState.completed) {
+                          return null;
+                        }
+                        HdrImageDetector.detectFromCache(
                           pic.originalUrl.isNotEmpty
                               ? pic.originalUrl
                               : pic.previewUrl,
-                          api: widget.api,
-                        ),
-                      );
-                      return _pagingImages[state
-                          .extendedImageInfo!] ??= ExtendedImageGesture(
-                        state,
-                        imageBuilder: (image, {imageGestureState}) {
-                          final gestureState = imageGestureState!;
-                          final pager = gestureState.context
-                              .findAncestorStateOfType<
-                                ExtendedImageGesturePageViewState
-                              >();
-                          // Hero flights paint in the Navigator overlay, outside the pager.
-                          if (pager == null) return image;
-                          return Listener(
-                            onPointerDown: (_) {
-                              pager.extendedImageGestureStates.remove(
-                                gestureState,
-                              );
-                              pager.extendedImageGestureState = gestureState;
-                            },
-                            child: RawGestureDetector(
-                              gestures: {
-                                ExtendedHorizontalDragGestureRecognizer:
-                                    GestureRecognizerFactoryWithHandlers<
-                                      ExtendedHorizontalDragGestureRecognizer
-                                    >(
-                                      () =>
-                                          ExtendedHorizontalDragGestureRecognizer(
-                                            canHorizontalOrVerticalDrag: () =>
-                                                (gestureState
-                                                        .gestureDetails
-                                                        ?.totalScale ??
-                                                    1) <=
-                                                1,
-                                            shouldAccpetHorizontalOrVerticalDrag:
-                                                (trackers) =>
-                                                    trackers.length == 1,
+                          headers: coolapkImageHeaders(
+                            pic.originalUrl.isNotEmpty
+                                ? pic.originalUrl
+                                : pic.previewUrl,
+                            api: widget.api,
+                          ),
+                        );
+                        return _pagingImages[state
+                            .extendedImageInfo!] ??= ExtendedImageGesture(
+                          state,
+                          imageBuilder: (image, {imageGestureState}) {
+                            final gestureState = imageGestureState!;
+                            final pager = gestureState.context
+                                .findAncestorStateOfType<
+                                  ExtendedImageGesturePageViewState
+                                >();
+                            // Hero flights paint in the Navigator overlay, outside the pager.
+                            if (pager == null) return image;
+                            return Listener(
+                              onPointerDown: (_) {
+                                pager.extendedImageGestureStates.remove(
+                                  gestureState,
+                                );
+                                pager.extendedImageGestureState = gestureState;
+                              },
+                              child: RawGestureDetector(
+                                gestures: {
+                                  ExtendedHorizontalDragGestureRecognizer:
+                                      GestureRecognizerFactoryWithHandlers<
+                                        ExtendedHorizontalDragGestureRecognizer
+                                      >(
+                                        () => ExtendedHorizontalDragGestureRecognizer(
+                                          canHorizontalOrVerticalDrag: () =>
+                                              (gestureState
+                                                      .gestureDetails
+                                                      ?.totalScale ??
+                                                  1) <=
+                                              1,
+                                          shouldAccpetHorizontalOrVerticalDrag:
+                                              (trackers) =>
+                                                  trackers.length == 1,
+                                        ),
+                                        (recognizer) => recognizer
+                                          ..onDown = pager.onDragDown
+                                          ..onStart = pager.onDragStart
+                                          ..onUpdate = pager.onDragUpdate
+                                          ..onEnd = pager.onDragEnd
+                                          ..onCancel = pager.onDragCancel
+                                          ..minFlingDistance = pager
+                                              .widget
+                                              .physics
+                                              .minFlingDistance
+                                          ..minFlingVelocity = pager
+                                              .widget
+                                              .physics
+                                              .minFlingVelocity
+                                          ..maxFlingVelocity = pager
+                                              .widget
+                                              .physics
+                                              .maxFlingVelocity
+                                          ..gestureSettings =
+                                              MediaQuery.gestureSettingsOf(
+                                                context,
+                                              ),
+                                      ),
+                                },
+                                child: image,
+                              ),
+                            );
+                          },
+                        );
+                      },
+                      onDoubleTap: (ExtendedImageGestureState state) {
+                        final pointerDownPosition = state.pointerDownPosition;
+                        final begin = state.gestureDetails!.totalScale ?? 1.0;
+                        double end = 1.0;
+                        if (begin <= 1.05) {
+                          end = isLongPic ? 3.5 : 2.5;
+                        } else if (begin <= 3.6) {
+                          end = 6.0;
+                        } else {
+                          end = 1.0;
+                        }
+
+                        HapticFeedbackUtil.medium();
+                        _doubleTapAnimationController.stop();
+                        _doubleTapAnimationController.reset();
+                        final animationEpoch = ++_doubleTapAnimationEpoch;
+                        if (!_isDoubleTapZooming) {
+                          setState(() => _isDoubleTapZooming = true);
+                        }
+
+                        if (_doubleTapListener != null) {
+                          _doubleTapAnimation?.removeListener(
+                            _doubleTapListener!,
+                          );
+                        }
+
+                        _doubleTapAnimation =
+                            Tween<double>(begin: begin, end: end).animate(
+                              CurvedAnimation(
+                                parent: _doubleTapAnimationController,
+                                curve: Curves.easeOutCubic,
+                              ),
+                            );
+
+                        _doubleTapListener = () {
+                          state.handleDoubleTap(
+                            scale: _doubleTapAnimation!.value,
+                            doubleTapPosition: pointerDownPosition,
+                          );
+                        };
+                        _doubleTapAnimation!.addListener(_doubleTapListener!);
+
+                        _doubleTapAnimationController
+                            .forward()
+                            .orCancel
+                            .then((_) {
+                              if (!mounted ||
+                                  animationEpoch != _doubleTapAnimationEpoch) {
+                                return;
+                              }
+                              final rect =
+                                  state.gestureDetails?.destinationRect;
+                              if (rect != null) {
+                                _hdrRectFor(pic.originalUrl).value = rect;
+                              }
+                              setState(() => _isDoubleTapZooming = false);
+                            })
+                            .catchError((Object _) {});
+                      },
+                      initGestureConfigHandler: (state) {
+                        return GestureConfig(
+                          // Do not let the image shrink below its fitted
+                          // size: ExtendedImage recenters sub-1.0 scales,
+                          // which otherwise makes pinch focus jump away.
+                          minScale: 1.0,
+                          animationMinScale: 1.0,
+                          maxScale: 8.0,
+                          animationMaxScale: 9.0,
+                          speed: 1.0,
+                          inertialSpeed: 120.0,
+                          initialScale: 1.0,
+                          inPageView: true,
+                          initialAlignment: InitialAlignment.center,
+                          gestureDetailsIsChanged: pic.isHdr
+                              ? (details) {
+                                  _hdrRectFor(pic.originalUrl).value =
+                                      details?.destinationRect;
+                                }
+                              : null,
+                        );
+                      },
+                    );
+                    final heroImage = _withGalleryHero(
+                      index,
+                      pic,
+                      foregroundImage,
+                    );
+                    final normalizedUrl = normalizeCoolapkImageUrl(
+                      pic.originalUrl,
+                    );
+                    final isCurrentPage = index == _currentIndex;
+                    final image = ValueListenableBuilder<bool>(
+                      valueListenable: _isMainPageScrolling,
+                      builder: (context, isMainScrolling, _) {
+                        final isScrolling =
+                            isMainScrolling ||
+                            _thumbnailUserScrolling ||
+                            _thumbnailSettling;
+                        final useNativeHdr =
+                            (_hdrHybridSupported ||
+                                (isCurrentPage &&
+                                    !isScrolling &&
+                                    !_isDoubleTapZooming)) &&
+                            _hdrDisplaySupported &&
+                            pic.isHdr &&
+                            _nativeHdrUrls.contains(normalizedUrl) &&
+                            _chromeRouteVisible;
+                        return LayoutBuilder(
+                          builder: (context, constraints) {
+                            final viewport = Rect.fromLTWH(
+                              0,
+                              0,
+                              constraints.maxWidth,
+                              constraints.maxHeight,
+                            );
+                            return Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                heroImage,
+                                if (_hdrDisplaySupported &&
+                                    pic.isHdr &&
+                                    (_hdrHybridSupported ||
+                                        (isCurrentPage && !isScrolling)))
+                                  ValueListenableBuilder<Rect?>(
+                                    valueListenable: _hdrRectFor(
+                                      pic.originalUrl,
+                                    ),
+                                    child: PlatformViewLink(
+                                      key: ValueKey(
+                                        'native-hdr-$normalizedUrl',
+                                      ),
+                                      viewType: 'com.green.note/hdrImage',
+                                      surfaceFactory: (context, controller) =>
+                                          AndroidViewSurface(
+                                            controller:
+                                                controller
+                                                    as AndroidViewController,
+                                            gestureRecognizers:
+                                                const <
+                                                  Factory<
+                                                    OneSequenceGestureRecognizer
+                                                  >
+                                                >{},
+                                            hitTestBehavior:
+                                                PlatformViewHitTestBehavior
+                                                    .transparent,
                                           ),
-                                      (recognizer) => recognizer
-                                        ..onDown = pager.onDragDown
-                                        ..onStart = pager.onDragStart
-                                        ..onUpdate = pager.onDragUpdate
-                                        ..onEnd = pager.onDragEnd
-                                        ..onCancel = pager.onDragCancel
-                                        ..minFlingDistance = pager
-                                            .widget
-                                            .physics
-                                            .minFlingDistance
-                                        ..minFlingVelocity = pager
-                                            .widget
-                                            .physics
-                                            .minFlingVelocity
-                                        ..maxFlingVelocity = pager
-                                            .widget
-                                            .physics
-                                            .maxFlingVelocity
-                                        ..gestureSettings =
-                                            MediaQuery.gestureSettingsOf(
+                                      onCreatePlatformView: (params) {
+                                        // HCPP is selected by the engine when supported;
+                                        // legacy devices must keep window HDR, not TLHC.
+                                        return PlatformViewsService.initExpensiveAndroidView(
+                                            id: params.id,
+                                            viewType: 'com.green.note/hdrImage',
+                                            layoutDirection: Directionality.of(
                                               context,
                                             ),
+                                            creationParams: {
+                                              'url': pic.originalUrl,
+                                              'headers': coolapkImageHeaders(
+                                                pic.originalUrl,
+                                                api: widget.api,
+                                              ),
+                                            },
+                                            creationParamsCodec:
+                                                const StandardMessageCodec(),
+                                            onFocus: () =>
+                                                params.onFocusChanged(true),
+                                          )
+                                          ..addOnPlatformViewCreatedListener(
+                                            params.onPlatformViewCreated,
+                                          )
+                                          ..create();
+                                      },
                                     ),
-                              },
-                              child: image,
-                            ),
-                          );
-                        },
-                      );
-                    },
-                    onDoubleTap: (ExtendedImageGestureState state) {
-                      final pointerDownPosition = state.pointerDownPosition;
-                      final begin = state.gestureDetails!.totalScale ?? 1.0;
-                      double end = 1.0;
-                      if (begin <= 1.05) {
-                        end = isLongPic ? 3.5 : 2.5;
-                      } else if (begin <= 3.6) {
-                        end = 6.0;
-                      } else {
-                        end = 1.0;
-                      }
-
-                      _doubleTapAnimationController.stop();
-                      _doubleTapAnimationController.reset();
-                      final animationEpoch = ++_doubleTapAnimationEpoch;
-                      if (!_isDoubleTapZooming) {
-                        setState(() => _isDoubleTapZooming = true);
-                      }
-
-                      if (_doubleTapListener != null) {
-                        _doubleTapAnimation?.removeListener(
-                          _doubleTapListener!,
-                        );
-                      }
-
-                      _doubleTapAnimation =
-                          Tween<double>(begin: begin, end: end).animate(
-                            CurvedAnimation(
-                              parent: _doubleTapAnimationController,
-                              curve: Curves.easeOutCubic,
-                            ),
-                          );
-
-                      _doubleTapListener = () {
-                        state.handleDoubleTap(
-                          scale: _doubleTapAnimation!.value,
-                          doubleTapPosition: pointerDownPosition,
-                        );
-                      };
-                      _doubleTapAnimation!.addListener(_doubleTapListener!);
-
-                      _doubleTapAnimationController
-                          .forward()
-                          .orCancel
-                          .then((_) {
-                            if (!mounted ||
-                                animationEpoch != _doubleTapAnimationEpoch) {
-                              return;
-                            }
-                            final rect = state.gestureDetails?.destinationRect;
-                            if (rect != null) {
-                              _hdrRectFor(pic.originalUrl).value = rect;
-                            }
-                            setState(() => _isDoubleTapZooming = false);
-                          })
-                          .catchError((Object _) {});
-                    },
-                    initGestureConfigHandler: (state) {
-                      return GestureConfig(
-                        // Do not let the image shrink below its fitted
-                        // size: ExtendedImage recenters sub-1.0 scales,
-                        // which otherwise makes pinch focus jump away.
-                        minScale: 1.0,
-                        animationMinScale: 1.0,
-                        maxScale: 8.0,
-                        animationMaxScale: 9.0,
-                        speed: 1.0,
-                        inertialSpeed: 120.0,
-                        initialScale: 1.0,
-                        inPageView: true,
-                        initialAlignment: InitialAlignment.center,
-                        gestureDetailsIsChanged: pic.isHdr
-                            ? (details) {
-                                _hdrRectFor(pic.originalUrl).value =
-                                    details?.destinationRect;
-                              }
-                            : null,
-                      );
-                    },
-                  );
-                  final heroImage = _withGalleryHero(
-                    index,
-                    pic,
-                    foregroundImage,
-                  );
-                  final normalizedUrl = normalizeCoolapkImageUrl(
-                    pic.originalUrl,
-                  );
-                  final isCurrentPage = index == _currentIndex;
-                  final image = ValueListenableBuilder<bool>(
-                    valueListenable: _isMainPageScrolling,
-                    builder: (context, isMainScrolling, _) {
-                      final isScrolling =
-                          isMainScrolling ||
-                          _thumbnailUserScrolling ||
-                          _thumbnailSettling;
-                      final useNativeHdr =
-                          (_hdrHybridSupported ||
-                              (isCurrentPage &&
-                                  !isScrolling &&
-                                  !_isDoubleTapZooming)) &&
-                          _hdrDisplaySupported &&
-                          pic.isHdr &&
-                          _nativeHdrUrls.contains(normalizedUrl) &&
-                          _chromeRouteVisible;
-                      return LayoutBuilder(
-                        builder: (context, constraints) {
-                          final viewport = Rect.fromLTWH(
-                            0,
-                            0,
-                            constraints.maxWidth,
-                            constraints.maxHeight,
-                          );
-                          return Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              heroImage,
-                              if (_hdrDisplaySupported &&
-                                  pic.isHdr &&
-                                  (_hdrHybridSupported ||
-                                      (isCurrentPage && !isScrolling)))
-                                ValueListenableBuilder<Rect?>(
-                                  valueListenable: _hdrRectFor(pic.originalUrl),
-                                  child: PlatformViewLink(
-                                    key: ValueKey('native-hdr-$normalizedUrl'),
-                                    viewType: 'com.green.note/hdrImage',
-                                    surfaceFactory: (context, controller) =>
-                                        AndroidViewSurface(
-                                          controller:
-                                              controller
-                                                  as AndroidViewController,
-                                          gestureRecognizers:
-                                              const <
-                                                Factory<
-                                                  OneSequenceGestureRecognizer
-                                                >
-                                              >{},
-                                          hitTestBehavior:
-                                              PlatformViewHitTestBehavior
-                                                  .transparent,
-                                        ),
-                                    onCreatePlatformView: (params) {
-                                      // HCPP is selected by the engine when supported;
-                                      // legacy devices must keep window HDR, not TLHC.
-                                      return PlatformViewsService.initExpensiveAndroidView(
-                                          id: params.id,
-                                          viewType: 'com.green.note/hdrImage',
-                                          layoutDirection: Directionality.of(
-                                            context,
-                                          ),
-                                          creationParams: {
-                                            'url': pic.originalUrl,
-                                            'headers': coolapkImageHeaders(
-                                              pic.originalUrl,
-                                              api: widget.api,
+                                    builder: (context, rect, nativeView) {
+                                      final transform = hdrImageViewTransform(
+                                        viewport,
+                                        rect,
+                                      );
+                                      return Positioned.fill(
+                                        child: IgnorePointer(
+                                          child: Transform(
+                                            alignment: Alignment.topLeft,
+                                            transform: transform,
+                                            child: Opacity(
+                                              opacity: useNativeHdr ? 1 : 0,
+                                              child: nativeView,
                                             ),
-                                          },
-                                          creationParamsCodec:
-                                              const StandardMessageCodec(),
-                                          onFocus: () =>
-                                              params.onFocusChanged(true),
-                                        )
-                                        ..addOnPlatformViewCreatedListener(
-                                          params.onPlatformViewCreated,
-                                        )
-                                        ..create();
+                                          ),
+                                        ),
+                                      );
                                     },
                                   ),
-                                  builder: (context, rect, nativeView) {
-                                    final transform = hdrImageViewTransform(
-                                      viewport,
-                                      rect,
-                                    );
-                                    return Positioned.fill(
-                                      child: IgnorePointer(
-                                        child: Transform(
-                                          alignment: Alignment.topLeft,
-                                          transform: transform,
-                                          child: Opacity(
-                                            opacity: useNativeHdr ? 1 : 0,
-                                            child: nativeView,
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                  );
-                  if (pic.badgeText.isEmpty) return image;
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    );
+                    if (pic.badgeText.isEmpty) return image;
 
-                  final bottomOffset = widget.pics.length > 1
-                      ? (_thumbnailBottom + 64 + 14)
-                      : (MediaQuery.paddingOf(context).bottom + 24);
-                  return Stack(
-                    children: [
-                      image,
-                      Positioned(
-                        right: 16,
-                        bottom: bottomOffset,
-                        child: IgnorePointer(
-                          child: _GalleryMediaBadge(text: pic.badgeText),
+                    final bottomOffset = widget.pics.length > 1
+                        ? (_thumbnailBottom + 64 + 14)
+                        : (MediaQuery.paddingOf(context).bottom + 24);
+                    return Stack(
+                      children: [
+                        image,
+                        Positioned(
+                          right: 16,
+                          bottom: bottomOffset,
+                          child: IgnorePointer(
+                            child: _GalleryMediaBadge(text: pic.badgeText),
+                          ),
                         ),
-                      ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           ),
-        ),
 
           if (widget.pics.length > 1)
             Positioned(

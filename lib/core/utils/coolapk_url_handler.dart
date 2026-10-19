@@ -10,9 +10,40 @@ import '../../features/feed/feed_pages.dart';
 import '../../features/shared/api_list_page.dart';
 import '../../features/shared/app_detail_page.dart';
 import '../../features/shared/community_routes.dart';
+import '../../features/shared/in_app_browser_page.dart';
 
 String decodeCoolapkComponent(String value) {
-  try { return Uri.decodeComponent(value); } catch (_) { return value; }
+  try {
+    return Uri.decodeComponent(value);
+  } catch (_) {
+    return value;
+  }
+}
+
+String feedIdFromCoolapkUrl(String raw) {
+  var url = raw.trim();
+  if (url.startsWith('#/')) url = url.substring(1);
+  final uri = Uri.tryParse(url);
+  if (uri == null || uri.userInfo.isNotEmpty) return '';
+  final official =
+      uri.scheme == 'coolmarket' ||
+      (!uri.hasAuthority && uri.scheme.isEmpty) ||
+      (['http', 'https'].contains(uri.scheme) &&
+          (uri.host == 'coolapk.com' || uri.host.endsWith('.coolapk.com')));
+  if (!official) return '';
+  final segments = [
+    if (uri.scheme == 'coolmarket') uri.host,
+    ...uri.pathSegments,
+  ];
+  if (segments.isEmpty ||
+      segments.length > 2 ||
+      !['feed', 'picture'].contains(segments.first)) {
+    return '';
+  }
+  final id = segments.length == 2 && segments[1] != 'detail'
+      ? segments[1]
+      : uri.queryParameters['id'] ?? '';
+  return RegExp(r'^[1-9]\d*$').hasMatch(id) ? id : '';
 }
 
 /// 酷安链接解析与全局分发路由
@@ -66,7 +97,7 @@ class CoolapkUrlHandler {
         host.endsWith('.coolapk.com');
   }
 
-  /// 打开任意链接（酷安链接在应用内原生展示，外部链接在浏览器中打开）
+  /// 打开任意链接（酷安链接在应用内原生展示，网页链接在内置浏览器中打开）
   static Future<bool> handleUrl(
     BuildContext? context,
     CoolapkApi api,
@@ -75,24 +106,37 @@ class CoolapkUrlHandler {
     var url = rawUrl.trim();
     if (url.isEmpty) return false;
 
+    if (url.startsWith('#/')) url = url.substring(1);
+    if (RegExp(r'^(feed|picture|u|user|t|topic|product|collection)/')
+        .hasMatch(url)) {
+      url = '/$url';
+    }
     if (url.startsWith('/')) {
       url = 'https://www.coolapk.com$url';
     }
 
     final targetContext = context ?? rootNavigatorKey.currentContext;
 
-    // 1. 若非酷安链接，唤起外部应用/浏览器打开
+    // HTTP(S) pages stay in-app; native Coolapk destinations are resolved below.
     if (!isCoolapkUrl(url)) {
-      try {
-        if (await canLaunchUrlString(url)) {
-          return await launchUrlString(
-            url,
-            mode: LaunchMode.externalApplication,
-          );
+      final uri = Uri.tryParse(url);
+      if (uri != null && ['http', 'https'].contains(uri.scheme)) {
+        if (targetContext == null ||
+            uri.host.isEmpty ||
+            uri.userInfo.isNotEmpty) {
+          return false;
         }
+        Navigator.of(targetContext).push<void>(
+          MaterialPageRoute(builder: (_) => InAppBrowserPage(url: url)),
+        );
+        return true;
+      }
+      if (uri == null || !['mailto', 'tel'].contains(uri.scheme)) return false;
+      try {
         return await launchUrlString(url, mode: LaunchMode.externalApplication);
-      } catch (_) {}
-      return false;
+      } catch (_) {
+        return false;
+      }
     }
 
     if (targetContext == null) return false;
@@ -108,13 +152,9 @@ class CoolapkUrlHandler {
 
     // 2.1 动态 / 图文 (Feed / Picture)
     // 匹配: /feed/12345, /picture/12345, coolmarket://feed/12345, coolmarket://feed/detail?id=12345
-    final feedRegex = RegExp(
-      r'(?:/feed/|/picture/|coolmarket://feed/(?:detail\?.*id=)?)(\d+)',
-      caseSensitive: false,
-    );
-    final feedMatch = feedRegex.firstMatch(full);
-    if (feedMatch != null) {
-      final id = feedMatch.group(1)!;
+    final feedId = feedIdFromCoolapkUrl(full);
+    if (feedId.isNotEmpty) {
+      final id = feedId;
       Navigator.of(targetContext).push<void>(
         MaterialPageRoute<void>(
           builder: (_) => FeedDetailPage(
@@ -195,13 +235,16 @@ class CoolapkUrlHandler {
       return true;
     }
 
-    // 2.6 其他未匹配的酷安网页链接或协议，在浏览器中打开兜底
-    try {
-      if (await canLaunchUrlString(url)) {
-        return await launchUrlString(url, mode: LaunchMode.externalApplication);
-      }
-    } catch (_) {}
-
+    // Unmatched Coolapk web pages use the same browser without guessing a native route.
+    final uri = Uri.tryParse(url);
+    if (uri != null &&
+        ['http', 'https'].contains(uri.scheme) &&
+        uri.userInfo.isEmpty) {
+      Navigator.of(targetContext).push<void>(
+        MaterialPageRoute(builder: (_) => InAppBrowserPage(url: url)),
+      );
+      return true;
+    }
     return false;
   }
 }

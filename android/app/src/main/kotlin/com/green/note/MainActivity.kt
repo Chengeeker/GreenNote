@@ -52,9 +52,11 @@ class MainActivity : FlutterActivity() {
                 avatarResult = result
                 pickingMessageImage = call.method == "pickImage"
                 try {
-                    startActivityForResult(android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
+                    val action = if (pickingMessageImage && Build.VERSION.SDK_INT >= 33)
+                        android.provider.MediaStore.ACTION_PICK_IMAGES else android.content.Intent.ACTION_GET_CONTENT
+                    startActivityForResult(android.content.Intent(action).apply {
                         type = "image/*"
-                        addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                        if (action == android.content.Intent.ACTION_GET_CONTENT) addCategory(android.content.Intent.CATEGORY_OPENABLE)
                     }, 7401)
                 } catch (_: Exception) {
                     avatarResult = null

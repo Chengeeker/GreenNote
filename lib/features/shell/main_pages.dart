@@ -1,3 +1,5 @@
+import '../shared/message_chat_content.dart';
+import '../shared/official_notification_center_page.dart';
 import '../shared/community_library_page.dart';
 import '../shared/community_detail_page.dart';
 import '../account/anonymous_accounts_page.dart';
@@ -12,8 +14,6 @@ import '../../core/utils/app_toast.dart';
 import '../../core/design_system/components/review_frosted_app_bar.dart';
 
 import 'dart:async';
-
-import '../shared/reply_notifications_page.dart';
 
 import 'dart:convert';
 
@@ -32,6 +32,7 @@ import '../shared/api_list_page.dart';
 import '../shared/app_management_page.dart';
 import '../shared/discovery_channel_page.dart';
 import '../../core/utils/haptic_feedback_util.dart';
+import '../../core/utils/coolapk_url_handler.dart';
 export '../digital/digital_page.dart';
 
 class _DiscoveryChannel {
@@ -1132,119 +1133,11 @@ class _SearchResultsPageState extends State<SearchResultsPage>
 class MessageCenterPage extends StatelessWidget {
   const MessageCenterPage({required this.api, super.key});
   final CoolapkApi api;
-
   @override
-  Widget build(BuildContext context) {
-    const routes = [
-      ('私信', '/v6/message/list'),
-      ('@我的', '/v6/notification/atMeList'),
-      ('评论与回复', '/v6/notification/list'),
-      ('回复与@', '/v6/notification/atCommentMeList'),
-      ('收到的赞', '/v6/notification/feedLikeList'),
-    ];
-    return DefaultTabController(
-      length: routes.length,
-      child: Column(
-        children: [
-          _NotificationCount(api: api),
-          TabBar(
-            isScrollable: true,
-            tabs: [for (final route in routes) Tab(text: route.$1)],
-          ),
-          Expanded(
-            child: TabBarView(
-              children: [
-                for (final route in routes)
-                  route.$1 == '私信'
-                      ? _MessageSessionsPage(api: api)
-                      : ReplyNotificationsPage(
-                          api: api,
-                          showAppBar: false,
-                          title: route.$1,
-                          path: route.$2,
-                        ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NotificationCount extends StatefulWidget {
-  const _NotificationCount({required this.api});
-  final CoolapkApi api;
-
-  @override
-  State<_NotificationCount> createState() => _NotificationCountState();
-}
-
-class _NotificationCountState extends State<_NotificationCount> {
-  Map<String, dynamic>? _counts;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final response = await widget.api.request('/v6/notification/checkCount');
-      final data = response is Map ? response['data'] : null;
-      if (mounted) {
-        setState(() {
-          _error = null;
-          _counts = data is Map ? Map<String, dynamic>.from(data) : null;
-        });
-      }
-    } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final counts = _counts;
-    if (counts == null && _error == null) {
-      return const LinearProgressIndicator();
-    }
-    if (counts == null) {
-      return ListTile(
-        dense: true,
-        title: Text(_error ?? '未读消息暂不可用'),
-        trailing: IconButton(
-          tooltip: '刷新未读数',
-          onPressed: _load,
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      );
-    }
-    final entries = counts.entries
-        .where(
-          (entry) =>
-              entry.value is num || int.tryParse('${entry.value}') != null,
-        )
-        .toList(growable: false);
-    if (entries.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(16),
-        child: Text('酷安暂未返回可识别的未读计数'),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-      child: Wrap(
-        spacing: 16,
-        children: [
-          for (final entry in entries)
-            Text('${_humanLabel(entry.key)} ${entry.value}'),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => OfficialNotificationCenterPage(
+    api: api,
+    messagesBuilder: (_) => _MessageSessionsPage(api: api),
+  );
 }
 
 class _MessageSessionsPage extends StatefulWidget {
@@ -1358,32 +1251,23 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
                 );
               }
               final row = _rows[index];
-              final uid = _first(row, ['uid', 'toUid', 'targetUid']);
+              final partner = messagePartner(row);
+              final uid = partner.uid;
               final ukey = _first(row, ['ukey', 'sessionKey', 'session_id']);
-              final avatar = _first(row, [
-                'userAvatar',
-                'avatar',
-                'user_avatar',
-              ]);
               return ListTile(
-                leading: CircleAvatar(
-                  backgroundImage: avatar.isEmpty
-                      ? null
-                      : NetworkImage(
-                          normalizeCoolapkImageUrl(avatar),
-                          headers: coolapkImageHeaders(avatar, api: widget.api),
-                        ),
-                  child: avatar.isEmpty
-                      ? const Icon(Icons.person_outline_rounded)
-                      : null,
+                leading: AppAvatar(
+                  api: widget.api,
+                  url: partner.avatar,
+                  name: partner.name,
+                  size: 44,
                 ),
-                title: Text(
-                  _first(row, ['username', 'userName', 'title']).isEmpty
-                      ? '私信会话'
-                      : _first(row, ['username', 'userName', 'title']),
-                ),
+                title: Text(partner.name.isEmpty ? '私信会话' : partner.name),
                 subtitle: Text(
-                  _first(row, ['lastMessage', 'message', 'description']),
+                  sanitizeCoolapkMessage(
+                    _first(row, ['lastMessage', 'message', 'description']),
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 trailing: ukey.isEmpty
                     ? null
@@ -1432,7 +1316,9 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
                           builder: (_) => MessageChatPage(
                             api: widget.api,
                             uid: uid,
-                            ukey: ukey.isEmpty ? uid : ukey,
+                            ukey: ukey,
+                            username: partner.name,
+                            avatar: partner.avatar,
                           ),
                         ),
                       ),
@@ -1447,11 +1333,14 @@ class MessageChatPage extends StatefulWidget {
     required this.api,
     required this.uid,
     required this.ukey,
+    this.username = '',
+    this.avatar = '',
     super.key,
   });
   final CoolapkApi api;
   final String uid;
   final String ukey;
+  final String username, avatar;
 
   @override
   State<MessageChatPage> createState() => _MessageChatPageState();
@@ -1461,6 +1350,21 @@ class _MessageChatPageState extends State<MessageChatPage> {
   final _controller = TextEditingController();
   final _pictureController = TextEditingController();
   List<Map<String, dynamic>> _messages = const [];
+  String _chatKey = '';
+  Map<String, dynamic>? _followTip;
+  bool _following = false;
+  String get _partnerName {
+    if (widget.username.isNotEmpty) return widget.username;
+    for (final row in _messages) {
+      if (chatRowKind(row) == 'message' &&
+          _first(row, ['fromuid', 'fromUid']) != widget.api.currentUid) {
+        final name = _first(row, ['fromusername', 'username', 'fromName']);
+        if (name.isNotEmpty) return name;
+      }
+    }
+    return '私信';
+  }
+
   bool _busy = false;
   bool _loadingOlder = false;
   bool _sending = false;
@@ -1477,6 +1381,7 @@ class _MessageChatPageState extends State<MessageChatPage> {
   @override
   void initState() {
     super.initState();
+    _chatKey = widget.ukey;
     _load();
     _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted &&
@@ -1509,37 +1414,67 @@ class _MessageChatPageState extends State<MessageChatPage> {
       setState(() => _busy = true);
     }
     try {
+      if (widget.api.currentUid.isEmpty) await widget.api.checkLogin();
+      if (widget.api.notificationSessionKey != _session) return;
+      if (_chatKey.isEmpty) {
+        final sessions = await widget.api.getList(
+          '/v6/message/list',
+          query: {'page': 1},
+        );
+        for (final row in sessions.items) {
+          if (messagePartner(row).uid == widget.uid) {
+            _chatKey = _first(row, ['ukey', 'sessionKey', 'session_id']);
+            break;
+          }
+        }
+        if (_chatKey.isEmpty) {
+          if (mounted) setState(() => _hasOlder = false);
+          return;
+        }
+      }
       final nextPage = older ? _page + 1 : 1;
       final result = await widget.api.getList(
         '/v6/message/chat',
-        query: {'ukey': widget.ukey, 'page': nextPage},
+        query: {'ukey': _chatKey, 'page': nextPage},
       );
+      final incoming = result.items
+          .where(
+            (row) =>
+                chatRowKind(row) != 'hidden' && chatRowKind(row) != 'follow',
+          )
+          .toList()
+          .reversed
+          .toList();
+      final tip = result.items
+          .where((row) => chatRowKind(row) == 'follow')
+          .firstOrNull;
       _failures = 0;
       _nextRefresh = DateTime.now().add(const Duration(seconds: 10));
       if (mounted && widget.api.notificationSessionKey == _session) {
         setState(() {
+          if (!older) _followTip = tip;
           if (older) {
             final known = _messages.map(_messageKey).toSet();
             _messages = [
               ..._messages,
-              ...result.items.where((item) => known.add(_messageKey(item))),
+              ...incoming.where((item) => known.add(_messageKey(item))),
             ];
           } else {
             if (silent) {
-              final known = result.items.map(_messageKey).toSet();
+              final known = incoming.map(_messageKey).toSet();
               _messages = [
-                ...result.items,
+                ...incoming,
                 ..._messages.where(
                   (item) => !known.contains(_messageKey(item)),
                 ),
               ];
             } else {
-              _messages = result.items;
+              _messages = incoming;
             }
           }
           if (!silent) {
             _page = nextPage;
-            _hasOlder = result.hasMore && result.items.isNotEmpty;
+            _hasOlder = result.hasMore && incoming.isNotEmpty;
           }
           _error = null;
         });
@@ -1602,22 +1537,147 @@ class _MessageChatPageState extends State<MessageChatPage> {
     }
   }
 
+  Future<void> _pickMessageImage() async {
+    if (_sending) return;
+    try {
+      final bytes = await const MethodChannel('com.green.note/avatar')
+          .invokeMethod<Uint8List>('pickImage');
+      if (bytes != null && mounted) {
+        setState(() {
+          _pendingImage = bytes;
+          _pictureController.clear();
+        });
+      }
+    } catch (_) {
+      if (mounted) _snack(context, '无法选择图片，请重试');
+    }
+  }
+
+  Future<void> _chooseEmoji() async {
+    final emoji = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: GridView.count(
+          shrinkWrap: true,
+          crossAxisCount: 6,
+          children: [
+            for (final emoji in [
+              '🙂',
+              '😀',
+              '😂',
+              '🥰',
+              '😭',
+              '😅',
+              '😎',
+              '👍',
+              '🙏',
+              '🐶',
+              '🤔',
+              '🎉',
+            ])
+              TextButton(
+                onPressed: () => Navigator.pop(context, emoji),
+                child: Text(emoji, style: const TextStyle(fontSize: 26)),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || emoji == null) return;
+    final selection = _controller.selection;
+    final start = selection.isValid ? selection.start : _controller.text.length;
+    final end = selection.isValid ? selection.end : start;
+    _controller.value = TextEditingValue(
+      text: _controller.text.replaceRange(start, end, emoji),
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+  }
+
+  Future<void> _followPartner() async {
+    if (_following || widget.uid.isEmpty) return;
+    setState(() => _following = true);
+    try {
+      if (!await widget.api.notificationSessionMatches(_session) ||
+          widget.api.notificationSessionKey != _session) {
+        throw StateError('账号已改变');
+      }
+      await widget.api.followUser(widget.uid, following: false);
+      if (mounted) setState(() => _followTip = null);
+    } catch (error) {
+      if (mounted) _snack(context, '关注失败：$error');
+    } finally {
+      if (mounted) setState(() => _following = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
+    backgroundColor: Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF101010)
+        : const Color(0xFFFAFAFA),
     appBar: ReviewFrostedAppBar(
-      title: const Text('私信'),
+      title: Text(_partnerName),
+      showBottomBorder: false,
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF1E1E1E)
+          : Colors.white,
       actions: [
-        IconButton(
-          tooltip: '加载更早消息',
-          onPressed: _busy || _loadingOlder || !_hasOlder
-              ? null
-              : () => _load(older: true),
-          icon: const Icon(Icons.history_rounded),
+        PopupMenuButton<String>(
+          tooltip: '会话选项',
+          icon: const Icon(Icons.more_vert),
+          onSelected: (value) {
+            if (value == 'history') _load(older: true);
+            if (value == 'profile' && widget.uid.isNotEmpty) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      UserSpacePage(api: widget.api, uid: widget.uid),
+                ),
+              );
+            }
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem(
+              value: 'history',
+              enabled: !_busy && !_loadingOlder && _hasOlder,
+              child: const Text('加载更早消息'),
+            ),
+            if (widget.uid.isNotEmpty)
+              const PopupMenuItem(value: 'profile', child: Text('查看个人主页')),
+          ],
         ),
       ],
     ),
     body: Column(
       children: [
+        if (_followTip != null)
+          Material(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? const Color(0xFF1E1E1E)
+                : Colors.white,
+            child: ListTile(
+              dense: true,
+              title: Text(
+                sanitizeCoolapkMessage(
+                  _first(_followTip, ['title', 'message']),
+                ),
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF009688), fontSize: 14),
+              ),
+              trailing: _following
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _following ? null : _followPartner,
+            ),
+          ),
+        if (_error != null && _messages.isNotEmpty)
+          TextButton(onPressed: () => _load(), child: Text(_error!)),
+        if (_loadingOlder) const LinearProgressIndicator(minHeight: 2),
         Expanded(
           child: _busy && _messages.isEmpty
               ? const Center(child: CircularProgressIndicator())
@@ -1637,89 +1697,18 @@ class _MessageChatPageState extends State<MessageChatPage> {
                 )
               : ListView.builder(
                   reverse: true,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
                   itemCount: _messages.length,
-                  itemBuilder: (context, index) {
-                    final row = _messages[index];
-                    final picture = _first(row, [
-                      'pic',
-                      'picture',
-                      'image',
-                      'imageUrl',
-                    ]);
-                    final pictureUrl = normalizeCoolapkImageUrl(picture);
-                    final pictureUri = Uri.tryParse(pictureUrl);
-                    final mine =
-                        _first(row, ['fromuid', 'fromUid', 'uid']) ==
-                        widget.api.currentUid;
-                    final colors = Theme.of(context).colorScheme;
-                    return Align(
-                      alignment: mine
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.fromLTRB(12, 5, 12, 5),
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.sizeOf(context).width * 0.84,
-                        ),
-                        decoration: BoxDecoration(
-                          color: mine
-                              ? colors.primaryContainer
-                              : colors.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.all(12),
-                          titleTextStyle: Theme.of(context)
-                              .textTheme
-                              .labelMedium
-                              ?.copyWith(
-                                color: mine
-                                    ? colors.onPrimaryContainer
-                                    : colors.onSurfaceVariant,
-                              ),
-                          subtitleTextStyle: Theme.of(context)
-                              .textTheme
-                              .bodyLarge
-                              ?.copyWith(
-                                color: mine
-                                    ? colors.onPrimaryContainer
-                                    : colors.onSurface,
-                              ),
-                          title: Text(
-                            _first(row, ['username', 'userName', 'fromName']),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(_first(row, ['message', 'content', 'text'])),
-                              if (pictureUri != null &&
-                                  pictureUri.scheme == 'https' &&
-                                  pictureUri.host.isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(12),
-                                    child: CachedNetworkImage(
-                                      pictureUrl,
-                                      headers: coolapkImageHeaders(
-                                        pictureUrl,
-                                        api: widget.api,
-                                      ),
-                                      height: 180,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, _, _) =>
-                                          const SizedBox.shrink(),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
+                  itemBuilder: (context, index) => ChatMessageRow(
+                    key: ValueKey(_messageKey(_messages[index])),
+                    api: widget.api,
+                    row: _messages[index],
+                    partnerName: _partnerName,
+                    partnerAvatar: widget.avatar,
+                  ),
                 ),
         ),
+
         if (_pendingImage != null)
           Padding(
             padding: const EdgeInsets.all(8),
@@ -1746,53 +1735,79 @@ class _MessageChatPageState extends State<MessageChatPage> {
               ],
             ),
           ),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 5, 12, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    minLines: 1,
-                    maxLines: 4,
-                    decoration: const InputDecoration(
-                      hintText: '发送私信',
-                      border: OutlineInputBorder(),
+        ColoredBox(
+          color: Theme.of(context).brightness == Brightness.dark
+              ? const Color(0xFF1E1E1E)
+              : Colors.white,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _controller,
+                builder: (context, value, _) => Row(
+                  children: [
+                    IconButton(
+                      tooltip: '表情',
+                      onPressed: _sending ? null : _chooseEmoji,
+                      icon: const Icon(
+                        Icons.sentiment_satisfied_alt_outlined,
+                        size: 28,
+                      ),
                     ),
-                  ),
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        minLines: 1,
+                        maxLines: 5,
+                        style: const TextStyle(fontSize: 17),
+                        decoration: InputDecoration(
+                          hintText: '写私信…',
+                          filled: true,
+                          fillColor:
+                              Theme.of(context).brightness == Brightness.dark
+                              ? const Color(0xFF262626)
+                              : const Color(0xFFF3F3F3),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          border: OutlineInputBorder(
+                            borderSide: BorderSide.none,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '选择图片',
+                      onPressed: _sending ? null : _pickMessageImage,
+                      icon: const Icon(
+                        Icons.add_circle_outline_rounded,
+                        size: 28,
+                      ),
+                    ),
+                    if (value.text.trim().isNotEmpty ||
+                        _pendingImage != null ||
+                        _pictureController.text.isNotEmpty)
+                      IconButton(
+                        tooltip: '发送私信',
+                        onPressed: _sending || _busy ? null : _send,
+                        icon: _sending
+                            ? const SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.send_rounded,
+                                color: Color(0xFF009688),
+                              ),
+                      ),
+                  ],
                 ),
-                IconButton(
-                  tooltip: '选择图片',
-                  onPressed: _sending
-                      ? null
-                      : () async {
-                          try {
-                            final bytes = await const MethodChannel(
-                              'com.green.note/avatar',
-                            ).invokeMethod<Uint8List>('pickImage');
-                            if (bytes != null && mounted) {
-                              setState(() {
-                                _pendingImage = bytes;
-                                _pictureController.clear();
-                              });
-                            }
-                          } catch (_) {
-                            if (mounted) _snack(this.context, '无法选择图片，请重试');
-                          }
-                        },
-                  icon: Icon(
-                    _pendingImage == null && _pictureController.text.isEmpty
-                        ? Icons.attach_file_rounded
-                        : Icons.image_rounded,
-                  ),
-                ),
-                IconButton(
-                  tooltip: '发送私信',
-                  onPressed: _sending || _busy ? null : _send,
-                  icon: const Icon(Icons.send_rounded),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -3142,7 +3157,27 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   void _openAccountItem(Map<String, dynamic> item, String type) {
-    var id = type.contains('collection')
+    final url = _first(item, ['url']);
+    if (type.contains('history') && url.isNotEmpty) {
+      unawaited(CoolapkUrlHandler.handleUrl(context, widget.api, url));
+      return;
+    }
+    final linkedFeedId = feedIdFromCoolapkUrl(url);
+    if (type.contains('feed') && linkedFeedId.isNotEmpty) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => FeedDetailPage(
+            api: widget.api,
+            feed: CoolapkFeed.fromJson({...item, 'id': linkedFeedId}),
+          ),
+        ),
+      );
+      return;
+    }
+    var id = type.contains('feed')
+        ? _first(item, ['id', 'feedId', 'feed_id', 'entityId'])
+        : type.contains('collection')
         ? _first(item, ['id', 'collectionId', 'collection_id'])
         : _first(item, [
             'uid',
@@ -3180,7 +3215,10 @@ class _AccountPageState extends State<AccountPage> {
     if (id.isEmpty) return;
     final Widget page;
     if (type.contains('feed')) {
-      page = FeedDetailPage(api: widget.api, feed: CoolapkFeed.fromJson(item));
+      page = FeedDetailPage(
+        api: widget.api,
+        feed: CoolapkFeed.fromJson({...item, 'id': id}),
+      );
     } else if (type.contains('topic') || type.contains('tag')) {
       final topicTag = ApiEntityCard.extractTopicTag(item);
       final finalTag = topicTag.isNotEmpty ? topicTag : id;
@@ -3482,8 +3520,9 @@ class _CookieLoginPageState extends State<CookieLoginPage> {
         TextField(
           controller: _controller,
           obscureText: true,
-          minLines: 2,
-          maxLines: 5,
+          maxLines: 1,
+          autocorrect: false,
+          enableSuggestions: false,
           decoration: const InputDecoration(
             labelText: '酷安 Cookie',
             border: OutlineInputBorder(),
@@ -3883,20 +3922,7 @@ String _first(Map<String, dynamic>? map, List<String> keys) {
   return '';
 }
 
-String _humanLabel(String key) {
-  final value = key.toLowerCase();
-  if (value.contains('message')) return '私信';
-  if (value.contains('at') || value.contains('mention')) return '@';
-  if (value.contains('comment') || value.contains('reply')) return '评论';
-  if (value.contains('like')) return '点赞';
-  if (value.contains('system')) return '系统';
-  return key;
-}
-
-String _messageKey(Map<String, dynamic> row) {
-  final id = row['messageId'] ?? row['message_id'] ?? row['mid'] ?? row['id'];
-  return id == null ? jsonEncode(row) : id.toString();
-}
+String _messageKey(Map<String, dynamic> row) => chatRowKey(row);
 
 void _snack(BuildContext context, String message) =>
     AppToast.show(context, message);

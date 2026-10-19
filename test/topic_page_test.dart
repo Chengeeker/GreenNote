@@ -4,8 +4,20 @@ import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/features/shared/api_list_page.dart';
 
 class _MockCoolapkApi extends Fake implements CoolapkApi {
+  Map<String, dynamic>? followDetail;
+  bool? previousFollow;
+  @override
+  Future<void> followTopic(String tag, {required bool following}) async {
+    previousFollow = following;
+  }
+
   @override
   Future<Map<String, dynamic>> getTopicDetail(String tag) async {
+    if (followDetail != null) {
+      return {
+        'data': {'tag': tag, 'title': tag, ...followDetail!},
+      };
+    }
     if (tag.contains('ColorOS')) {
       return {
         'data': {
@@ -130,6 +142,29 @@ void main() {
     });
   });
 
+  for (final value in [1, '1', true, 0]) {
+    testWidgets(
+      'topic follows server userAction $value rather than stale top-level field',
+      (tester) async {
+        final api = _MockCoolapkApi()
+          ..followDetail = {
+            'isFollow': value == 0 ? 1 : 0,
+            'userAction': {'follow': value},
+          };
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(api: api, tag: '日常摄影'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final followed = value != 0;
+        expect(find.text(followed ? '已关注' : '关注'), findsWidgets);
+        await tester.tap(find.text(followed ? '已关注' : '关注').first);
+        await tester.pumpAndSettle();
+        expect(api.previousFollow, followed);
+      },
+    );
+  }
   group('TopicPage Widget Tests', () {
     testWidgets(
       'renders ColorOS17 system topic with 8-dimension rating card and 4 tabs',

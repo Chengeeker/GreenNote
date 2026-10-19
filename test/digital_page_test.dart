@@ -13,6 +13,8 @@ import 'package:greennote/features/digital/widgets/digital_cards.dart';
 import 'package:greennote/features/digital/widgets/rank_ribbon.dart';
 import 'package:greennote/core/widgets/cached_network_image.dart';
 import 'package:greennote/main.dart';
+import 'package:greennote/features/digital/digital_page.dart';
+import 'package:greennote/features/feed/feed_pages.dart';
 
 void main() {
   group('Digital Models & Ribbon Tests', () {
@@ -436,6 +438,32 @@ void main() {
         tester.widget<SlideTransition>(firstDigitalPage).position.value,
         Offset.zero,
       );
+      await tester.pump(const Duration(milliseconds: 80));
+      final interruptedSlide = find
+          .ancestor(
+            of: find.byType(DigitalPage),
+            matching: find.byType(SlideTransition),
+          )
+          .first;
+      expect(
+        tester.widget<SlideTransition>(interruptedSlide).position.value.dx,
+        greaterThan(0),
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      final digitalSlide = find
+          .ancestor(
+            of: find.byType(DigitalPage),
+            matching: find.byType(SlideTransition),
+          )
+          .first;
+      expect(
+        tester.widget<SlideTransition>(digitalSlide).position.value,
+        Offset.zero,
+      );
+      expect(find.byType(FeedHomePage), findsNothing);
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('搜索动态/话题/应用/酷友...'), findsOneWidget);
       expect(find.text('APP'), findsOneWidget);

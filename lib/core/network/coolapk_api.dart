@@ -13,6 +13,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'coolapk_image.dart';
+import 'coolapk_captcha.dart';
+import 'official_device_identity.dart';
 import '../accounts/local_account.dart';
 
 Future<Uint8List> loadCoolapkAuthBlob(AssetBundle bundle) async {
@@ -41,25 +43,92 @@ class CoolapkApi {
   static const _apiCode = 2604201;
   static const _apiVersion = '16.2.0';
   final Dio _dio;
-  final _CoolapkAuth _auth;
+  _CoolapkAuth _auth;
   final FlutterSecureStorage _secureStorage;
   final LocalAccount localAccount;
   final _localUsers = <String, Map<String, dynamic>>{};
   String _cookie;
   String? guestSessionCookie;
+  String? _officialSessionCookie, _officialSessionIdentity;
+  String? _acceptedValidation, _acceptedValidationContext;
+  DateTime? _validationExpires;
+
+  String get _verificationIdentity => sha256
+      .convert(
+        utf8.encode(
+          jsonEncode([
+            _auth.deviceCode,
+            isAnonymous,
+            hasCookie,
+            hasCookie ? _cookie : '',
+          ]),
+        ),
+      )
+      .toString();
+
+  String get _captchaContext => sha256
+      .convert(
+        utf8.encode(
+          jsonEncode([
+            _verificationIdentity,
+            hasCookie
+                ? (_officialSessionIdentity == _verificationIdentity
+                      ? _officialSessionCookie
+                      : null)
+                : guestSessionCookie,
+          ]),
+        ),
+      )
+      .toString();
+
+  static String _withCookie(String cookie, String name, String value) => [
+    ...cookie
+        .split(';')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty && part.split('=').first != name),
+    if (value.isNotEmpty) '$name=$value',
+  ].join('; ');
+
+  Future<bool> _verificationIdentityMatches(String identity) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.reload();
+    final stored = await _secureStorage.read(key: 'coolapk_cookie') ?? '';
+    final anonymous = preferences.getBool('greennote.local.active') == true;
+    final enabled = preferences.getBool('greennote.cookie.enabled') != false;
+    final imported =
+        preferences.getString(OfficialDeviceIdentity.storageKey) ?? '';
+    final device = OfficialDeviceIdentity.fields(imported) != null
+        ? imported
+        : preferences.getString('guest_device_code');
+    return identity == _verificationIdentity &&
+        device == _auth.deviceCode &&
+        anonymous == isAnonymous &&
+        (!anonymous && enabled && stored.isNotEmpty) == hasCookie &&
+        (!hasCookie || stored == _cookie);
+  }
+
+  bool _hasOfficialDeviceIdentity = false;
+  bool get hasOfficialDeviceIdentity => _hasOfficialDeviceIdentity;
   String _currentUid = '';
   String _currentUserAvatar = '';
   String _currentUserNickname = '';
   Future<Map<String, String>>? _homeTabRoutes;
   Future<Map<String, dynamic>>? _mainInit;
 
-  static Future<CoolapkApi> create() async {
+  static Future<CoolapkApi> create({
+    HttpClientAdapter? httpClientAdapter,
+  }) async {
     final preferences = await SharedPreferences.getInstance();
+    await preferences.reload();
     var deviceCode = preferences.getString('guest_device_code');
     if (deviceCode == null || deviceCode.isEmpty) {
       deviceCode = _newUuid();
       await preferences.setString('guest_device_code', deviceCode);
     }
+    final importedCode =
+        preferences.getString(OfficialDeviceIdentity.storageKey) ?? '';
+    final hasOfficial = OfficialDeviceIdentity.fields(importedCode) != null;
+    if (hasOfficial) deviceCode = importedCode;
     final auth = _CoolapkAuth(
       deviceCode,
       await loadCoolapkAuthBlob(rootBundle),
@@ -89,15 +158,17 @@ class CoolapkApi {
         },
       ),
     );
-    dio.httpClientAdapter = IOHttpClientAdapter(
-      createHttpClient: () {
-        final client = HttpClient();
-        client.maxConnectionsPerHost = 32;
-        client.idleTimeout = const Duration(seconds: 30);
-        client.connectionTimeout = const Duration(seconds: 15);
-        return client;
-      },
-    );
+    dio.httpClientAdapter =
+        httpClientAdapter ??
+        IOHttpClientAdapter(
+          createHttpClient: () {
+            final client = HttpClient();
+            client.maxConnectionsPerHost = 32;
+            client.idleTimeout = const Duration(seconds: 30);
+            client.connectionTimeout = const Duration(seconds: 15);
+            return client;
+          },
+        );
     const secureStorage = FlutterSecureStorage();
     return CoolapkApi._(
       dio,
@@ -105,7 +176,47 @@ class CoolapkApi {
       secureStorage,
       await secureStorage.read(key: 'coolapk_cookie') ?? '',
       LocalAccount(preferences),
+    ).._hasOfficialDeviceIdentity = hasOfficial;
+  }
+
+  Future<void> importOfficialDeviceIdentity(String text) async {
+    final id = OfficialDeviceIdentity.parse(text);
+    final previous = _auth.deviceCode;
+    final profile = OfficialDeviceIdentity.fields(previous) == null
+        ? await const MethodChannel('com.green.note/ui')
+              .invokeMapMethod<String, dynamic>('getDeviceProfile')
+        : null;
+    final code = OfficialDeviceIdentity.encode(
+      id,
+      previous: previous,
+      profile: profile ?? {},
     );
+    final preferences = await SharedPreferences.getInstance();
+    if (!await preferences.setString(OfficialDeviceIdentity.storageKey, code)) {
+      throw StateError('设备标识保存失败');
+    }
+    _applyDeviceCode(code, official: true);
+  }
+
+  Future<void> restoreOriginalDeviceIdentity() async {
+    final preferences = await SharedPreferences.getInstance();
+    final original = preferences.getString('guest_device_code');
+    if (original == null || original.isEmpty) {
+      throw StateError('原设备码不存在，未修改设备标识');
+    }
+    if (!await preferences.remove(OfficialDeviceIdentity.storageKey)) {
+      throw StateError('设备标识恢复失败');
+    }
+    _applyDeviceCode(original, official: false);
+  }
+
+  void _applyDeviceCode(String code, {required bool official}) {
+    _auth = _CoolapkAuth(code, _auth.authBlob);
+    _dio.options.headers['X-App-Device'] = code;
+    _hasOfficialDeviceIdentity = official;
+    guestSessionCookie = null;
+    _homeTabRoutes = null;
+    _mainInit = null;
   }
 
   bool get isAnonymous => localAccount.active;
@@ -116,9 +227,30 @@ class CoolapkApi {
   String get currentUid => isAnonymous ? '' : _currentUid;
   String get currentUserAvatar => isAnonymous ? '' : _currentUserAvatar;
   String get currentUserNickname => isAnonymous
-      ? (localAccount.publicIdentity?['username'] as String? ?? localAccount.name)
+      ? (localAccount.publicIdentity?['username'] as String? ??
+            localAccount.name)
       : _currentUserNickname;
   String token() => _auth.token();
+
+  String get notificationSessionKey =>
+      hasCookie ? sha256.convert(utf8.encode(_cookie)).toString() : '';
+
+  Future<bool> notificationSessionMatches(String key) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.reload();
+    if (preferences.getBool('greennote.local.active') == true ||
+        preferences.getBool('greennote.cookie.enabled') == false) {
+      return false;
+    }
+    final cookie = await _secureStorage.read(key: 'coolapk_cookie') ?? '';
+    return cookie.isNotEmpty &&
+        sha256.convert(utf8.encode(cookie)).toString() == key;
+  }
+
+  void close() {
+    _dio.close(force: true);
+    localAccount.dispose();
+  }
 
   Map<String, String> imageHeadersFor() {
     final headers = <String, String>{
@@ -158,6 +290,9 @@ class CoolapkApi {
         ..cookieEnabled = true,
     );
     await candidate.checkLogin();
+    if (candidate._auth.deviceCode != _auth.deviceCode) {
+      throw const CoolapkApiException('设备标识已变更，请重新登录');
+    }
     if (candidate.currentUid.isEmpty) {
       throw const CoolapkApiException('Cookie 未返回有效账号');
     }
@@ -215,9 +350,29 @@ class CoolapkApi {
     String method = 'GET',
     Map<String, dynamic> query = const {},
     Map<String, dynamic>? body,
+  }) => _request(path, method: method, query: query, body: body);
+
+  Future<dynamic> _request(
+    String path, {
+    String method = 'GET',
+    Map<String, dynamic> query = const {},
+    Map<String, dynamic>? body,
+    String? validationProof,
+    bool verificationReplay = false,
   }) async {
     if (isAnonymous &&
-        method.toUpperCase() != 'GET' &&
+        (method.toUpperCase() != 'GET' ||
+            const {
+              '/v6/user/unfollow',
+              '/v6/user/addToBlackList',
+              '/v6/user/removeFromBlackList',
+              '/v6/user/addToIgnoreList',
+              '/v6/user/removeFromIgnoreList',
+              '/v6/feed/favorite',
+              '/v6/feed/unFavorite',
+              '/v6/feed/followTag',
+              '/v6/feed/unFollowTag',
+            }.contains(path)) &&
         path != '/v6/player/getUrl') {
       throw CoolapkApiException(loginRequiredMessage);
     }
@@ -247,12 +402,71 @@ class CoolapkApi {
         uri.scheme == 'https' &&
         const ['api.coolapk.com', 'api2.coolapk.com'].contains(uri.host);
     final requestSession = guestRequest ? guestSessionCookie : null;
+    final requestDevice = _auth.deviceCode;
+    final identity = _verificationIdentity;
+    final trustedApi =
+        uri.scheme == 'https' &&
+        const ['api.coolapk.com', 'api2.coolapk.com'].contains(uri.host);
+    final accepted =
+        _acceptedValidationContext == _captchaContext &&
+            (_validationExpires?.isAfter(DateTime.now()) ?? false)
+        ? _acceptedValidation
+        : null;
+    final validation = trustedApi && method == 'GET'
+        ? validationProof ?? accepted
+        : null;
+
+    void rememberSession(Response<dynamic> response) {
+      if (identity != _verificationIdentity) return;
+      if (response.realUri.scheme != 'https' ||
+          !const [
+            'api.coolapk.com',
+            'api2.coolapk.com',
+          ].contains(response.realUri.host)) {
+        return;
+      }
+      if (guestRequest && requestDevice == _auth.deviceCode) {
+        _rememberGuestSession(response, requestSession);
+      } else if (hasCookie && trustedApi) {
+        for (final value
+            in response.headers['set-cookie'] ?? const <String>[]) {
+          try {
+            final cookie = Cookie.fromSetCookieValue(value);
+            if (cookie.name != 'SESSID') continue;
+            _officialSessionIdentity = identity;
+            _officialSessionCookie =
+                cookie.maxAge == 0 ||
+                    (cookie.expires?.isBefore(DateTime.now().toUtc()) ?? false)
+                ? ''
+                : cookie.value;
+          } on FormatException {
+            // Other cookies never enter this API verification session.
+          }
+        }
+      }
+    }
+
     try {
       final headers = <String, String>{'X-App-Token': _auth.token()};
       if (hasCookie) {
         headers['Cookie'] = _cookie;
+        if (_officialSessionIdentity == identity &&
+            _officialSessionCookie != null) {
+          headers['Cookie'] = _withCookie(
+            _cookie,
+            'SESSID',
+            _officialSessionCookie!,
+          );
+        }
       } else if (requestSession != null) {
         headers['Cookie'] = requestSession;
+      }
+      if (validation != null) {
+        headers['Cookie'] = _withCookie(
+          headers['Cookie'] ?? '',
+          'validate',
+          Uri.encodeComponent(validation),
+        );
       }
       final response = await _dio.request<dynamic>(
         requestPath,
@@ -261,16 +475,18 @@ class CoolapkApi {
         options: Options(
           method: method,
           headers: headers,
+          followRedirects: !verificationReplay && validation == null,
           contentType: body == null ? null : Headers.formUrlEncodedContentType,
         ),
       );
-      if (guestRequest) {
-        _rememberGuestSession(response, requestSession);
+      rememberSession(response);
+      if (identity != _verificationIdentity) {
+        throw const CoolapkApiException('账号或设备已变更，已忽略旧请求');
       }
       final data = response.data;
       if (data is Map) {
         final root = Map<String, dynamic>.from(data);
-        _checkBusinessStatus(root);
+        _checkBusinessStatus(root, sentValidation: validation);
         return root;
       }
       if (data is List) return {'data': data, 'status': 0};
@@ -279,7 +495,7 @@ class CoolapkApi {
           final decoded = jsonDecode(data);
           if (decoded is Map) {
             final root = Map<String, dynamic>.from(decoded);
-            _checkBusinessStatus(root);
+            _checkBusinessStatus(root, sentValidation: validation);
             return root;
           }
           if (decoded is List) return {'data': decoded, 'status': 0};
@@ -290,11 +506,15 @@ class CoolapkApi {
       throw const CoolapkApiException('酷安返回了无法识别的响应');
     } on DioException catch (error) {
       final body = error.response?.data;
-      if (guestRequest && error.response != null) {
-        _rememberGuestSession(error.response!, requestSession);
+      if (error.response != null) rememberSession(error.response!);
+      if (identity != _verificationIdentity) {
+        throw const CoolapkApiException('账号或设备已变更，已忽略旧请求');
       }
       if (body is Map) {
-        _checkBusinessStatus(Map<String, dynamic>.from(body));
+        _checkBusinessStatus(
+          Map<String, dynamic>.from(body),
+          sentValidation: validation,
+        );
         final message = _string(body['message']);
         if (message.isNotEmpty) throw CoolapkApiException(message);
       }
@@ -463,6 +683,18 @@ class CoolapkApi {
     String path, {
     Map<String, dynamic> query = const {},
   }) async {
+    // Older server cards can still link to the removed personal-list route.
+    if (path == '/v6/collection/myCollectionList') {
+      path = '/v6/collection/list';
+      query = {'uid': currentUid, 'showDefault': 1, ...query};
+    }
+    if (path == '/v6/member/recentHistoryList') {
+      path = '/v6/user/recentHistoryList';
+    }
+    if (path == '/v6/topic/myFollowTopicList') {
+      path = '/v6/page/dataList';
+      query = {...query, 'url': '#/topic/userFollowTagList?&title=我关注的话题'};
+    }
     final root = await _get(path, query);
     final followedUsers = path == '/v6/user/followList';
     final items = followedUsers
@@ -561,8 +793,8 @@ class CoolapkApi {
       });
       return;
     }
-    await _post(
-      favorited ? '/v6/feed/unfavorite' : '/v6/feed/favorite',
+    await request(
+      favorited ? '/v6/feed/unFavorite' : '/v6/feed/favorite',
       query: {'id': id},
     );
   }
@@ -629,14 +861,13 @@ class CoolapkApi {
     bool replyAndForward = false,
   }) => _post(
     '/v6/feed/reply',
-    body: {
-      'id': id,
-      'type': 'feed',
-      'message': message,
-      if (rid != null && rid.isNotEmpty) 'rid': rid,
-      if (pic != null && pic.isNotEmpty) 'pic': pic,
-      if (replyAndForward) 'replyAndForward': '1',
-    },
+    body: coolapkReplyForm(
+      id,
+      message,
+      rid: rid,
+      pic: pic,
+      replyAndForward: replyAndForward,
+    ),
   );
 
   Future<void> likeReply(String id, {required bool liked}) => _post(
@@ -657,21 +888,26 @@ class CoolapkApi {
       );
       return;
     }
-    await _post(
+    await request(
       following ? '/v6/user/unfollow' : '/v6/user/follow',
+      method: following ? 'GET' : 'POST',
       query: {'uid': uid},
     );
   }
 
-  Future<void> blockUser(String uid, {required bool blocked}) => _post(
-    blocked ? '/v6/user/unblock' : '/v6/user/block',
-    query: {'uid': uid},
-  );
+  Future<void> blockUser(String uid, {required bool blocked}) async {
+    await request(
+      blocked ? '/v6/user/removeFromBlackList' : '/v6/user/addToBlackList',
+      query: {'uid': uid},
+    );
+  }
 
-  Future<void> followTopic(String tag, {required bool following}) => _post(
-    following ? '/v6/topic/unfollowTag' : '/v6/topic/followTag',
-    query: {'tag': tag},
-  );
+  Future<void> followTopic(String tag, {required bool following}) async {
+    await request(
+      following ? '/v6/feed/unFollowTag' : '/v6/feed/followTag',
+      query: {'tag': tag},
+    );
+  }
 
   Future<void> followProduct(
     String productId, {
@@ -884,6 +1120,44 @@ class CoolapkApi {
 
   Future<Map<String, dynamic>> getFeedDetail(String feedId) async {
     final root = await _get('/v6/feed/detail', {'id': feedId});
+    return _feedDetailData(root);
+  }
+
+  Future<Map<String, dynamic>> verifyFeedDetail(
+    String feedId,
+    CoolapkCaptchaException error,
+    String validate,
+  ) async {
+    final identity = _verificationIdentity;
+    if (error.contextKey != _captchaContext ||
+        !await _verificationIdentityMatches(identity)) {
+      throw const CoolapkApiException('账号、设备或会话已变更，请重新加载榜单');
+    }
+    final proof = error.challenge.proof(validate);
+    if (proof == null) throw const CoolapkApiException('验证结果无效，请重试');
+    // A single read-only replay; a second challenge returns to the user.
+    final root = await _request(
+      '/v6/feed/detail',
+      query: {
+        'id': feedId,
+        if (error.challenge.field.isNotEmpty) error.challenge.field: proof,
+      },
+      validationProof: error.challenge.field.isEmpty ? proof : null,
+      verificationReplay: true,
+    );
+    if (!await _verificationIdentityMatches(identity)) {
+      throw const CoolapkApiException('账号或设备已变更，已忽略旧验证结果');
+    }
+    final data = _feedDetailData(root);
+    if (error.challenge.field.isEmpty) {
+      _acceptedValidation = proof;
+      _acceptedValidationContext = _captchaContext;
+      _validationExpires = DateTime.now().add(const Duration(hours: 1));
+    }
+    return data;
+  }
+
+  Map<String, dynamic> _feedDetailData(dynamic root) {
     final data = root['data'];
     if (data is Map) return Map<String, dynamic>.from(data);
     if (data is List && data.isNotEmpty && data.first is Map) {
@@ -1015,19 +1289,208 @@ class CoolapkApi {
     String title, {
     String description = '',
     bool isOpen = true,
-  }) => _post(
-    '/v6/collection/create',
-    body: {
-      'title': title,
-      'description': description,
-      'is_open': isOpen ? 1 : 0,
-    },
-  );
+  }) async {
+    await officialMultipart(
+      '/v6/collection/create',
+      fields: {
+        'title': title,
+        'description': description,
+        'isOpen': isOpen ? '1' : '0',
+        'pic': '',
+        'sourceId': '',
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>> officialMultipart(
+    String path, {
+    Map<String, String> fields = const {},
+    Map<String, dynamic> query = const {},
+    Uint8List? avatar,
+    String? expectedScope,
+  }) async {
+    final scope = expectedScope ?? notificationSessionKey;
+    if (!hasCookie ||
+        scope != notificationSessionKey ||
+        !await notificationSessionMatches(scope) ||
+        scope != notificationSessionKey) {
+      throw const CoolapkApiException('请先使用酷安官方 Cookie 登录');
+    }
+    if (!const [
+      '/v6/collection/create',
+      '/v6/account/changeAvatar',
+      '/v6/message/send',
+      '/v6/feed/createFeed',
+    ].contains(path)) {
+      throw const CoolapkApiException('不支持的提交类型');
+    }
+    final form = FormData.fromMap({
+      ...fields,
+      if (avatar != null)
+        'imgFile': MultipartFile.fromBytes(avatar, filename: 'avatar.png'),
+    });
+    final response = await _dio.post<dynamic>(
+      path,
+      data: form,
+      queryParameters: query,
+      options: Options(
+        headers: {'Cookie': _cookie, 'X-App-Token': _auth.token()},
+      ),
+    );
+    final root = response.data is String
+        ? jsonDecode(response.data as String)
+        : response.data;
+    if (root is! Map) throw const CoolapkApiException('服务器返回无效数据');
+    final result = Map<String, dynamic>.from(root);
+    _checkBusinessStatus(result);
+    return result;
+  }
 
   Future<void> sendMessage(String uid, String message, {String? pic}) async {
-    final body = <String, dynamic>{'uid': uid, 'message': message};
-    if (pic != null && pic.isNotEmpty) body['pic'] = pic;
-    await _post('/v6/message/send', query: {'uid': uid}, body: body);
+    if (!RegExp(r'^[1-9]\d*$').hasMatch(uid) ||
+        (message.trim().isEmpty && (pic?.isEmpty ?? true))) {
+      throw const CoolapkApiException('私信内容或收件人无效');
+    }
+    await officialMultipart(
+      '/v6/message/send',
+      query: {'uid': uid, 'quick_reply': 1},
+      fields: {
+        'message': message,
+        'message_pic': pic ?? '',
+        'message_extra': '',
+      },
+    );
+  }
+
+  Future<String> uploadMessageImage(Uint8List bytes, String toUid) async {
+    final scope = notificationSessionKey;
+    if (!hasCookie ||
+        !RegExp(r'^[1-9]\d*$').hasMatch(toUid) ||
+        bytes.length < 24 ||
+        bytes.length > 16 * 1024 * 1024 ||
+        bytes[0] != 137 ||
+        bytes[1] != 80 ||
+        !await notificationSessionMatches(scope)) {
+      throw const CoolapkApiException('图片或登录状态无效');
+    }
+    final width = ByteData.sublistView(bytes).getUint32(16);
+    final height = ByteData.sublistView(bytes).getUint32(20);
+    final prepare = await request(
+      '/v6/upload/ossUploadPrepare',
+      method: 'POST',
+      body: {
+        'uploadBucket': 'message',
+        'uploadDir': 'message',
+        'is_anonymous': 0,
+        'uploadFileList': jsonEncode([
+          {
+            'name': 'message.png',
+            'resolution': '${width}x$height',
+            'md5': md5.convert(bytes).toString(),
+            'hdr': 0,
+          },
+        ]),
+        'toUid': toUid,
+        'feed_type': '',
+      },
+    );
+    if (!await notificationSessionMatches(scope)) {
+      throw const CoolapkApiException('账号已变更');
+    }
+    final data = prepare is Map ? prepare['data'] : null;
+    if (data is! Map ||
+        data['fileInfo'] is! List ||
+        (data['fileInfo'] as List).isEmpty ||
+        data['uploadPrepareInfo'] is! Map) {
+      throw const CoolapkApiException('未获得上传凭据');
+    }
+    final info = Map<String, dynamic>.from(
+      (data['fileInfo'] as List).first as Map,
+    );
+    final credentials = Map<String, dynamic>.from(
+      data['uploadPrepareInfo'] as Map,
+    );
+    String validImageUrl(String raw) {
+      final uri = Uri.tryParse(raw);
+      if (uri == null ||
+          !['https', 'http'].contains(uri.scheme) ||
+          uri.userInfo.isNotEmpty ||
+          !(uri.host.endsWith('.coolapk.com') ||
+              uri.host.endsWith('.aliyuncs.com'))) {
+        throw const CoolapkApiException('图片地址无效');
+      }
+      return uri.replace(scheme: 'https').toString();
+    }
+
+    if (info['url'] is String && (info['url'] as String).isNotEmpty) {
+      return validImageUrl(info['url'] as String);
+    }
+    final key = '${info['uploadFileName'] ?? ''}';
+    final endpoint = Uri.tryParse(
+      '${credentials['endPoint']}'.startsWith('http')
+          ? '${credentials['endPoint']}'
+          : 'https://${credentials['endPoint']}',
+    );
+    final bucket = '${credentials['bucket'] ?? ''}';
+    if (endpoint == null ||
+        !endpoint.host.endsWith('.aliyuncs.com') ||
+        endpoint.userInfo.isNotEmpty ||
+        !RegExp(r'^[a-z0-9-]+$').hasMatch(bucket) ||
+        key.isEmpty ||
+        key.contains('..') ||
+        key.startsWith('/')) {
+      throw const CoolapkApiException('上传地址无效');
+    }
+    final accessId = '${credentials['accessKeyId'] ?? ''}';
+    final secret = '${credentials['accessKeySecret'] ?? ''}';
+    final securityToken = '${credentials['securityToken'] ?? ''}';
+    if (accessId.isEmpty || secret.isEmpty || securityToken.isEmpty) {
+      throw const CoolapkApiException('上传凭据不完整');
+    }
+    const callback =
+        'eyJjYWxsYmFja0JvZHlUeXBlIjoiYXBwbGljYXRpb25cL2pzb24iLCJjYWxsYmFja0hvc3QiOiJhcGkuY29vbGFway5jb20iLCJjYWxsYmFja1VybCI6Imh0dHBzOlwvXC9hcGkuY29vbGFway5jb21cL3Y2XC9jYWxsYmFja1wvbW9iaWxlT3NzVXBsb2FkU3VjY2Vzc0NhbGxiYWNrP2NoZWNrQXJ0aWNsZUNvdmVyUmVzb2x1dGlvbj0wJnZlcnNpb25Db2RlPTIxMDIwMzEiLCJjYWxsYmFja0JvZHkiOiJ7XCJidWNrZXRcIjoke2J1Y2tldH0sXCJvYmplY3RcIjoke29iamVjdH0sXCJoYXNQcm9jZXNzXCI6JHt4OnZhcjF9fSJ9';
+    const callbackVar = 'eyJ4OnZhcjEiOiJmYWxzZSJ9';
+    final date = HttpDate.format(DateTime.now().toUtc());
+    final digest = base64Encode(md5.convert(bytes).bytes);
+    final sign =
+        'PUT\n$digest\nimage/png\n$date\nx-oss-callback:$callback\nx-oss-callback-var:$callbackVar\nx-oss-security-token:$securityToken\n/$bucket/$key';
+    final signature = base64Encode(
+      Hmac(sha1, utf8.encode(secret)).convert(utf8.encode(sign)).bytes,
+    );
+    final upload = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 30),
+        sendTimeout: const Duration(seconds: 60),
+      ),
+    );
+    try {
+      await upload.putUri(
+        Uri(scheme: 'https', host: '$bucket.${endpoint.host}', path: '/$key'),
+        data: Stream.value(bytes),
+        options: Options(
+          followRedirects: false,
+          headers: {
+            'Authorization': 'OSS $accessId:$signature',
+            'Content-MD5': digest,
+            'Content-Type': 'image/png',
+            'Content-Length': bytes.length,
+            'Date': date,
+            'x-oss-callback': callback,
+            'x-oss-callback-var': callbackVar,
+            'x-oss-security-token': securityToken,
+          },
+        ),
+      );
+    } finally {
+      upload.close(force: true);
+    }
+    if (!await notificationSessionMatches(scope)) {
+      throw const CoolapkApiException('账号已变更');
+    }
+    return validImageUrl(
+      '${credentials['uploadImagePrefix'] ?? 'https://image.coolapk.com'}/$key',
+    );
   }
 
   Future<void> _post(
@@ -1092,7 +1555,23 @@ class CoolapkApi {
     return previous;
   }
 
-  void _checkBusinessStatus(Map<String, dynamic> root) {
+  void _checkBusinessStatus(
+    Map<String, dynamic> root, {
+    String? sentValidation,
+  }) {
+    final challenge = CoolapkCaptchaChallenge.fromResponse(root);
+    if (challenge != null) {
+      if (sentValidation != null && _acceptedValidation == sentValidation) {
+        _acceptedValidation = null;
+      }
+      throw CoolapkCaptchaException(
+        challenge,
+        _captchaContext,
+        _string(root['message']).isEmpty
+            ? '当前访问需要验证码'
+            : _string(root['message']),
+      );
+    }
     final status = _int(root['status']);
     final code = _int(root['code']);
     final resultCode = status ?? code;
@@ -1314,6 +1793,26 @@ class FeedPage {
   final String firstItem;
   final String lastItem;
   final bool hasMore;
+}
+
+Map<String, dynamic> coolapkReplyForm(
+  String id,
+  String message, {
+  String? rid,
+  String? pic,
+  bool replyAndForward = false,
+}) {
+  final target = rid != null && rid.isNotEmpty ? rid : id;
+  if (target.trim().isEmpty || message.trim().isEmpty) {
+    throw const CoolapkApiException('评论内容或目标无效');
+  }
+  return {
+    'id': target,
+    'type': rid != null && rid.isNotEmpty ? 'reply' : 'feed',
+    'message': message,
+    if (pic != null && pic.isNotEmpty) 'pic': pic,
+    if (replyAndForward) 'replyAndForward': '1',
+  };
 }
 
 class ApiPage {
@@ -1562,6 +2061,13 @@ class CoolapkApiException implements Exception {
   String toString() => message;
 }
 
+class CoolapkCaptchaException extends CoolapkApiException {
+  const CoolapkCaptchaException(this.challenge, this.contextKey, String message)
+    : super(message);
+  final CoolapkCaptchaChallenge challenge;
+  final String contextKey;
+}
+
 class _CoolapkAuth {
   const _CoolapkAuth(this.deviceCode, this.authBlob);
 
@@ -1718,10 +2224,16 @@ String sanitizeCoolapkMessage(String raw) {
   result = result.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n');
   result = result.replaceAll(RegExp(r'</?p[^>]*>', caseSensitive: false), '\n');
   result = result.replaceAllMapped(
-    RegExp(r'''<img[^>]*alt=["'](\[[^\]]+\])["'][^>]*>''', caseSensitive: false),
+    RegExp(
+      r'''<img[^>]*alt=["'](\[[^\]]+\])["'][^>]*>''',
+      caseSensitive: false,
+    ),
     (m) => m.group(1) ?? '',
   );
-  result = result.replaceAll(RegExp(r'<(?!/?a\b)[^>]+>', caseSensitive: false), '');
+  result = result.replaceAll(
+    RegExp(r'<(?!/?a\b)[^>]+>', caseSensitive: false),
+    '',
+  );
   return result.trim();
 }
 

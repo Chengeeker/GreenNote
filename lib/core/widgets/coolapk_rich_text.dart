@@ -440,9 +440,11 @@ class CoolapkRichText extends StatelessWidget {
     this.style,
     this.maxLines,
     this.overflow,
+    this.textAlign,
     this.onTapTag,
     this.prefixSpans = const [],
     this.suffixSpans = const [],
+    this.maxCharacters,
   });
 
   final CoolapkApi api;
@@ -450,9 +452,14 @@ class CoolapkRichText extends StatelessWidget {
   final TextStyle? style;
   final int? maxLines;
   final TextOverflow? overflow;
+  final TextAlign? textAlign;
   final void Function(String tag)? onTapTag;
   final List<InlineSpan> prefixSpans;
   final List<InlineSpan> suffixSpans;
+  final int? maxCharacters;
+
+  static String visibleText(String text) =>
+      _tokenize(text).map((token) => token.displayText ?? token.text).join();
 
   static final RegExp _markupRegex = RegExp(
     r'''(<a\s+[^>]*?href=["']?([^"'>\s]+)["']?[^>]*>([\s\S]*?)</a>)|(\[([^\]\n]+)\])|(#[^#\n\r\t]+#)|(https?://[^\s<>"']+)|(@[a-zA-Z0-9_-]+|@[\u4e00-\u9fa5]{2,12}(?=[\s:：，。、！？/,\.!?#@\n\r]|$))''',
@@ -480,7 +487,10 @@ class CoolapkRichText extends StatelessWidget {
 
     // Emotion image fallback: <img ... alt="[滑稽]" ...> -> [滑稽]
     s = s.replaceAllMapped(
-      RegExp(r'''<img[^>]*alt=["'](\[[^\]]+\])["'][^>]*>''', caseSensitive: false),
+      RegExp(
+        r'''<img[^>]*alt=["'](\[[^\]]+\])["'][^>]*>''',
+        caseSensitive: false,
+      ),
       (m) => m.group(1) ?? '',
     );
 
@@ -545,10 +555,12 @@ class CoolapkRichText extends StatelessWidget {
           inner.replaceAll(RegExp(r'<[^>]+>'), '').trim(),
         );
 
-        final isTopicTag = inner.startsWith('#') ||
+        final isTopicTag =
+            inner.startsWith('#') ||
             href.contains('/t/') ||
             href.contains('/topic/');
-        final isMention = inner.startsWith('@') ||
+        final isMention =
+            inner.startsWith('@') ||
             href.contains('/u/') ||
             href.contains('/user/');
 
@@ -562,7 +574,9 @@ class CoolapkRichText extends StatelessWidget {
                 ? href.split('/t/').last
                 : href.split('/topic/').last;
             final rawSegment = segment.split('?').first.split('#').first;
-            tagName = _safeDecodeUriComponent(rawSegment).replaceAll('#', '').trim();
+            tagName = _safeDecodeUriComponent(rawSegment)
+                .replaceAll('#', '')
+                .trim();
           }
           final displayText = inner.isNotEmpty ? inner : '#$tagName#';
           tokens.add(
@@ -577,14 +591,14 @@ class CoolapkRichText extends StatelessWidget {
           String trailing = '';
 
           if (inner.startsWith('@')) {
-            final mentionMatch =
-                RegExp(r'^(@[a-zA-Z0-9_-]+)([\s\S]*)$').firstMatch(inner);
+            final mentionMatch = RegExp(r'^(@[a-zA-Z0-9_-]+)([\s\S]*)$')
+                .firstMatch(inner);
             if (mentionMatch != null) {
               handle = mentionMatch.group(1)!;
               trailing = mentionMatch.group(2)!;
             } else {
-              final cnMatch =
-                  RegExp(r'^(@[\u4e00-\u9fa5]{2,12})([\s\S]*)$').firstMatch(inner);
+              final cnMatch = RegExp(r'^(@[\u4e00-\u9fa5]{2,12})([\s\S]*)$')
+                  .firstMatch(inner);
               if (cnMatch != null) {
                 handle = cnMatch.group(1)!;
                 trailing = cnMatch.group(2)!;
@@ -618,16 +632,12 @@ class CoolapkRichText extends StatelessWidget {
             );
           }
           if (trailing.isNotEmpty) {
-            tokens.add(
-              _RichToken(
-                type: _RichTokenType.text,
-                text: trailing,
-              ),
-            );
+            tokens.add(_RichToken(type: _RichTokenType.text, text: trailing));
           }
         } else if (href.isNotEmpty) {
-          final resolvedUrl =
-              href.startsWith('/') ? 'https://www.coolapk.com$href' : href;
+          final resolvedUrl = href.startsWith('/')
+              ? 'https://www.coolapk.com$href'
+              : href;
           tokens.add(
             _RichToken(
               type: _RichTokenType.url,
@@ -636,12 +646,7 @@ class CoolapkRichText extends StatelessWidget {
             ),
           );
         } else if (inner.isNotEmpty) {
-          tokens.add(
-            _RichToken(
-              type: _RichTokenType.text,
-              text: inner,
-            ),
-          );
+          tokens.add(_RichToken(type: _RichTokenType.text, text: inner));
         }
       }
       // 2. Emotion: [xxx]
@@ -676,8 +681,11 @@ class CoolapkRichText extends StatelessWidget {
       // 4. Plain text mention: @handle
       else if (fullMatch.startsWith('@')) {
         // If preceded by an alphanumeric character or underscore, it is an email or identifier, not a mention.
-        final prevChar = match.start > 0 ? text.codeUnitAt(match.start - 1) : null;
-        final isAlphaNum = prevChar != null &&
+        final prevChar = match.start > 0
+            ? text.codeUnitAt(match.start - 1)
+            : null;
+        final isAlphaNum =
+            prevChar != null &&
             ((prevChar >= 48 && prevChar <= 57) ||
                 (prevChar >= 65 && prevChar <= 90) ||
                 (prevChar >= 97 && prevChar <= 122) ||
@@ -746,7 +754,8 @@ class CoolapkRichText extends StatelessWidget {
     }
 
     // Optimization: if text has no bracket, hash, at, http, or html markup, return standard Text directly
-    if (prefixSpans.isEmpty &&
+    if (maxCharacters == null &&
+        prefixSpans.isEmpty &&
         suffixSpans.isEmpty &&
         !text.contains('[') &&
         !text.contains('#') &&
@@ -754,7 +763,13 @@ class CoolapkRichText extends StatelessWidget {
         !text.contains('http') &&
         !text.contains('<') &&
         !text.contains('&')) {
-      return Text(text, style: style, maxLines: maxLines, overflow: overflow);
+      return Text(
+        text,
+        style: style,
+        textAlign: textAlign,
+        maxLines: maxLines,
+        overflow: overflow,
+      );
     }
 
     final theme = Theme.of(context);
@@ -765,7 +780,24 @@ class CoolapkRichText extends StatelessWidget {
       final spans = <InlineSpan>[...prefixSpans];
       final tokens = _tokenize(text);
 
-      for (final token in tokens) {
+      var remaining = maxCharacters;
+      for (var token in tokens) {
+        if (remaining != null) {
+          if (remaining <= 0) break;
+          final visible = token.displayText ?? token.text;
+          var end = remaining.clamp(0, visible.length);
+          if (end > 0 &&
+              end < visible.length &&
+              visible.codeUnitAt(end - 1) >= 0xD800 &&
+              visible.codeUnitAt(end - 1) <= 0xDBFF) {
+            end--;
+          }
+          if (end < visible.length) {
+            if (token.type == _RichTokenType.emotion) break;
+            token = token.withVisibleText(visible.substring(0, end));
+          }
+          remaining = end < visible.length ? 0 : remaining - end;
+        }
         switch (token.type) {
           case _RichTokenType.text:
             spans.add(TextSpan(text: token.text, style: baseStyle));
@@ -801,7 +833,8 @@ class CoolapkRichText extends StatelessWidget {
             }
             break;
           case _RichTokenType.tag:
-            final tagName = token.tagName ?? token.text.replaceAll('#', '').trim();
+            final tagName =
+                token.tagName ?? token.text.replaceAll('#', '').trim();
             spans.add(
               TextSpan(
                 text: token.text,
@@ -825,9 +858,11 @@ class CoolapkRichText extends StatelessWidget {
             );
             break;
           case _RichTokenType.mention:
-            final target = (token.targetUid != null && token.targetUid!.isNotEmpty)
+            final target =
+                (token.targetUid != null && token.targetUid!.isNotEmpty)
                 ? token.targetUid!
-                : (token.targetUsername ?? token.text.replaceAll('@', '').trim());
+                : (token.targetUsername ??
+                      token.text.replaceAll('@', '').trim());
             spans.add(
               TextSpan(
                 text: token.text,
@@ -875,6 +910,7 @@ class CoolapkRichText extends StatelessWidget {
       return Text.rich(
         TextSpan(children: spans),
         style: baseStyle,
+        textAlign: textAlign,
         maxLines: maxLines,
         overflow: overflow,
       );
@@ -883,11 +919,12 @@ class CoolapkRichText extends StatelessWidget {
         TextSpan(
           children: [
             ...prefixSpans,
-            TextSpan(text: text),
+            TextSpan(text: visibleText(text)),
             ...suffixSpans,
           ],
         ),
         style: baseStyle,
+        textAlign: textAlign,
         maxLines: maxLines,
         overflow: overflow,
       );
@@ -917,4 +954,15 @@ class _RichToken {
   final String? tagName;
   final String? targetUid;
   final String? targetUsername;
+
+  _RichToken withVisibleText(String visible) => _RichToken(
+    type: type,
+    text: type == _RichTokenType.url ? text : visible,
+    displayText: visible,
+    emotionCode: emotionCode,
+    unicodeFallback: unicodeFallback,
+    tagName: tagName,
+    targetUid: targetUid,
+    targetUsername: targetUsername,
+  );
 }

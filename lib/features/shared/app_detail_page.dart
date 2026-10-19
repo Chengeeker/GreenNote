@@ -1,3 +1,4 @@
+import 'download_center_page.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -5,7 +6,6 @@ import 'package:easy_refresh/easy_refresh.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
@@ -1390,9 +1390,8 @@ class AppDownloadButton extends StatelessWidget {
             resolved.userInfo.isNotEmpty) {
           throw const CoolapkApiException('酷安没有返回有效的下载地址');
         }
-        if (!await launchUrl(resolved, mode: LaunchMode.externalApplication)) {
-          throw const CoolapkApiException('无法打开下载地址');
-        }
+        if (!context.mounted) return;
+        await enqueueAppDownload(context, resolved, _field(['title', 'apkname', 'packageName']));
       } catch (error) {
         if (context.mounted) {
           ScaffoldMessenger.of(context)

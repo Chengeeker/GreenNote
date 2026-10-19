@@ -9,6 +9,11 @@ import '../utils/app_toast.dart';
 import '../../features/feed/feed_pages.dart';
 import '../../features/shared/api_list_page.dart';
 import '../../features/shared/app_detail_page.dart';
+import '../../features/shared/community_routes.dart';
+
+String decodeCoolapkComponent(String value) {
+  try { return Uri.decodeComponent(value); } catch (_) { return value; }
+}
 
 /// 酷安链接解析与全局分发路由
 class CoolapkUrlHandler {
@@ -31,13 +36,16 @@ class CoolapkUrlHandler {
       }
     });
 
-    _channel.invokeMethod<String>('getInitialLink').then((initial) {
-      if (initial != null && initial.trim().isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          handleUrl(rootNavigatorKey.currentContext, api, initial.trim());
-        });
-      }
-    }).catchError((_) {});
+    _channel
+        .invokeMethod<String>('getInitialLink')
+        .then((initial) {
+          if (initial != null && initial.trim().isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              handleUrl(rootNavigatorKey.currentContext, api, initial.trim());
+            });
+          }
+        })
+        .catchError((_) {});
   }
 
   /// 判断是否为酷安官方链接或协议
@@ -82,22 +90,28 @@ class CoolapkUrlHandler {
             mode: LaunchMode.externalApplication,
           );
         }
-        return await launchUrlString(
-          url,
-          mode: LaunchMode.externalApplication,
-        );
+        return await launchUrlString(url, mode: LaunchMode.externalApplication);
       } catch (_) {}
       return false;
     }
 
     if (targetContext == null) return false;
+    final specialized = communityPageForUrl(api, url);
+    if (specialized != null) {
+      Navigator.of(targetContext)
+          .push<void>(MaterialPageRoute(builder: (_) => specialized));
+      return true;
+    }
 
     // 2. 解析实体并进入对应原生页面
-    final full = url.toLowerCase();
+    final full = url;
 
     // 2.1 动态 / 图文 (Feed / Picture)
     // 匹配: /feed/12345, /picture/12345, coolmarket://feed/12345, coolmarket://feed/detail?id=12345
-    final feedRegex = RegExp(r'(?:/feed/|/picture/|coolmarket://feed/(?:detail\?.*id=)?)(\d+)', caseSensitive: false);
+    final feedRegex = RegExp(
+      r'(?:/feed/|/picture/|coolmarket://feed/(?:detail\?.*id=)?)(\d+)',
+      caseSensitive: false,
+    );
     final feedMatch = feedRegex.firstMatch(full);
     if (feedMatch != null) {
       final id = feedMatch.group(1)!;
@@ -114,10 +128,13 @@ class CoolapkUrlHandler {
 
     // 2.2 用户主页 (User / Space)
     // 匹配: /u/12345, /u/username, /user/12345, coolmarket://u/12345
-    final userRegex = RegExp(r'(?:/u/|/user/|coolmarket://u/|coolmarket://user/)([^/?#]+)', caseSensitive: false);
+    final userRegex = RegExp(
+      r'(?:/u/|/user/|coolmarket://u/|coolmarket://user/)([^/?#]+)',
+      caseSensitive: false,
+    );
     final userMatch = userRegex.firstMatch(full);
     if (userMatch != null) {
-      final uid = Uri.decodeComponent(userMatch.group(1)!).trim();
+      final uid = decodeCoolapkComponent(userMatch.group(1)!).trim();
       Navigator.of(targetContext).push<void>(
         MaterialPageRoute<void>(
           builder: (_) => UserSpacePage(api: api, uid: uid),
@@ -128,11 +145,14 @@ class CoolapkUrlHandler {
 
     // 2.3 话题 / Tag (Topic / Super Topic)
     // 匹配: /t/xxx, /topic/xxx, coolmarket://topic/xxx
-    final topicRegex = RegExp(r'(?:/t/|/topic/|coolmarket://topic/)([^/?#]+)', caseSensitive: false);
+    final topicRegex = RegExp(
+      r'(?:/t/|/topic/|coolmarket://topic/)([^/?#]+)',
+      caseSensitive: false,
+    );
     final topicMatch = topicRegex.firstMatch(full);
     if (topicMatch != null) {
       final tagRaw = topicMatch.group(1)!;
-      final tag = Uri.decodeComponent(tagRaw);
+      final tag = decodeCoolapkComponent(tagRaw);
       Navigator.of(targetContext).push<void>(
         MaterialPageRoute<void>(
           builder: (_) => TopicPage(api: api, tag: tag),
@@ -143,7 +163,10 @@ class CoolapkUrlHandler {
 
     // 2.4 机型 / 数码产品 (Product)
     // 匹配: /product/12345, /product?id=12345, coolmarket://product/12345
-    final productRegex = RegExp(r'(?:/product/|/product\?.*id=|coolmarket://product/)(\d+)', caseSensitive: false);
+    final productRegex = RegExp(
+      r'(?:/product/|/product\?.*id=|coolmarket://product/)(\d+)',
+      caseSensitive: false,
+    );
     final productMatch = productRegex.firstMatch(full);
     if (productMatch != null) {
       final id = productMatch.group(1)!;
@@ -157,7 +180,10 @@ class CoolapkUrlHandler {
 
     // 2.5 应用 / APK / 游戏 (App)
     // 匹配: /apk/com.example.app, /game/com.example.app, coolmarket://apk/com.example.app
-    final appRegex = RegExp(r'(?:/apk/|/game/|coolmarket://apk/)([^/?#]+)', caseSensitive: false);
+    final appRegex = RegExp(
+      r'(?:/apk/|/game/|coolmarket://apk/)([^/?#]+)',
+      caseSensitive: false,
+    );
     final appMatch = appRegex.firstMatch(full);
     if (appMatch != null) {
       final pkg = appMatch.group(1)!;
@@ -172,10 +198,7 @@ class CoolapkUrlHandler {
     // 2.6 其他未匹配的酷安网页链接或协议，在浏览器中打开兜底
     try {
       if (await canLaunchUrlString(url)) {
-        return await launchUrlString(
-          url,
-          mode: LaunchMode.externalApplication,
-        );
+        return await launchUrlString(url, mode: LaunchMode.externalApplication);
       }
     } catch (_) {}
 

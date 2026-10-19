@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/core/widgets/coolapk_rich_text.dart';
@@ -7,6 +8,53 @@ class _MockCoolapkApi extends Fake implements CoolapkApi {}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets(
+    'visible truncation preserves the complete topic target and hides HTML',
+    (tester) async {
+      const topic = '懂车帝测试尊界V800刹车踏板断裂';
+      final raw =
+          '前文<a class="feed-link-tag" href="/t/${Uri.encodeComponent(topic)}?type=0">#$topic#</a>后文';
+      expect(CoolapkRichText.visibleText(raw), '前文#$topic#后文');
+      String? opened;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CoolapkRichText(
+              api: _MockCoolapkApi(),
+              text: raw,
+              maxCharacters: 8,
+              onTapTag: (tag) => opened = tag,
+            ),
+          ),
+        ),
+      );
+      final rich = tester.widget<RichText>(find.byType(RichText));
+      expect(rich.text.toPlainText(), '前文#懂车帝测试');
+      final link =
+          (tester.widget<Text>(find.byType(Text)).textSpan! as TextSpan)
+              .children!
+              .whereType<TextSpan>()
+              .firstWhere((span) => span.recognizer != null);
+      (link.recognizer! as TapGestureRecognizer).onTap!();
+      expect(opened, topic);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: CoolapkRichText(
+              api: _MockCoolapkApi(),
+              text: '😀<a href="/feed/1">后文</a>',
+              maxCharacters: 1,
+            ),
+          ),
+        ),
+      );
+      expect(
+        tester.widget<RichText>(find.byType(RichText)).text.toPlainText(),
+        '',
+      );
+    },
+  );
 
   group('sanitizeCoolapkMessage Tests', () {
     test('sanitizes malicious tags while preserving <a> and formatting', () {

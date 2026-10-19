@@ -11,6 +11,7 @@ import '../feed/feed_pages.dart';
 import '../shared/api_list_page.dart';
 import '../shell/main_pages.dart' show CookieLoginPage;
 import 'anonymous_accounts_page.dart';
+import 'official_login_page.dart';
 
 Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
   final choice = await showModalBottomSheet<String>(
@@ -29,6 +30,12 @@ Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
             title: const Text('Cookie 登录'),
             subtitle: const Text('使用酷安账号及云端功能'),
             onTap: () => Navigator.pop(context, 'cookie'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.login),
+            title: const Text('账号登录'),
+            subtitle: const Text('账号密码或酷安官方网页登录'),
+            onTap: () => Navigator.pop(context, 'official'),
           ),
           ListTile(
             leading: const Icon(Icons.person_outline),
@@ -52,6 +59,10 @@ Future<void> showLoginOptions(BuildContext context, CoolapkApi api) async {
     await Navigator.of(
       context,
     ).push<void>(MaterialPageRoute(builder: (_) => CookieLoginPage(api: api)));
+  } else if (choice == 'official') {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => OfficialLoginPage(api: api)),
+    );
   } else if (choice == 'switch_anon') {
     await showAnonymousAccountSwitcher(context, api);
   } else {

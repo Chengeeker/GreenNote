@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private var avatarResult: MethodChannel.Result? = null
+    private var pickingMessageImage = false
     private var mediaChannel: MethodChannel? = null
     private val mediaExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var uiChannel: MethodChannel? = null
@@ -17,6 +18,7 @@ class MainActivity : FlutterActivity() {
     private var cacheChannel: MethodChannel? = null
     private var linksChannel: MethodChannel? = null
     private var initialLink: String? = null
+    private var appDownloads: AppDownloads? = null
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,11 +39,18 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val loginCookies = CoolapkLoginCookies()
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/login_cookies")
+            .setMethodCallHandler { call, result -> loginCookies.handle(call, result) }
+        appDownloads = AppDownloads(this)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/downloads")
+            .setMethodCallHandler { call, result -> appDownloads?.handle(call.method, call.arguments as? Map<*, *>, result) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/avatar")
             .setMethodCallHandler { call, result ->
-                if (call.method != "pick") { result.notImplemented(); return@setMethodCallHandler }
+                if (call.method != "pick" && call.method != "pickImage") { result.notImplemented(); return@setMethodCallHandler }
                 if (avatarResult != null) { result.error("busy", "Picker is open", null); return@setMethodCallHandler }
                 avatarResult = result
+                pickingMessageImage = call.method == "pickImage"
                 try {
                     startActivityForResult(android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
                         type = "image/*"
@@ -62,6 +71,7 @@ class MainActivity : FlutterActivity() {
                         "marketName" to getMarketDeviceName(),
                         "osName" to getCustomOsName(),
                         "manufacturer" to Build.MANUFACTURER.orEmpty(),
+                        "brand" to Build.BRAND.orEmpty(),
                         "model" to Build.MODEL.orEmpty(),
                         "device" to Build.DEVICE.orEmpty(),
                         "display" to Build.DISPLAY.orEmpty(),
@@ -69,6 +79,19 @@ class MainActivity : FlutterActivity() {
                         "sdkInt" to Build.VERSION.SDK_INT,
                     )
                 )
+                "openOfficialIdSettings" -> {
+                    try {
+                        packageManager.getApplicationInfo("com.coolapk.market", 0)
+                        startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("coolmarket://www.coolapk.com/native/testSettings"))
+                            .setPackage("com.coolapk.market"))
+                        result.success(true)
+                    } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+                        result.error("official_not_installed", "Official Coolapk is not installed", null)
+                    } catch (_: Exception) {
+                        result.success(false)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -218,6 +241,7 @@ class MainActivity : FlutterActivity() {
                     "packageName" to app.packageName,
                     "label" to pm.getApplicationLabel(app).toString(),
                     "version" to (packageInfo.versionName ?: ""),
+                    "versionCode" to (if (Build.VERSION.SDK_INT >= 28) packageInfo.longVersionCode else @Suppress("DEPRECATION") packageInfo.versionCode.toLong()),
                     "sizeBytes" to apkFiles.sumOf { if (it.isFile) it.length() else 0L },
                     "updatedAt" to packageInfo.lastUpdateTime,
                     "isSystem" to (
@@ -239,6 +263,7 @@ class MainActivity : FlutterActivity() {
         if (requestCode != 7401) return
         val result = avatarResult ?: return
         avatarResult = null
+        val isMessageImage = pickingMessageImage
         val uri = data?.data
         if (resultCode != android.app.Activity.RESULT_OK || uri == null) { result.success(null); return }
         mediaExecutor.execute {
@@ -258,9 +283,35 @@ class MainActivity : FlutterActivity() {
                 android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalArgumentException("Invalid image")
                 val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = 1 }
-                while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > 512) options.inSampleSize *= 2
+                val maxEdge = if (isMessageImage) 2048 else 512
+                while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize > maxEdge) options.inSampleSize *= 2
                 val source = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                     ?: throw IllegalArgumentException("Invalid image")
+                if (isMessageImage) {
+                    val output = java.io.ByteArrayOutputStream()
+                    val matrix = android.graphics.Matrix()
+                    val orientation = try {
+                        android.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
+                            .getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)
+                    } catch (_: Exception) { 1 }
+                    when (orientation) {
+                        2 -> matrix.setScale(-1f, 1f)
+                        3 -> matrix.setRotate(180f)
+                        4 -> matrix.setScale(1f, -1f)
+                        5 -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
+                        6 -> matrix.setRotate(90f)
+                        7 -> { matrix.setRotate(270f); matrix.postScale(-1f, 1f) }
+                        8 -> matrix.setRotate(270f)
+                    }
+                    val oriented = if (matrix.isIdentity) source else android.graphics.Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+                    oriented.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+                    if (oriented !== source) oriented.recycle()
+                    source.recycle()
+                    val png = output.toByteArray()
+                    if (png.size > 16 * 1024 * 1024) throw IllegalArgumentException("Image is too large")
+                    runOnUiThread { result.success(png) }
+                    return@execute
+                }
                 val edge = minOf(source.width, source.height)
                 val cropped = android.graphics.Bitmap.createBitmap(source, (source.width - edge) / 2, (source.height - edge) / 2, edge, edge)
                 val scaled = android.graphics.Bitmap.createScaledBitmap(cropped, 192, 192, true)
@@ -514,6 +565,7 @@ class MainActivity : FlutterActivity() {
         uiChannel?.invokeMethod("onFontWeightAdjustmentChanged", getSystemFontWeightAdjustment())
     }
     override fun onDestroy() {
+        appDownloads?.close()
         avatarResult?.error("cancelled", "Activity closed", null)
         avatarResult = null
         mediaExecutor.shutdown()

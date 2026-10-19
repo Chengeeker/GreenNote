@@ -108,6 +108,50 @@ class MockChannelApi implements CoolapkApi {
 }
 
 void main() {
+  testWidgets(
+    'official card truncates visible content instead of a long HTML href',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const topic = '懂车帝测试尊界V800刹车踏板断裂';
+      final message =
+          '<a class="feed-link-tag" href="/t/${Uri.encodeComponent(topic)}?type=0">#$topic#</a> ${List.filled(40, '正文内容用于测试截断。').join()}';
+      final feed = CoolapkFeed.fromJson({
+        'id': 'html-article',
+        'username': 'inlook',
+        'message': message,
+      });
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: FeedCard(
+                  api: MockChannelApi(),
+                  feed: feed,
+                  officialLayout: true,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      final visible = tester
+          .widgetList<RichText>(find.byType(RichText))
+          .map((widget) => widget.text.toPlainText())
+          .join('\n');
+      expect(visible, contains('#$topic#'));
+      expect(visible, contains('…查看更多'));
+      expect(visible, isNot(contains('<a')));
+      expect(visible, isNot(contains('href=')));
+      expect(visible, isNot(contains('%E6')));
+      expect(tester.takeException(), isNull);
+    },
+  );
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });

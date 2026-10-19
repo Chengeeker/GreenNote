@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/core/utils/spring_page_route.dart';
 import 'package:greennote/features/feed/image_gallery_page.dart';
@@ -21,6 +22,12 @@ const app = <String, dynamic>{
 };
 
 class MarketApi implements CoolapkApi {
+  @override
+  String get notificationSessionKey => '';
+  @override
+  bool get hasCookie => false;
+  @override
+  String get currentUid => '';
   final requests = <(String, Map<String, dynamic>)>[];
   bool fail = false;
   @override
@@ -34,7 +41,7 @@ class MarketApi implements CoolapkApi {
   }) async {
     requests.add((path, query));
     return {
-      'data': {'description': '真实应用集简介'},
+      'data': {'description': '真实应用集简介', 'apkList': [app]},
     };
   }
 
@@ -93,7 +100,7 @@ class MarketApi implements CoolapkApi {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-Widget host(Widget child, {double textScale = 1}) => MaterialApp(
+Widget host(Widget child, {double textScale = 1}) => ProviderScope(child: MaterialApp(
   theme: ThemeData.dark(useMaterial3: true),
   home: Builder(
     builder: (context) => MediaQuery(
@@ -102,7 +109,7 @@ Widget host(Widget child, {double textScale = 1}) => MaterialApp(
       child: child,
     ),
   ),
-);
+));
 
 class ScreenshotApi extends MarketApi {
   @override
@@ -298,7 +305,7 @@ void main() {
     expect(find.text('应用分类'), findsOneWidget);
   });
 
-  testWidgets('album opens detail and paginated apk list', (tester) async {
+  testWidgets('album renders apps from its detail response', (tester) async {
     final api = MarketApi();
     await tester.pumpWidget(
       host(
@@ -318,10 +325,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('应用集甲'));
     await tester.pumpAndSettle();
-    expect(api.requests.map((r) => r.$1), [
-      '/v6/album/detail',
-      '/v6/album/apkList',
-    ]);
+    expect(api.requests.map((r) => r.$1), ['/v6/album/detail']);
     expect(api.requests.last.$2['id'], '42');
     expect(find.text('真实应用集简介'), findsOneWidget);
     expect(find.text('测试应用'), findsOneWidget);

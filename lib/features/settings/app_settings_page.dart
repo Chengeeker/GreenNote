@@ -9,7 +9,11 @@ import '../../core/widgets/app_section_card.dart';
 import '../../core/utils/haptic_feedback_util.dart';
 import '../account/anonymous_accounts_page.dart';
 import 'cache_management_page.dart';
+import 'device_identity_page.dart';
 import 'personalization_page.dart';
+import 'notification_center_page.dart';
+import 'official_profile_page.dart';
+import '../shared/community_library_page.dart';
 import 'storage_settings_page.dart';
 import 'webdav_backup_page.dart';
 
@@ -102,6 +106,22 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
               ),
               const Divider(height: 1, indent: 56),
               ReviewPreferenceTile(
+                leading: const Icon(Icons.phonelink_setup_outlined),
+                title: '导入官方设备标识',
+                subtitle: widget.api.hasOfficialDeviceIdentity
+                    ? '已导入数盟 ID，可恢复原设备码'
+                    : '手动导入 ShuzlmID，尝试改善重复人机验证',
+                onTap: () async {
+                  await Navigator.of(context).push<void>(
+                    MaterialPageRoute(
+                      builder: (_) => DeviceIdentityPage(api: widget.api),
+                    ),
+                  );
+                  if (mounted) setState(() {});
+                },
+              ),
+              const Divider(height: 1, indent: 56),
+              ReviewPreferenceTile(
                 leading: Icon(
                   Icons.switch_account_outlined,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -119,6 +139,32 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                   );
                 },
               ),
+              if (widget.api.hasCookie) ...[
+                const Divider(height: 1),
+                ReviewPreferenceTile(
+                  title: '酷安个人资料',
+                  leading: const Icon(Icons.person_outline),
+                  onTap: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => OfficialProfilePage(api: widget.api),
+                    ),
+                  ),
+                ),
+                ReviewPreferenceTile(
+                  title: '屏蔽与黑名单',
+                  leading: const Icon(Icons.block),
+                  onTap: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CommunityLibraryPage(
+                        api: widget.api,
+                        library: CommunityLibrary.blacklist,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               if (widget.api.hasAccount) ...[
                 const Divider(height: 1, indent: 56),
                 ReviewPreferenceTile(
@@ -162,6 +208,17 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                     ),
                   );
                 },
+              ),
+              const Divider(height: 1),
+              ReviewPreferenceTile(
+                leading: const Icon(Icons.notifications_outlined),
+                title: '通知中心',
+                subtitle: '官方 Cookie 账号的评论与回复提醒',
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => NotificationCenterPage(api: widget.api),
+                  ),
+                ),
               ),
             ],
           ),

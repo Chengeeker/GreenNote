@@ -78,10 +78,12 @@ class ReviewNavigationBar extends ConsumerStatefulWidget {
 }
 
 class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
-  static const _longPressThreshold = Duration(milliseconds: 500);
+  static const _longPressThreshold = Duration(milliseconds: 220);
   static const _flickVelocityThreshold = 800.0;
 
   final GlobalKey _barKey = GlobalKey();
+  Timer? _longPressTimer;
+  Timer? _glassResetTimer;
   int? _activePointer;
   VelocityTracker? _velocityTracker;
   Duration? _pointerDownAt;
@@ -91,7 +93,16 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
   bool _movedBeyondSlop = false;
   bool _draggedHorizontally = false;
   bool _cancelled = false;
+  bool _isJellyDragging = false;
   int _gestureId = 0;
+
+  void _scheduleGlassReset(int gestureId) {
+    _glassResetTimer?.cancel();
+    _glassResetTimer = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted || gestureId != _gestureId) return;
+      setState(() => _isJellyDragging = false);
+    });
+  }
 
   static int _nextTab(int current, bool forward) {
     // Valid business tab indices: 0 (首页), 1 (数码), 3 (发现), 4 (我的)
@@ -111,6 +122,14 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
 
   void _onPointerDown(PointerDownEvent event) {
     if (_activePointer != null) return;
+    _longPressTimer?.cancel();
+    _glassResetTimer?.cancel();
+    if (_isJellyDragging) {
+      setState(() {
+        _isJellyDragging = false;
+        _pendingIndex = null;
+      });
+    }
     _activePointer = event.pointer;
     _velocityTracker = VelocityTracker.withKind(event.kind)
       ..addPosition(event.timeStamp, event.position);
@@ -122,6 +141,18 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
     _draggedHorizontally = false;
     _cancelled = false;
     _gestureId++;
+    _longPressTimer = Timer(_longPressThreshold, () {
+      if (!mounted ||
+          _activePointer != event.pointer ||
+          _movedBeyondSlop ||
+          _cancelled) {
+        return;
+      }
+      setState(() {
+        _isJellyDragging = true;
+      });
+      HapticFeedbackUtil.light();
+    });
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -132,7 +163,15 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
     final delta = event.position - origin;
     if (delta.distance > kTouchSlop) {
       _movedBeyondSlop = true;
-      if (delta.dx.abs() > delta.dy.abs()) _draggedHorizontally = true;
+      _longPressTimer?.cancel();
+      if (delta.dx.abs() > delta.dy.abs()) {
+        _draggedHorizontally = true;
+        if (!_isJellyDragging) {
+          setState(() {
+            _isJellyDragging = true;
+          });
+        }
+      }
     }
   }
 
@@ -163,6 +202,7 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
     double horizontalVelocity = 0.0,
   }) {
     if (pointer != _activePointer) return;
+    _longPressTimer?.cancel();
     _cancelled |= cancelled;
     final gestureId = _gestureId;
 
@@ -177,6 +217,7 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
       final movedVertically = _movedBeyondSlop && !wasDrag;
       final wasCancelled = _cancelled;
       final startingIndex = _selectedIndexAtPointerDown;
+      final wasJellyDragging = _isJellyDragging;
 
       _activePointer = null;
       _velocityTracker = null;
@@ -186,6 +227,7 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
       _movedBeyondSlop = false;
       _draggedHorizontally = false;
       _cancelled = false;
+      if (wasJellyDragging) _scheduleGlassReset(gestureId);
 
       if (wasCancelled || movedVertically || target == null) return;
       if (target == 2) return;
@@ -230,6 +272,13 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
   void _select(int index) {
     HapticFeedbackUtil.light();
     widget.onSelected(index);
+  }
+
+  @override
+  void dispose() {
+    _longPressTimer?.cancel();
+    _glassResetTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -397,7 +446,13 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
                     innerBlur: 6,
                     indicatorColor: indicatorColor,
                     interactionGlowColor: interactionGlowColor,
-                    indicatorPinchStrength: 0.7,
+                    indicatorPinchStrength: _isJellyDragging ? 0.7 : 0.0,
+                    indicatorExpansion: _isJellyDragging
+                        ? const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          )
+                        : EdgeInsets.zero,
                     pressScale: 1.06,
                     selectedIconColor: Colors.white,
                     selectedLabelColor: Colors.white,

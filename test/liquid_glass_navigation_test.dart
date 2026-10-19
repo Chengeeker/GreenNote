@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:liquid_glass_widgets/utils/draggable_indicator_physics.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:greennote/core/design_system/components/review_navigation_bar.dart';
@@ -9,6 +10,26 @@ import 'package:greennote/core/settings/app_settings.dart';
 import 'package:greennote/core/theme/app_theme.dart';
 
 void main() {
+  test(
+    'zero pinch keeps a fast moving indicator free of jelly deformation',
+    () {
+      final flat = DraggableIndicatorPhysics.buildJellyTransform(
+        velocity: const Offset(800, 0),
+        maxDistortion: 0,
+        velocityScale: 10,
+      );
+      expect(flat.storage[0], 1);
+      expect(flat.storage[5], 1);
+      final jelly = DraggableIndicatorPhysics.buildJellyTransform(
+        velocity: const Offset(800, 0),
+        maxDistortion: 0.7,
+        velocityScale: 10,
+      );
+      expect(jelly.storage[0], lessThan(1));
+      expect(jelly.storage[5], greaterThan(1));
+    },
+  );
+
   testWidgets(
     'glass rail renders the reference proportions and dark material',
     (tester) async {
@@ -61,6 +82,12 @@ void main() {
           epsilon: 0.02,
         ),
       );
+      final glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      expect(glassBar.enableBlend, isTrue);
+      expect(glassBar.maskingQuality, MaskingQuality.high);
+      expect(glassBar.showIndicator, isTrue);
+      expect(glassBar.indicatorPinchStrength, 0);
+      expect(glassBar.indicatorExpansion, EdgeInsets.zero);
       final material = tester.widget<LightweightLiquidGlass>(
         find.descendant(
           of: track,
@@ -75,8 +102,8 @@ void main() {
       expect(applied.glassColor, const Color(0x66000000));
       expect(applied.ambientStrength, 0);
       expect(applied.bodyMode, GlassBodyMode.clear);
-      expect(applied.blur, lessThanOrEqualTo(2));
-      expect(applied.refractiveIndex, greaterThanOrEqualTo(1.16));
+      expect(applied.blur, 1.5);
+      expect(applied.refractiveIndex, 1.16);
       expect(applied.chromaticAberration, greaterThan(0));
       final publish = find
           .ancestor(
@@ -91,22 +118,38 @@ void main() {
       );
       expect(find.text('发布'), findsNothing);
 
-      final gesture = await tester.startGesture(const Offset(118, 751));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 350));
-      final lenses = tester.widgetList<AnimatedGlassIndicator>(
-        find.byType(AnimatedGlassIndicator),
+      final barState = tester.state(find.byType(GlassTabBar));
+      expect(
+        tester
+            .widgetList<AnimatedGlassIndicator>(
+              find.byType(AnimatedGlassIndicator),
+            )
+            .every((indicator) => indicator.thickness == 0),
+        isTrue,
       );
-      expect(lenses.any((lens) => lens.thickness > 0.5), isTrue);
-      // The expanded lens is 64dp tall: its radius must reach half that height.
-      expect(lenses.every((lens) => lens.borderRadius >= 32), isTrue);
-      expect(lenses.any((lens) => lens.innerBlur > applied.blur), isTrue);
-      await gesture.moveBy(const Offset(125, 0));
-      await tester.pump(const Duration(milliseconds: 100));
-      await gesture.up();
+      await tester.tapAt(const Offset(244, 751));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(
+        tester
+            .widgetList<AnimatedGlassIndicator>(
+              find.byType(AnimatedGlassIndicator),
+            )
+            .every((indicator) => indicator.thickness == 0),
+        isTrue,
+      );
       await tester.pumpAndSettle();
       expect(selected, 3);
+      expect(tester.state(find.byType(GlassTabBar)), same(barState));
+      expect(
+        tester.widget<GlassTabBar>(find.byType(GlassTabBar)).selectedIndex,
+        3,
+      );
       expect(selections, isNot(contains(2)));
+      await tester.tap(find.byIcon(Icons.add_rounded));
+      await tester.pumpAndSettle();
+      expect(selections, [3, 2]);
+      expect(selected, 3);
       expect(tester.takeException(), isNull);
     },
   );
@@ -158,17 +201,73 @@ void main() {
       // Start drag at Tab 0 (首页, center x ≈ 52)
       final gesture = await tester.startGesture(const Offset(52, 751));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        tester
+            .widget<GlassTabBar>(find.byType(GlassTabBar))
+            .indicatorPinchStrength,
+        0,
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      var glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      expect(glassBar.showIndicator, isTrue);
+      expect(glassBar.indicatorPinchStrength, 0.7);
+      expect(
+        glassBar.indicatorExpansion,
+        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      );
+      expect(find.byType(AnimatedGlassIndicator), findsWidgets);
+      expect(selections, isEmpty);
+
+      await gesture.moveTo(const Offset(100, 751));
+      await tester.pump(const Duration(milliseconds: 100));
+      final firstPosition = tester
+          .widgetList<AnimatedGlassIndicator>(
+            find.byType(AnimatedGlassIndicator),
+          )
+          .first
+          .alignment
+          .resolve(TextDirection.ltr)
+          .x;
+      await gesture.moveTo(const Offset(108, 751));
+      await tester.pump(const Duration(milliseconds: 100));
+      final nextPosition = tester
+          .widgetList<AnimatedGlassIndicator>(
+            find.byType(AnimatedGlassIndicator),
+          )
+          .first
+          .alignment
+          .resolve(TextDirection.ltr)
+          .x;
+      // Moving inside one slot must move the lens before a page is selected.
+      expect(nextPosition, greaterThan(firstPosition));
+      expect(selected, 0);
 
       // Drag deliberately across the entire bar to Tab 4 (我的, center x ≈ 308)
       await gesture.moveTo(const Offset(308, 751));
       await tester.pump(const Duration(milliseconds: 150));
+      glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      expect(glassBar.selectedIndex, 0);
       await gesture.up();
       await tester.pumpAndSettle();
 
       // Must land on Tab 4 (我的), NOT truncated to Tab 1 (数码)
       expect(selected, 4);
       expect(selections.last, 4);
+      expect(
+        tester
+            .widget<GlassTabBar>(find.byType(GlassTabBar))
+            .indicatorPinchStrength,
+        0,
+      );
+      expect(
+        tester
+            .widgetList<AnimatedGlassIndicator>(
+              find.byType(AnimatedGlassIndicator),
+            )
+            .every((indicator) => indicator.thickness < 0.01),
+        isTrue,
+      );
       expect(tester.takeException(), isNull);
     },
   );

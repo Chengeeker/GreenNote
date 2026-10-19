@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_refresh/easy_refresh.dart';
@@ -15,6 +16,8 @@ import '../../core/widgets/review_refresh_header.dart';
 import '../feed/feed_pages.dart';
 import 'api_list_page.dart';
 import 'home_destination_page.dart' show officialHomeTheme;
+import 'community_library_page.dart';
+import 'community_ui.dart';
 
 ({String path, Map<String, dynamic> query}) discoveryPageRequest(String route) {
   final resolved = route.replaceAll(r'${uid}', '');
@@ -94,6 +97,11 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
   int _page = 0, _revision = 0;
   bool _loading = false, _more = true;
   Object? _error;
+  List<Map<String, dynamic>> _subscriptions = [];
+  bool _subscriptionsMore = false;
+  String? _subscriptionError;
+  late String _subscriptionSession = widget.api.notificationSessionKey;
+  int _subscriptionVersion = 0;
   ({String source, String selected, bool refresh})? _failedRequest;
   @override
   bool get wantKeepAlive => true;
@@ -108,6 +116,7 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
   void didUpdateWidget(covariant DiscoveryChannelPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.route != widget.route || oldWidget.api != widget.api) {
+      _subscriptions = [];
       _source = widget.route;
       _selected = '';
       _headers = [];
@@ -149,6 +158,7 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
     if (_loading && !replaceRequest || !refresh && !_more) return;
     final revision = ++_revision;
     final source = _source;
+    if (refresh && widget.title == '看看号') unawaited(_loadSubscriptions());
     final next = refresh ? 1 : _page + 1;
     setState(() {
       _loading = true;
@@ -165,6 +175,15 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
                   !_body(row) &&
                   !(productFeed && _pearGoods(row)) &&
                   _visible(row),
+            )
+            .where(
+              (row) =>
+                  widget.title != '看看号' ||
+                  (!const {
+                        'unLoginCard',
+                        'imageCard',
+                      }.contains(_template(row)) &&
+                      !_text(row, ['title']).contains('我订阅')),
             )
             .toList();
         // Flex channel roots contain only configuration and header modules.
@@ -230,6 +249,44 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
       }
     } finally {
       if (mounted && revision == _revision) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadSubscriptions() async {
+    final version = ++_subscriptionVersion;
+    if (!widget.api.hasCookie) {
+      if (mounted) {
+        setState(() {
+          _subscriptions = [];
+          _subscriptionError = null;
+        });
+      }
+      return;
+    }
+    final scope = widget.api.notificationSessionKey;
+    _subscriptionSession = scope;
+    try {
+      final page = await widget.api.getList(
+        '/v6/user/dyhFollowList',
+        query: {'page': 1},
+      );
+      if (!mounted ||
+          version != _subscriptionVersion ||
+          scope != widget.api.notificationSessionKey ||
+          scope != _subscriptionSession) {
+        return;
+      }
+      setState(() {
+        _subscriptions = page.items;
+        _subscriptionsMore = page.hasMore;
+        _subscriptionError = null;
+      });
+    } catch (_) {
+      if (mounted &&
+          version == _subscriptionVersion &&
+          scope == widget.api.notificationSessionKey) {
+        setState(() => _subscriptionError = '订阅状态暂未加载');
+      }
     }
   }
 
@@ -305,6 +362,77 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
                 const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                if (widget.title == '看看号')
+                  SliverToBoxAdapter(
+                    child: _surfaceCard(
+                      context,
+                      InkWell(
+                        onTap: () {
+                          if (!widget.api.hasCookie) {
+                            AppToast.show(
+                              context,
+                              widget.api.loginRequiredMessage,
+                            );
+                            return;
+                          }
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => CommunityLibraryPage(
+                                api: widget.api,
+                                library: CommunityLibrary.dyh,
+                              ),
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      '我订阅的看看号',
+                                      style: TextStyle(fontSize: 17),
+                                    ),
+                                    if (_subscriptionError != null)
+                                      Text(
+                                        _subscriptionError!,
+                                        style: const TextStyle(fontSize: 11),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              for (final sub in _subscriptions.take(2))
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 2),
+                                  child: AppAvatar(
+                                    api: widget.api,
+                                    url: _text(sub, ['logo', 'userAvatar']),
+                                    size: 28,
+                                  ),
+                                ),
+                              if (_subscriptions.isNotEmpty)
+                                CircleAvatar(
+                                  radius: 15,
+                                  backgroundColor: const Color(0xFF009688),
+                                  child: Text(
+                                    '${_subscriptions.length}${_subscriptionsMore ? '+' : ''}',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              const Icon(Icons.chevron_right),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 SliverList.builder(
                   itemCount: _headers.length,
                   itemBuilder: (context, index) => DiscoveryModule(
@@ -1016,9 +1144,22 @@ class DiscoveryArticleHeader extends StatelessWidget {
                 'url': '/u/${row['uid']}',
                 'title': row['username'],
               }),
-              child: Text(
-                '来自 ${_text(row, ['username'])}',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF009688)),
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '来自 ',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    TextSpan(
+                      text: _text(row, ['username']),
+                      style: const TextStyle(color: Color(0xFF009688)),
+                    ),
+                  ],
+                ),
+                style: const TextStyle(fontSize: 11),
               ),
             ),
           ],
@@ -1399,7 +1540,14 @@ class _DyhRecommendation extends StatefulWidget {
 
 class _DyhRecommendationState extends State<_DyhRecommendation> {
   late bool _following = '${_map(widget.row['userAction'])['follow']}' == '1';
+  late final String _session;
   bool _working = false;
+  @override
+  void initState() {
+    super.initState();
+    _session = widget.api.hasCookie ? widget.api.notificationSessionKey : '';
+  }
+
   Future<void> _subscribe() async {
     if (!widget.api.hasCookie) {
       AppToast.show(context, widget.api.loginRequiredMessage);
@@ -1408,10 +1556,12 @@ class _DyhRecommendationState extends State<_DyhRecommendation> {
     if (_working || _following) return;
     setState(() => _working = true);
     try {
-      await widget.api.request(
+      await communityRequest(
+        widget.api,
+        _session,
         '/v6/dyh/follow',
         method: 'POST',
-        query: {'id': widget.row['id']},
+        query: {'dyhId': widget.row['id']},
       );
       if (mounted) setState(() => _following = true);
     } catch (error) {
@@ -1647,7 +1797,7 @@ class DiscoveryGoodsRanking extends StatelessWidget {
                 if (i > 0) const SizedBox(width: 8),
                 Expanded(
                   child: InkWell(
-                    onTap: () => openHeadlineTarget(context, api, items[i]),
+                    onTap: open,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(9),
                       child: ColoredBox(

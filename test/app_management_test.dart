@@ -111,7 +111,7 @@ void main() {
 
   testWidgets('本机应用页默认隐藏系统应用并可显示预装应用', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(theme: ThemeData.dark(), home: const AppManagementPage()),
+      MaterialApp(theme: ThemeData.dark(), home: AppManagementPage(api: _ArticleApi())),
     );
     await tester.pumpAndSettle();
 
@@ -127,7 +127,7 @@ void main() {
   });
 
   testWidgets('本机应用行可启动应用，列表支持切换分页', (tester) async {
-    await tester.pumpWidget(MaterialApp(home: const AppManagementPage()));
+    await tester.pumpWidget(MaterialApp(home: AppManagementPage(api: _ArticleApi())));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('打开'));
@@ -136,7 +136,7 @@ void main() {
 
     await tester.tap(find.text('更新'));
     await tester.pumpAndSettle();
-    expect(find.text('暂未接入更新检查'), findsOneWidget);
+    expect(find.text('检查更新'), findsOneWidget);
   });
 
   testWidgets('我的图文列表使用官方图文卡片排版（标题、题图、正文摘要）', (tester) async {

@@ -1,3 +1,5 @@
+import '../shared/community_library_page.dart';
+import '../shared/community_detail_page.dart';
 import '../account/anonymous_accounts_page.dart';
 import '../account/local_account_page.dart';
 
@@ -10,9 +12,13 @@ import '../../core/utils/app_toast.dart';
 import '../../core/design_system/components/review_frosted_app_bar.dart';
 
 import 'dart:async';
+
+import '../shared/reply_notifications_page.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -104,10 +110,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
           ),
           unselectedLabelColor: colors.onSurfaceVariant,
           unselectedLabelStyle: const TextStyle(fontSize: 16),
-          tabs: [
-            for (final channel in _channels)
-              Tab(text: channel.title),
-          ],
+          tabs: [for (final channel in _channels) Tab(text: channel.title)],
         );
       },
     ),
@@ -1135,10 +1138,9 @@ class MessageCenterPage extends StatelessWidget {
     const routes = [
       ('私信', '/v6/message/list'),
       ('@我的', '/v6/notification/atMeList'),
-      ('收到的评论', '/v6/notification/commentMeList'),
+      ('评论与回复', '/v6/notification/list'),
       ('回复与@', '/v6/notification/atCommentMeList'),
       ('收到的赞', '/v6/notification/feedLikeList'),
-      ('系统通知', '/v6/notification/list'),
     ];
     return DefaultTabController(
       length: routes.length,
@@ -1155,11 +1157,11 @@ class MessageCenterPage extends StatelessWidget {
                 for (final route in routes)
                   route.$1 == '私信'
                       ? _MessageSessionsPage(api: api)
-                      : ApiListPage(
+                      : ReplyNotificationsPage(
                           api: api,
+                          showAppBar: false,
                           title: route.$1,
                           path: route.$2,
-                          showAppBar: false,
                         ),
               ],
             ),
@@ -1409,8 +1411,7 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
                           if (!context.mounted || sure != true) return;
                           try {
                             await widget.api.request(
-                              '/v6/message/delChatSession',
-                              method: 'POST',
+                              '/v6/message/deleteChat',
                               query: {'ukey': ukey},
                             );
                             await _load();
@@ -1466,25 +1467,45 @@ class _MessageChatPageState extends State<MessageChatPage> {
   bool _hasOlder = true;
   String? _error;
   int _page = 1;
+  Uint8List? _pendingImage;
+  Timer? _refreshTimer;
+  bool _refreshing = false;
+  int _failures = 0;
+  DateTime _nextRefresh = DateTime.now();
+  late final String _session = widget.api.notificationSessionKey;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+          ModalRoute.of(context)?.isCurrent == true &&
+          DateTime.now().isAfter(_nextRefresh)) {
+        _load(silent: true);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _controller.dispose();
     _pictureController.dispose();
     super.dispose();
   }
 
-  Future<void> _load({bool older = false}) async {
-    if (_busy || _loadingOlder || (older && !_hasOlder)) return;
+  Future<void> _load({bool older = false, bool silent = false}) async {
+    if (_busy || _refreshing || _loadingOlder || (older && !_hasOlder)) return;
+    if (widget.api.notificationSessionKey != _session ||
+        !widget.api.hasCookie) {
+      return;
+    }
+    _refreshing = true;
     if (older) {
       setState(() => _loadingOlder = true);
-    } else {
+    } else if (!silent) {
       setState(() => _busy = true);
     }
     try {
@@ -1493,7 +1514,9 @@ class _MessageChatPageState extends State<MessageChatPage> {
         '/v6/message/chat',
         query: {'ukey': widget.ukey, 'page': nextPage},
       );
-      if (mounted) {
+      _failures = 0;
+      _nextRefresh = DateTime.now().add(const Duration(seconds: 10));
+      if (mounted && widget.api.notificationSessionKey == _session) {
         setState(() {
           if (older) {
             final known = _messages.map(_messageKey).toSet();
@@ -1502,16 +1525,33 @@ class _MessageChatPageState extends State<MessageChatPage> {
               ...result.items.where((item) => known.add(_messageKey(item))),
             ];
           } else {
-            _messages = result.items;
+            if (silent) {
+              final known = result.items.map(_messageKey).toSet();
+              _messages = [
+                ...result.items,
+                ..._messages.where(
+                  (item) => !known.contains(_messageKey(item)),
+                ),
+              ];
+            } else {
+              _messages = result.items;
+            }
           }
-          _page = nextPage;
-          _hasOlder = result.hasMore && result.items.isNotEmpty;
+          if (!silent) {
+            _page = nextPage;
+            _hasOlder = result.hasMore && result.items.isNotEmpty;
+          }
           _error = null;
         });
       }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      _failures = (_failures + 1).clamp(0, 4);
+      _nextRefresh = DateTime.now().add(
+        Duration(seconds: 10 * (1 << _failures)),
+      );
+      if (mounted) setState(() => _error = '消息读取失败，请稍后重试');
     } finally {
+      _refreshing = false;
       if (mounted) {
         setState(() {
           _busy = false;
@@ -1523,9 +1563,27 @@ class _MessageChatPageState extends State<MessageChatPage> {
 
   Future<void> _send() async {
     final message = _controller.text.trim();
-    if (message.isEmpty || widget.uid.isEmpty || _busy || _sending) return;
+    if ((message.isEmpty &&
+            _pendingImage == null &&
+            _pictureController.text.isEmpty) ||
+        widget.uid.isEmpty ||
+        _busy ||
+        _sending) {
+      return;
+    }
     setState(() => _sending = true);
     try {
+      if (!widget.api.hasCookie ||
+          widget.api.notificationSessionKey != _session) {
+        throw StateError('account changed');
+      }
+      if (_pendingImage != null && _pictureController.text.isEmpty) {
+        _pictureController.text = await widget.api.uploadMessageImage(
+          _pendingImage!,
+          widget.uid,
+        );
+      }
+      if (!mounted || widget.api.notificationSessionKey != _session) return;
       await widget.api.sendMessage(
         widget.uid,
         message,
@@ -1535,9 +1593,10 @@ class _MessageChatPageState extends State<MessageChatPage> {
       );
       _controller.clear();
       _pictureController.clear();
+      _pendingImage = null;
       await _load();
     } catch (error) {
-      if (mounted) _snack(context, error.toString());
+      if (mounted) _snack(context, '发送失败，消息和图片已保留，可重试');
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -1589,40 +1648,104 @@ class _MessageChatPageState extends State<MessageChatPage> {
                     ]);
                     final pictureUrl = normalizeCoolapkImageUrl(picture);
                     final pictureUri = Uri.tryParse(pictureUrl);
-                    return ListTile(
-                      title: Text(
-                        _first(row, ['username', 'userName', 'fromName']),
-                      ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(_first(row, ['message', 'content', 'text'])),
-                          if (pictureUri != null &&
-                              pictureUri.scheme == 'https' &&
-                              pictureUri.host.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: CachedNetworkImage(
-                                  pictureUrl,
-                                  headers: coolapkImageHeaders(
-                                    pictureUrl,
-                                    api: widget.api,
-                                  ),
-                                  height: 180,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) =>
-                                      const SizedBox.shrink(),
-                                ),
+                    final mine =
+                        _first(row, ['fromuid', 'fromUid', 'uid']) ==
+                        widget.api.currentUid;
+                    final colors = Theme.of(context).colorScheme;
+                    return Align(
+                      alignment: mine
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.fromLTRB(12, 5, 12, 5),
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.sizeOf(context).width * 0.84,
+                        ),
+                        decoration: BoxDecoration(
+                          color: mine
+                              ? colors.primaryContainer
+                              : colors.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.all(12),
+                          titleTextStyle: Theme.of(context)
+                              .textTheme
+                              .labelMedium
+                              ?.copyWith(
+                                color: mine
+                                    ? colors.onPrimaryContainer
+                                    : colors.onSurfaceVariant,
                               ),
-                            ),
-                        ],
+                          subtitleTextStyle: Theme.of(context)
+                              .textTheme
+                              .bodyLarge
+                              ?.copyWith(
+                                color: mine
+                                    ? colors.onPrimaryContainer
+                                    : colors.onSurface,
+                              ),
+                          title: Text(
+                            _first(row, ['username', 'userName', 'fromName']),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_first(row, ['message', 'content', 'text'])),
+                              if (pictureUri != null &&
+                                  pictureUri.scheme == 'https' &&
+                                  pictureUri.host.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: CachedNetworkImage(
+                                      pictureUrl,
+                                      headers: coolapkImageHeaders(
+                                        pictureUrl,
+                                        api: widget.api,
+                                      ),
+                                      height: 180,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, _, _) =>
+                                          const SizedBox.shrink(),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
                       ),
                     );
                   },
                 ),
         ),
+        if (_pendingImage != null)
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Image.memory(
+                  _pendingImage!,
+                  width: 72,
+                  height: 72,
+                  fit: BoxFit.contain,
+                ),
+                const SizedBox(width: 12),
+                const Expanded(child: Text('图片将在点击发送后上传')),
+                IconButton(
+                  tooltip: '移除待发图片',
+                  onPressed: _sending
+                      ? null
+                      : () => setState(() {
+                          _pendingImage = null;
+                          _pictureController.clear();
+                        }),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
         SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 5, 12, 10),
@@ -1640,38 +1763,26 @@ class _MessageChatPageState extends State<MessageChatPage> {
                   ),
                 ),
                 IconButton(
-                  tooltip: '附加图片 URL',
-                  onPressed: () async {
-                    final url = await showAppDialog<String>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('附加图片'),
-                        content: TextField(
-                          controller: _pictureController,
-                          keyboardType: TextInputType.url,
-                          decoration: const InputDecoration(
-                            labelText: '图片 URL',
-                          ),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('取消'),
-                          ),
-                          FilledButton(
-                            onPressed: () =>
-                                Navigator.pop(context, _pictureController.text),
-                            child: const Text('确定'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (context.mounted && url != null) {
-                      setState(() => _pictureController.text = url.trim());
-                    }
-                  },
+                  tooltip: '选择图片',
+                  onPressed: _sending
+                      ? null
+                      : () async {
+                          try {
+                            final bytes = await const MethodChannel(
+                              'com.green.note/avatar',
+                            ).invokeMethod<Uint8List>('pickImage');
+                            if (bytes != null && mounted) {
+                              setState(() {
+                                _pendingImage = bytes;
+                                _pictureController.clear();
+                              });
+                            }
+                          } catch (_) {
+                            if (mounted) _snack(this.context, '无法选择图片，请重试');
+                          }
+                        },
                   icon: Icon(
-                    _pictureController.text.isEmpty
+                    _pendingImage == null && _pictureController.text.isEmpty
                         ? Icons.attach_file_rounded
                         : Icons.image_rounded,
                   ),
@@ -1873,18 +1984,16 @@ class _AccountPageState extends State<AccountPage> {
           : widget.api.getList('/v6/topic/myFollowTopicList');
       _visitsFuture = anonymous || _hiddenCards.contains('我的常去')
           ? null
-          : widget.api.getList('/v6/member/recentHistoryList');
+          : widget.api.getList('/v6/user/recentHistoryList');
       _historyFuture = anonymous || _hiddenCards.contains('浏览历史')
           ? null
           : widget.api.getList('/v6/user/hitHistoryList');
       _collectionsFuture = _hiddenCards.contains('我的收藏单')
           ? null
-          : anonymous
-          ? widget.api.getList(
+          : widget.api.getList(
               '/v6/collection/list',
               query: {'uid': uid, 'showDefault': 1},
-            )
-          : widget.api.getList('/v6/collection/myCollectionList');
+            );
       _questionsFuture = _hiddenCards.contains('我的问答')
           ? null
           : widget.api.getUserPage('/v6/user/questionAndAnswerList', uid, 1);
@@ -1993,9 +2102,7 @@ class _AccountPageState extends State<AccountPage> {
         : (_first(_login, ['uid', 'userId', 'id']).isEmpty
               ? widget.api.currentUid
               : _first(_login, ['uid', 'userId', 'id']));
-    final collectionRoute = publicIdentity != null
-        ? '/v6/collection/list'
-        : '/v6/collection/myCollectionList';
+    const collectionRoute = '/v6/collection/list';
     return ColoredBox(
       color: Theme.of(context).brightness == Brightness.dark
           ? const Color(0xFF101010)
@@ -2059,7 +2166,7 @@ class _AccountPageState extends State<AccountPage> {
                 if (!_hiddenCards.contains('我的常去'))
                   _previewSection(
                     '我的常去',
-                    '/v6/member/recentHistoryList',
+                    '/v6/user/recentHistoryList',
                     _visitsFuture,
                     icon: Icons.history_rounded,
                   ),
@@ -2076,9 +2183,7 @@ class _AccountPageState extends State<AccountPage> {
                     collectionRoute,
                     _collectionsFuture,
                     icon: Icons.folder_outlined,
-                    query: publicIdentity != null
-                        ? {'uid': uid, 'showDefault': 1}
-                        : const {},
+                    query: {'uid': uid, 'showDefault': 1},
                     allowAnonymousPublicRead: publicIdentity != null,
                   ),
                 if (!_hiddenCards.contains('我的问答'))
@@ -2430,7 +2535,8 @@ class _AccountPageState extends State<AccountPage> {
                 IconButton(
                   icon: const Icon(Icons.switch_account_outlined, size: 24),
                   tooltip: '切换/管理匿名账户',
-                  onPressed: () => showAnonymousAccountSwitcher(context, widget.api),
+                  onPressed: () =>
+                      showAnonymousAccountSwitcher(context, widget.api),
                 ),
                 const SizedBox(width: 4),
               ],
@@ -2591,10 +2697,8 @@ class _AccountPageState extends State<AccountPage> {
               context,
               Icons.star_rounded,
               '我的收藏',
-              canReadPublic
-                  ? '/v6/collection/list'
-                  : '/v6/collection/myCollectionList',
-              query: canReadPublic ? {'uid': uid, 'showDefault': 1} : const {},
+              '/v6/collection/list',
+              query: {'uid': uid, 'showDefault': 1},
               color: const Color(0xFF2589E8),
               enabled: enabled && (!widget.api.isAnonymous || canReadPublic),
             ),
@@ -2614,7 +2718,7 @@ class _AccountPageState extends State<AccountPage> {
                 color: const Color(0xFF9862E8),
                 onTap: () => Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
-                    builder: (_) => const AppManagementPage(),
+                    builder: (_) => AppManagementPage(api: widget.api),
                   ),
                 ),
               ),
@@ -3097,11 +3201,11 @@ class _AccountPageState extends State<AccountPage> {
         title: _first(item, ['title', 'name']),
       );
     } else if (type == 'collection') {
-      page = ApiListPage(
+      page = CommunityDetailPage(
         api: widget.api,
-        title: _first(item, ['title', 'name']),
-        path: '/v6/collection/itemlist',
-        query: {'id': id},
+        id: id,
+        kind: CommunityKind.collection,
+        initial: item,
       );
     } else {
       page = RawEntityPage(api: widget.api, entity: item);
@@ -3113,12 +3217,26 @@ class _AccountPageState extends State<AccountPage> {
   void _openRoute(String path, Map<String, dynamic> query) {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => ApiListPage(
-          api: widget.api,
-          title: _routeTitle(path),
-          path: path,
-          query: query,
-        ),
+        builder: (_) => path.contains('hitHistoryList')
+            ? CommunityLibraryPage(
+                api: widget.api,
+                library: CommunityLibrary.history,
+              )
+            : path.toLowerCase().contains('followlist') ||
+                  path.toLowerCase().contains('fanslist')
+            ? CommunityLibraryPage(
+                api: widget.api,
+                uid: '${query['uid'] ?? ''}',
+                library: path.toLowerCase().contains('fans')
+                    ? CommunityLibrary.fans
+                    : CommunityLibrary.following,
+              )
+            : ApiListPage(
+                api: widget.api,
+                title: _routeTitle(path),
+                path: path,
+                query: query,
+              ),
       ),
     );
   }
@@ -3126,6 +3244,7 @@ class _AccountPageState extends State<AccountPage> {
   String _routeTitle(String path) => switch (path) {
     '/v6/topic/myFollowTopicList' => '我关注的话题',
     '/v6/member/recentHistoryList' => '最近访问',
+    '/v6/user/recentHistoryList' => '最近访问',
     '/v6/user/hitHistoryList' => '浏览历史',
     '/v6/collection/myCollectionList' => '我的收藏单',
     '/v6/collection/list' => '我的收藏单',
@@ -3147,6 +3266,26 @@ class _AccountPageState extends State<AccountPage> {
         child: ListView(
           shrinkWrap: true,
           children: [
+            for (final entry in const [
+              (CommunityLibrary.anylist, '万物清单'),
+              (CommunityLibrary.dyh, '我的看看号'),
+              (CommunityLibrary.albums, '我的应用集'),
+            ])
+              ListTile(
+                leading: const Icon(Icons.view_list_outlined),
+                title: Text(entry.$2),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.of(this.context).push<void>(
+                    MaterialPageRoute(
+                      builder: (_) => CommunityLibraryPage(
+                        api: widget.api,
+                        library: entry.$1,
+                      ),
+                    ),
+                  );
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.settings_outlined),
               title: const Text('设置'),

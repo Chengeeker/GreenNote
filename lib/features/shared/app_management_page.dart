@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+
+import '../../core/network/coolapk_api.dart';
+import 'download_center_page.dart';
+
 import 'package:flutter/services.dart';
 
 import '../../core/design_system/components/review_frosted_app_bar.dart';
 import '../../core/utils/app_toast.dart';
 
 class AppManagementPage extends StatefulWidget {
-  const AppManagementPage({super.key});
+  const AppManagementPage({super.key, this.api});
+  final CoolapkApi? api;
 
   @override
   State<AppManagementPage> createState() => _AppManagementPageState();
@@ -30,6 +35,7 @@ class _AppManagementPageState extends State<AppManagementPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _tabsController.addListener(_tabChanged);
     _loadApps();
   }
 
@@ -39,6 +45,8 @@ class _AppManagementPageState extends State<AppManagementPage>
     _tabsController.dispose();
     super.dispose();
   }
+
+  void _tabChanged() { if (mounted) setState(() {}); }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -159,21 +167,11 @@ class _AppManagementPageState extends State<AppManagementPage>
               controller: _tabsController,
               children: [
                 _buildAppsTab(apps),
-                _emptyTab(
-                  Icons.system_update_alt_rounded,
-                  '暂未接入更新检查',
-                  '酷安更新接口所需的应用清单格式尚未验证，当前不会自动提交本机应用信息。',
-                ),
-                _emptyTab(
-                  Icons.download_outlined,
-                  '暂无应用内下载任务',
-                  '目前应用下载会交由系统或外部应用处理。',
-                ),
-                _emptyTab(
-                  Icons.install_mobile_outlined,
-                  '暂未接入安装包扫描',
-                  '本页仅列出已安装应用。',
-                ),
+                widget.api == null
+                    ? const Center(child: Text('请从应用入口打开更新检查'))
+                    : InstalledUpdatesPage(api: widget.api!, apps: _apps, active: _tabsController.index == 1),
+                DownloadCenterPage(showAppBar: false, active: _tabsController.index == 2),
+                DownloadCenterPage(showAppBar: false, packages: true, active: _tabsController.index == 3),
               ],
             ),
           ),
@@ -323,28 +321,6 @@ class _AppManagementPageState extends State<AppManagementPage>
     color: Theme.of(context).colorScheme.surfaceContainerHighest,
     alignment: Alignment.center,
     child: const Icon(Icons.android_rounded),
-  );
-
-  Widget _emptyTab(IconData icon, String title, String message) => Center(
-    child: Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 38, color: Theme.of(context).colorScheme.outline),
-          const SizedBox(height: 12),
-          Text(title, style: const TextStyle(fontSize: 16)),
-          const SizedBox(height: 8),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    ),
   );
 
   static int _number(dynamic value) =>

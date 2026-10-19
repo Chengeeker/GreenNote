@@ -196,6 +196,20 @@ Future<AccountLayoutApi> mountAccount(
 }
 
 void main() {
+  testWidgets(
+    'official collections use list with the account UID at every entry',
+    (tester) async {
+      final api = await mountAccount(tester);
+      expect(api.reads, contains('/v6/collection/list'));
+      expect(api.reads, isNot(contains('/v6/collection/myCollectionList')));
+      await tester.tap(find.text('我的收藏'));
+      await tester.pumpAndSettle();
+      final page = tester.widget<ApiListPage>(find.byType(ApiListPage));
+      expect(page.path, '/v6/collection/list');
+      expect(page.query, {'uid': '123', 'showDefault': 1});
+      expect(tester.takeException(), isNull);
+    },
+  );
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   testWidgets('应用管理入口打开本机应用列表而不要求开发者主页', (tester) async {

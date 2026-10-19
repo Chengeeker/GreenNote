@@ -10,6 +10,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'core/network/coolapk_api.dart';
+import 'core/services/reply_notification_service.dart';
+import 'features/settings/notification_center_page.dart';
+import 'features/shared/reply_notifications_page.dart';
 import 'core/network/http_overrides.dart';
 import 'core/settings/app_settings.dart';
 import 'core/design_system/components/review_navigation_bar.dart';
@@ -32,6 +35,7 @@ void main() async {
       512 * 1024 * 1024; // 512MB
   ErrorWidget.builder = (details) => const SizedBox.shrink();
   await LiquidGlassWidgets.initialize(enablePerformanceMonitor: false);
+  await ReplyNotificationRuntime.instance.initialize();
   runApp(
     LiquidGlassWidgets.wrap(
       child: const ProviderScope(child: GreennoteApp()),
@@ -103,7 +107,7 @@ class MainScaffold extends ConsumerStatefulWidget {
 }
 
 class _MainScaffoldState extends ConsumerState<MainScaffold>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   int _selectedIndex = 0;
   int _previousIndex = 0;
   int _accountRevision = 0;
@@ -120,6 +124,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _tabTransitionController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 260),
@@ -142,9 +147,25 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    ReplyNotificationRuntime.instance.detach(_initializedApi);
     _tabTransitionCurve.dispose();
     _tabTransitionController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_isTabTransitioning) return;
+    // An interrupted transition must not leave two pages between slots.
+    _tabTransitionController.stop();
+    setState(() {
+      _isTabTransitioning = false;
+      _previousIndex = _selectedIndex;
+      _tabIncomingTransition = const AlwaysStoppedAnimation(Offset.zero);
+      _tabOutgoingTransition = const AlwaysStoppedAnimation(Offset.zero);
+    });
+    _tabTransitionController.value = 1;
   }
 
   void _selectTab(int index) {
@@ -206,6 +227,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
   }
 
   void _accountChanged() {
+    unawaited(ReplyNotificationRuntime.instance.configure());
     if (mounted) setState(() => _accountRevision++);
   }
 
@@ -259,9 +281,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                         : index == _previousIndex && _isTabTransitioning
                         ? _tabOutgoingTransition
                         : const AlwaysStoppedAnimation(Offset.zero),
-                    child: RepaintBoundary(
-                      child: pages[index],
-                    ),
+                    child: RepaintBoundary(child: pages[index]),
                   ),
                 ),
               ),
@@ -463,6 +483,19 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
         data: (client) {
           if (!identical(_initializedApi, client)) {
             _initializedApi = client;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              ReplyNotificationRuntime.instance.attach(client, (replies) {
+                if (!mounted) return;
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => replies
+                        ? ReplyNotificationsPage(api: client)
+                        : NotificationCenterPage(api: client),
+                  ),
+                );
+              });
+            });
             CoolapkUrlHandler.initLinkListener(client);
             unawaited(
               client.loadHomeTabRoutes().then<void>((_) {}).catchError((_) {}),

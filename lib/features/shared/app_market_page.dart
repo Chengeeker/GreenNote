@@ -11,6 +11,7 @@ import '../feed/feed_pages.dart' show openHeadlineTarget;
 import '../feed/video_player_page.dart';
 import '../shell/main_pages.dart' show SearchResultsPage;
 import 'api_list_page.dart';
+import 'community_detail_page.dart';
 import 'app_management_page.dart';
 import 'app_detail_page.dart';
 import 'home_destination_page.dart' show officialHomeTheme;
@@ -132,7 +133,7 @@ class AppMarketPage extends StatelessWidget {
                   icon: const Icon(Icons.install_mobile_outlined),
                   onPressed: () => Navigator.of(context).push<void>(
                     MaterialPageRoute<void>(
-                      builder: (_) => const AppManagementPage(),
+                      builder: (_) => AppManagementPage(api: api),
                     ),
                   ),
                 ),
@@ -287,12 +288,12 @@ class MarketCard extends StatelessWidget {
         initialEntity: item,
       );
     } else if (type == 'album' || RegExp(r'^/album/\d+$').hasMatch(route)) {
-      page = _MarketAlbumPage(
+      page = CommunityDetailPage(
         api: api,
         id: _field(item, ['id', 'entityId']).isNotEmpty
             ? _field(item, ['id', 'entityId'])
             : route.split('/').last,
-        title: title,
+        kind: CommunityKind.album,
       );
     } else if (route.startsWith('/apk/') ||
         route.startsWith('/album/') ||
@@ -669,66 +670,4 @@ class MarketCard extends StatelessWidget {
       ],
     );
   }
-}
-
-class _MarketAlbumPage extends StatefulWidget {
-  const _MarketAlbumPage({
-    required this.api,
-    required this.id,
-    required this.title,
-  });
-  final CoolapkApi api;
-  final String id;
-  final String title;
-  @override
-  State<_MarketAlbumPage> createState() => _MarketAlbumPageState();
-}
-
-class _MarketAlbumPageState extends State<_MarketAlbumPage> {
-  late Future<dynamic> _detail = _load();
-  Future<dynamic> _load() =>
-      widget.api.request('/v6/album/detail', query: {'id': widget.id});
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.title)),
-    body: FutureBuilder<dynamic>(
-      future: _detail,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: TextButton(
-              onPressed: () => setState(() => _detail = _load()),
-              child: Text('${snapshot.error}\n点击重试'),
-            ),
-          );
-        }
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final root = snapshot.data;
-        final data = root is Map && root['data'] is Map
-            ? root['data'] as Map
-            : <String, dynamic>{};
-        return ApiListPage(
-          api: widget.api,
-          title: widget.title,
-          path: '/v6/album/apkList',
-          query: {'id': widget.id},
-          showAppBar: false,
-          header: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(_field(data, ['description', 'intro', 'title'])),
-          ),
-          itemBuilder: (context, item) => MarketCard(
-            api: widget.api,
-            data: {
-              ...item,
-              'entityType': 'apk',
-              'logo': item['pic'] ?? item['logo'],
-            },
-          ),
-        );
-      },
-    ),
-  );
 }

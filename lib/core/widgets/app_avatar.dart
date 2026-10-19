@@ -76,15 +76,7 @@ class AppAvatar extends StatelessWidget {
                 border: Border.all(color: colorScheme.surface, width: 1.5),
               ),
               child: Center(
-                child: Text(
-                  'v',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: size * 0.22,
-                    fontWeight: FontWeight.w900,
-                    height: 1.0,
-                  ),
-                ),
+                child: Icon(Icons.check_rounded, color: Colors.white, size: size * 0.25),
               ),
             ),
           ),

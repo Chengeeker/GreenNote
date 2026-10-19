@@ -30,9 +30,16 @@ import 'app_detail_page.dart';
 import 'activity_pages.dart';
 import '../../core/widgets/coolapk_rich_text.dart';
 import '../shell/main_pages.dart' show ComposeFeedPage;
+
 import 'dart:convert';
+
 import 'package:url_launcher/url_launcher.dart';
+
 import 'product_comparison_page.dart';
+import 'community_routes.dart';
+import 'community_library_page.dart';
+import 'community_detail_page.dart';
+import 'reply_notifications_page.dart';
 
 class ApiListPage extends StatefulWidget {
   const ApiListPage({
@@ -45,6 +52,7 @@ class ApiListPage extends StatefulWidget {
     this.header,
     this.overlapHandle,
     this.itemBuilder,
+    this.showAccessErrors = true,
     this.itemBuilderWithIndex,
     this.itemFilter,
     this.onPageItemsLoaded,
@@ -57,6 +65,7 @@ class ApiListPage extends StatefulWidget {
   final String path;
   final Map<String, dynamic> query;
   final bool showAppBar;
+  final bool showAccessErrors;
   final bool nested;
   final Widget? header;
   final SliverOverlapAbsorberHandle? overlapHandle;
@@ -222,16 +231,21 @@ class _ApiListPageState extends State<ApiListPage>
           ..._items.map(_entityKey),
           ..._bufferedItems.map(_entityKey),
         };
-        final newItems = page.items.where(
-          (item) =>
-              (widget.itemFilter?.call(item) ?? true) &&
-              known.add(_entityKey(item)),
-        ).toList();
+        final newItems = page.items
+            .where(
+              (item) =>
+                  (widget.itemFilter?.call(item) ?? true) &&
+                  known.add(_entityKey(item)),
+            )
+            .toList();
 
         if (newItems.length <= 4) {
           _items.addAll(newItems);
         } else {
-          final stage1Count = (newItems.length * 0.6).round().clamp(1, newItems.length);
+          final stage1Count = (newItems.length * 0.6).round().clamp(
+            1,
+            newItems.length,
+          );
           _items.addAll(newItems.take(stage1Count));
           _bufferedItems.addAll(newItems.skip(stage1Count));
         }
@@ -239,13 +253,15 @@ class _ApiListPageState extends State<ApiListPage>
         _page = next;
         if (page.firstItem.isNotEmpty) _first = page.firstItem;
         if (page.lastItem.isNotEmpty) _last = page.lastItem;
-        _more = page.hasMore && (page.items.isNotEmpty || _bufferedItems.isNotEmpty);
+        _more =
+            page.hasMore &&
+            (page.items.isNotEmpty || _bufferedItems.isNotEmpty);
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _bufferedItems.isEmpty) return;
         if (_scroll.hasClients &&
             (_scroll.position.maxScrollExtent <= 0 ||
-             _scroll.position.extentAfter < 500)) {
+                _scroll.position.extentAfter < 500)) {
           setState(() {
             _items.addAll(_bufferedItems);
             _bufferedItems.clear();
@@ -254,7 +270,8 @@ class _ApiListPageState extends State<ApiListPage>
       });
       final isSearchAll = path.contains('/v6/search') && query['type'] == 'all';
       final hasNoFeedsInSearchAll = isSearchAll && !_items.any(_isFeedEntity);
-      final shouldPreloadNext = refresh &&
+      final shouldPreloadNext =
+          refresh &&
           page.hasMore &&
           (_items.length <= 4 || hasNoFeedsInSearchAll);
       if (shouldPreloadNext) {
@@ -266,11 +283,6 @@ class _ApiListPageState extends State<ApiListPage>
       }
     } catch (error) {
       final errorStr = error.toString();
-      final isCaptchaOrRestricted =
-          errorStr.contains('验证码') ||
-          errorStr.contains('captcha') ||
-          errorStr.contains('403') ||
-          errorStr.contains('受限');
       if (path.contains('/feed/replyList') && query['id'] != null) {
         if (mounted) {
           try {
@@ -328,11 +340,9 @@ class _ApiListPageState extends State<ApiListPage>
       }
       if (mounted && requestVersion == _requestVersion) {
         setState(() {
-          if (isCaptchaOrRestricted || path.contains('/feed/replyList')) {
-            _error = null;
-          } else {
-            _error = errorStr;
-          }
+          _error = path.contains('/feed/replyList') && _items.isNotEmpty
+              ? null
+              : errorStr;
         });
       }
     } finally {
@@ -364,7 +374,8 @@ class _ApiListPageState extends State<ApiListPage>
         widget.path.contains('/collection/list') ||
         (widget.title.contains('收藏单') &&
             !widget.path.contains('/collection/itemlist'));
-    final isArticleList = widget.path == '/v6/user/htmlFeedList' ||
+    final isArticleList =
+        widget.path == '/v6/user/htmlFeedList' ||
         widget.path.contains('htmlFeedList') ||
         widget.path.contains('articleList') ||
         (widget.path.contains('/search') &&
@@ -398,21 +409,26 @@ class _ApiListPageState extends State<ApiListPage>
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            _error == null ||
-                                    _error!.contains('验证码') ||
-                                    _error!.contains('受限') ||
-                                    _error!.contains('限制') ||
-                                    _error!.toLowerCase().contains('captcha') ||
-                                    _error!.contains('403')
+                            widget.showAccessErrors && _error != null
+                                ? _error!
+                                : _error == null ||
+                                      _error!.contains('验证码') ||
+                                      _error!.contains('受限') ||
+                                      _error!.contains('限制') ||
+                                      _error!.toLowerCase().contains(
+                                        'captcha',
+                                      ) ||
+                                      _error!.contains('403')
                                 ? '暂无内容'
                                 : _error!,
                           ),
-                          if (_error != null &&
-                              !_error!.contains('验证码') &&
-                              !_error!.contains('受限') &&
-                              !_error!.contains('限制') &&
-                              !_error!.toLowerCase().contains('captcha') &&
-                              !_error!.contains('403'))
+                          if ((widget.showAccessErrors && _error != null) ||
+                              (_error != null &&
+                                  !_error!.contains('验证码') &&
+                                  !_error!.contains('受限') &&
+                                  !_error!.contains('限制') &&
+                                  !_error!.toLowerCase().contains('captcha') &&
+                                  !_error!.contains('403')))
                             TextButton(
                               onPressed: () => _retry(refresh: true),
                               child: const Text('重试'),
@@ -498,16 +514,14 @@ class _ApiListPageState extends State<ApiListPage>
               }
               final item = _items[itemIndex];
               final searchScope = SearchResultsScope.of(context);
-              final isSearchAll = searchScope != null &&
+              final isSearchAll =
+                  searchScope != null &&
                   widget.header == null &&
                   widget.path.contains('/v6/search') &&
                   widget.query['type'] == 'all';
 
-              final cardWidget = widget.itemBuilderWithIndex?.call(
-                    context,
-                    item,
-                    itemIndex,
-                  ) ??
+              final cardWidget =
+                  widget.itemBuilderWithIndex?.call(context, item, itemIndex) ??
                   widget.itemBuilder?.call(context, item) ??
                   (isTodayHeadline
                       ? _TodayCoolapkCard(
@@ -1016,10 +1030,11 @@ class ApiEntityCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final type = _value(['entityType', 'entity_type']).toLowerCase();
-    final template =
-        _value(['entityTemplate', 'entity_template']).toLowerCase();
+    final template = _value(['entityTemplate', 'entity_template'])
+        .toLowerCase();
     final feedType = _value(['feedType', 'feed_type']).toLowerCase();
-    final isArticle = articleLayout ||
+    final isArticle =
+        articleLayout ||
         type == 'article' ||
         type == 'feedarticle' ||
         type == 'feed_article' ||
@@ -1492,6 +1507,12 @@ class ApiEntityCard extends StatelessWidget {
     Map<String, dynamic>? item,
   ]) {
     final data = item ?? entity;
+    final specialized = communityPageForEntity(api, data);
+    if (specialized != null) {
+      Navigator.of(context)
+          .push<void>(MaterialPageRoute(builder: (_) => specialized));
+      return;
+    }
     final activity = activityGoodsUrl(data);
     if (activity != null) {
       openActivityDocument(
@@ -1527,12 +1548,7 @@ class ApiEntityCard extends StatelessWidget {
     if (type.contains('reply')) {
       Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
-          builder: (_) => ApiDetailPage(
-            api: api,
-            title: '评论详情',
-            path: '/v6/feed/replyDetail',
-            query: {'id': id},
-          ),
+          builder: (_) => ReplyThreadPage(api: api, id: id, initial: data),
         ),
       );
       return;
@@ -1657,11 +1673,11 @@ class _CollectionTile extends StatelessWidget {
           : () {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
-                  builder: (_) => ApiListPage(
+                  builder: (_) => CommunityDetailPage(
                     api: api,
-                    title: title.isEmpty ? '收藏单' : title,
-                    path: '/v6/collection/itemlist',
-                    query: {'id': id},
+                    id: id,
+                    kind: CommunityKind.collection,
+                    initial: entity,
                   ),
                 ),
               );
@@ -2620,59 +2636,22 @@ class _CoolPicPageState extends State<CoolPicPage> {
   }
 }
 
-class DyhPage extends StatefulWidget {
+class DyhPage extends StatelessWidget {
   const DyhPage({
+    super.key,
     required this.api,
     required this.id,
     required this.title,
-    super.key,
   });
-
   final CoolapkApi api;
   final String id;
   final String title;
-
   @override
-  State<DyhPage> createState() => _DyhPageState();
-}
-
-class _DyhPageState extends State<DyhPage> with SingleTickerProviderStateMixin {
-  static const _types = ['all', 'square'];
-  late final _tabs = TabController(length: _types.length, vsync: this);
-
-  @override
-  void dispose() {
-    _tabs.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: ReviewFrostedAppBar(
-      title: Text(widget.title),
-      bottom: TabBar(
-        controller: _tabs,
-        tabs: const [
-          Tab(text: '精选'),
-          Tab(text: '广场'),
-        ],
-      ),
-    ),
-    body: TabBarView(
-      controller: _tabs,
-      children: [
-        for (final type in _types)
-          ApiListPage(
-            key: ValueKey('dyh-${widget.id}-$type'),
-            api: widget.api,
-            title: widget.title,
-            path: '/v6/dyhArticle/list',
-            query: {'dyhId': widget.id, 'type': type},
-            showAppBar: false,
-            nested: true,
-          ),
-      ],
-    ),
+  Widget build(BuildContext context) => CommunityDetailPage(
+    api: api,
+    id: id,
+    kind: CommunityKind.dyh,
+    initial: {'title': title},
   );
 }
 
@@ -2740,7 +2719,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
             ? widget.api.localAccount.follows.containsKey(widget.uid)
             : _flag(_space, ['isFollow', 'is_follow', 'followed']);
         _blocked = _flag(_space, ['isBlackList', 'is_blocked', 'blocked']);
-        _apiBlocked = _flag(_space, ['isBlocked', 'is_block']);
+        _apiBlocked = _flag(_space, [
+          'isIgnore',
+          'isIgnored',
+          'isBlocked',
+          'is_block',
+        ]);
         _special = _flag(_space, ['isSpecialFollow', 'is_special_follow']);
       });
     } catch (error) {
@@ -2775,15 +2759,20 @@ class _UserSpacePageState extends State<UserSpacePage> {
 
   Future<bool> _userAction(
     String path, {
+    String method = 'POST',
+    Map<String, dynamic> query = const {},
     Map<String, dynamic> body = const {},
   }) async {
     if (_working) return false;
     setState(() => _working = true);
     try {
+      if (!widget.api.hasCookie) {
+        throw CoolapkApiException(widget.api.loginRequiredMessage);
+      }
       await widget.api.request(
         path,
-        method: 'POST',
-        query: {'uid': widget.uid},
+        method: method,
+        query: {'uid': widget.uid, ...query},
         body: body,
       );
       if (mounted) _snack(context, '操作已提交');
@@ -2820,6 +2809,7 @@ class _UserSpacePageState extends State<UserSpacePage> {
     }
     final changed = await _userAction(
       block ? '/v6/user/addToBlackList' : '/v6/user/removeFromBlackList',
+      method: 'GET',
     );
     if (mounted && changed) setState(() => _blocked = block);
   }
@@ -2849,7 +2839,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
       ),
     );
     if (value == null) return;
-    await _userAction('/v6/user/updateRemark', body: {'remark': value});
+    await _userAction(
+      '/v6/user/updateRemark',
+      body: {'uid': widget.uid, 'name': value},
+    );
   }
 
   Future<void> _setPublicIdentity() async {
@@ -2988,11 +2981,12 @@ class _UserSpacePageState extends State<UserSpacePage> {
   void _openRelations(String title, String path) =>
       Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
-          builder: (_) => ApiListPage(
+          builder: (_) => CommunityLibraryPage(
             api: widget.api,
-            title: title,
-            path: path,
-            query: {'uid': widget.uid},
+            uid: widget.uid,
+            library: path.toLowerCase().contains('fans')
+                ? CommunityLibrary.fans
+                : CommunityLibrary.following,
           ),
         ),
       );
@@ -3061,7 +3055,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   break;
                 case 'apiBlock':
                   _userAction(
-                    _apiBlocked ? '/v6/user/unblock' : '/v6/user/block',
+                    _apiBlocked
+                        ? '/v6/user/removeFromIgnoreList'
+                        : '/v6/user/addToIgnoreList',
+                    method: 'GET',
                   ).then((changed) {
                     if (mounted && changed) {
                       setState(() => _apiBlocked = !_apiBlocked);
@@ -3070,9 +3067,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
                   break;
                 case 'special':
                   _userAction(
-                    _special
-                        ? '/v6/user/cancelFollower'
-                        : '/v6/user/specialFollowUser',
+                    '/v6/user/specialFollowUser',
+                    query: {'special': _special ? 0 : 1},
                   ).then((changed) {
                     if (mounted && changed) {
                       setState(() => _special = !_special);
@@ -3813,14 +3809,15 @@ class _ProductPageState extends State<ProductPage>
   Future<void> _handleBuy() async {
     HapticFeedbackUtil.light();
     final raw = _detail ?? const <String, dynamic>{};
-    final explicitUrl = (raw['buy_url'] ??
-            raw['goods_buy_url'] ??
-            raw['jd_url'] ??
-            raw['mall_url'] ??
-            raw['shop_url'] ??
-            '')
-        .toString()
-        .trim();
+    final explicitUrl =
+        (raw['buy_url'] ??
+                raw['goods_buy_url'] ??
+                raw['jd_url'] ??
+                raw['mall_url'] ??
+                raw['shop_url'] ??
+                '')
+            .toString()
+            .trim();
 
     final productTitle = (raw['title'] ?? widget.title).toString().trim();
     final searchTitle = productTitle.isNotEmpty ? productTitle : '手机';
@@ -5117,13 +5114,17 @@ class _ProductSpecsFullViewState extends State<_ProductSpecsFullView>
 
     // 基本信息
     rows.add(('基本信息', null));
-    final releaseTime = (raw['release_time_txt'] ?? raw['release_time'] ?? '').toString();
+    final releaseTime = (raw['release_time_txt'] ?? raw['release_time'] ?? '')
+        .toString();
     if (releaseTime.isNotEmpty) rows.add(('上市时间', releaseTime));
     final price = (raw['price'] ?? raw['price_str'] ?? '').toString();
-    if (price.isNotEmpty) rows.add(('官方价格', price.startsWith('¥') ? price : '¥$price'));
+    if (price.isNotEmpty) {
+      rows.add(('官方价格', price.startsWith('¥') ? price : '¥$price'));
+    }
 
     // 性能
-    final chip = (raw['chip'] ?? raw['soc'] ?? raw['processor'] ?? '').toString();
+    final chip = (raw['chip'] ?? raw['soc'] ?? raw['processor'] ?? '')
+        .toString();
     if (chip.isNotEmpty) {
       rows.add(('性能与配置', null));
       rows.add(('处理器 / 芯片', chip));
@@ -5139,7 +5140,9 @@ class _ProductSpecsFullViewState extends State<_ProductSpecsFullView>
     final screenType = (raw['screen_type'] ?? '').toString();
     final resolution = (raw['screen_resolution'] ?? '').toString();
     final refreshRate = (raw['screen_refresh_rate'] ?? '').toString();
-    if (screenSize.isNotEmpty || screenType.isNotEmpty || resolution.isNotEmpty) {
+    if (screenSize.isNotEmpty ||
+        screenType.isNotEmpty ||
+        resolution.isNotEmpty) {
       rows.add(('屏幕规格', null));
       if (screenSize.isNotEmpty) rows.add(('屏幕尺寸', screenSize));
       if (screenType.isNotEmpty) rows.add(('材质 / 形态', screenType));
@@ -5152,7 +5155,9 @@ class _ProductSpecsFullViewState extends State<_ProductSpecsFullView>
     final cameraBrand = (raw['camera_brand'] ?? '').toString();
     if (mainCamera.isNotEmpty || cameraBrand.isNotEmpty) {
       rows.add(('影像系统', null));
-      if (cameraBrand.isNotEmpty && cameraBrand != '-') rows.add(('影像联名', cameraBrand));
+      if (cameraBrand.isNotEmpty && cameraBrand != '-') {
+        rows.add(('影像联名', cameraBrand));
+      }
       if (mainCamera.isNotEmpty) rows.add(('后置主摄', mainCamera));
     }
 
@@ -5161,12 +5166,18 @@ class _ProductSpecsFullViewState extends State<_ProductSpecsFullView>
     final charging = (raw['charging'] ?? '').toString();
     final thickness = (raw['thickness'] ?? '').toString();
     final weight = (raw['weight'] ?? '').toString();
-    if (battery.isNotEmpty || charging.isNotEmpty || thickness.isNotEmpty || weight.isNotEmpty) {
+    if (battery.isNotEmpty ||
+        charging.isNotEmpty ||
+        thickness.isNotEmpty ||
+        weight.isNotEmpty) {
       rows.add(('续航与机身', null));
       if (battery.isNotEmpty) rows.add(('电池容量', battery));
       if (charging.isNotEmpty) rows.add(('充电规格', charging));
       if (thickness.isNotEmpty || weight.isNotEmpty) {
-        rows.add(('机身尺寸', '$thickness / $weight'.replaceAll(RegExp(r'^/|/$'), '').trim()));
+        rows.add((
+          '机身尺寸',
+          '$thickness / $weight'.replaceAll(RegExp(r'^/|/$'), '').trim(),
+        ));
       }
     }
 
@@ -6195,13 +6206,13 @@ class _TopicPageState extends State<TopicPage>
     final initialImage = (widget.initialLogo?.isNotEmpty == true)
         ? widget.initialLogo!
         : ((widget.initialCover?.isNotEmpty == true)
-            ? widget.initialCover!
-            : '');
+              ? widget.initialCover!
+              : '');
     final resolvedLogo = logoUrl.isNotEmpty
         ? logoUrl
         : (initialImage.isNotEmpty
-            ? initialImage
-            : (DigitalSystemHelper.getSystemPresetLogo(displayTitle) ?? ''));
+              ? initialImage
+              : (DigitalSystemHelper.getSystemPresetLogo(displayTitle) ?? ''));
 
     if (resolvedLogo.isNotEmpty) {
       return GestureDetector(
@@ -6216,17 +6227,16 @@ class _TopicPageState extends State<TopicPage>
             fit: BoxFit.cover,
             errorBuilder: (_, _, _) =>
                 (initialImage.isNotEmpty && initialImage != resolvedLogo)
-                    ? CachedNetworkImage(
-                        normalizeCoolapkImageUrl(initialImage),
-                        headers:
-                            coolapkImageHeaders(initialImage, api: widget.api),
-                        width: 62,
-                        height: 62,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) =>
-                            _buildFallbackLogo(displayTitle, accentColor),
-                      )
-                    : _buildFallbackLogo(displayTitle, accentColor),
+                ? CachedNetworkImage(
+                    normalizeCoolapkImageUrl(initialImage),
+                    headers: coolapkImageHeaders(initialImage, api: widget.api),
+                    width: 62,
+                    height: 62,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) =>
+                        _buildFallbackLogo(displayTitle, accentColor),
+                  )
+                : _buildFallbackLogo(displayTitle, accentColor),
           ),
         ),
       );
@@ -6913,8 +6923,8 @@ class _TopicPageState extends State<TopicPage>
     final initialImage = (widget.initialLogo?.isNotEmpty == true)
         ? widget.initialLogo!
         : ((widget.initialCover?.isNotEmpty == true)
-            ? widget.initialCover!
-            : '');
+              ? widget.initialCover!
+              : '');
 
     var serverLogo = _first(_detail, ['logo', 'icon']);
     if (serverLogo.contains('none.gif') || serverLogo.contains('default_tag')) {
@@ -6924,8 +6934,8 @@ class _TopicPageState extends State<TopicPage>
     var logo = initialImage.isNotEmpty
         ? initialImage
         : (serverLogo.isNotEmpty
-            ? serverLogo
-            : _first(_detail, ['pic', 'avatar']));
+              ? serverLogo
+              : _first(_detail, ['pic', 'avatar']));
 
     var serverCover = _first(_detail, [
       'cover',
@@ -6934,7 +6944,8 @@ class _TopicPageState extends State<TopicPage>
       'bg_pic',
       'background_url',
     ]);
-    if (serverCover.contains('none.gif') || serverCover.contains('default_tag')) {
+    if (serverCover.contains('none.gif') ||
+        serverCover.contains('default_tag')) {
       serverCover = '';
     }
 

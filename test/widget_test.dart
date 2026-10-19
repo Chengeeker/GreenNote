@@ -281,7 +281,7 @@ void main() {
       await settings.setLiquidGlassNavBar(true);
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('liquid-glass-publish-action')),
+        find.byIcon(Icons.add_rounded),
         findsOneWidget,
       );
       expect(find.text('发布'), findsNothing);
@@ -290,7 +290,7 @@ void main() {
       expect(selected, 3);
       selected = -1;
       await tester.tap(
-        find.byKey(const ValueKey('liquid-glass-publish-action')),
+        find.byIcon(Icons.add_rounded),
       );
       expect(selected, 2);
       expect(tester.takeException(), isNull);

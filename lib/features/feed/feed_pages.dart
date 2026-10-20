@@ -180,34 +180,60 @@ class _FeedHomePageState extends State<FeedHomePage>
   }
 
   PreferredSizeWidget _buildChannelTabBar() => PreferredSize(
-    preferredSize: const Size.fromHeight(kTextTabBarHeight),
+    preferredSize: const Size.fromHeight(38),
     child: Builder(
-      builder: (context) => Row(
-        children: [
-          Expanded(
-            child: TabBar(
-              controller: _tabs,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              dividerColor: Colors.transparent,
-              indicatorSize: TabBarIndicatorSize.label,
-              onTap: (index) => _selectedId = _channels[index].id,
-              tabs: [for (final channel in _channels) Tab(text: channel.title)],
+      builder: (context) {
+        final theme = Theme.of(context);
+        final scheme = theme.colorScheme;
+        final isDark = theme.brightness == Brightness.dark;
+        return Row(
+          children: [
+            Expanded(
+              child: TabBar(
+                controller: _tabs,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                dividerColor: Colors.transparent,
+                indicator: const BoxDecoration(color: Colors.transparent),
+                indicatorColor: Colors.transparent,
+                indicatorWeight: 0.001,
+                labelColor: scheme.primary,
+                unselectedLabelColor: isDark
+                    ? const Color(0xFFC8C8C8)
+                    : const Color(0xFF4A4A4A),
+                labelStyle: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+                unselectedLabelStyle: const TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w500,
+                ),
+                labelPadding: const EdgeInsets.symmetric(horizontal: 14),
+                onTap: (index) => _selectedId = _channels[index].id,
+                tabs: [
+                  for (final channel in _channels)
+                    Tab(height: 38, text: channel.title),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            tooltip: '自定义频道',
-            onPressed: () {
-              setState(() {
-                _showChannels = true;
-                _editingChannels = false;
-              });
-              _syncTopBar();
-            },
-            icon: const Icon(Icons.menu_rounded),
-          ),
-        ],
-      ),
+            IconButton(
+              tooltip: '自定义频道',
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              iconSize: 20,
+              onPressed: () {
+                setState(() {
+                  _showChannels = true;
+                  _editingChannels = false;
+                });
+                _syncTopBar();
+              },
+              icon: const Icon(Icons.menu_rounded),
+            ),
+          ],
+        );
+      },
     ),
   );
 
@@ -478,7 +504,7 @@ class _FeedListPageState extends State<_FeedListPage>
   bool _reloadAfterRouteChange = false;
   String? _activeCategoryUrl;
   int _activeCategoryIndex = 0;
-  String _followFilter = '';
+  String _followFilter = 'circle';
   bool _needsRecovery = false;
   DateTime? _backgroundAt;
   bool _loadingRecent = false;
@@ -514,6 +540,10 @@ class _FeedListPageState extends State<_FeedListPage>
       } else {
         unawaited(_loadInitialHeadlineCache());
       }
+    }
+    if (widget.channel.id == 'follow') {
+      _followFilter = 'circle';
+      _activeCategoryUrl = followFilterRoute(widget.route, 'circle');
     }
     if (widget.channel.id != 'topic' &&
         (widget.channel.id != 'follow' || widget.api.hasCookie)) {
@@ -745,11 +775,13 @@ class _FeedListPageState extends State<_FeedListPage>
 
       setState(() {
         if (refresh) {
-          _feeds.clear();
-          _bufferedFeeds.clear();
+          if (newItems.isNotEmpty || _feeds.isEmpty) {
+            _feeds.clear();
+            _bufferedFeeds.clear();
+          }
         }
         if (refresh && (_banners.isEmpty || _activeCategoryUrl == null)) {
-          _banners = result.cards;
+          if (result.cards.isNotEmpty) _banners = result.cards;
         }
         if (widget.channel.id == 'follow') {
           final friends =
@@ -987,7 +1019,7 @@ class _FeedListPageState extends State<_FeedListPage>
           scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
           padding: EdgeInsets.fromLTRB(
             0,
-            6,
+            2,
             0,
             20 + MediaQuery.paddingOf(context).bottom,
           ),
@@ -2349,7 +2381,7 @@ class _ChannelIconGridCardTwoPageState
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
-            height: 78,
+            height: 66,
             child: protectHorizontalDragFromVerticalRefresh(
               filterHorizontalScrollNotifications(
                 PageView.builder(
@@ -2374,37 +2406,37 @@ class _ChannelIconGridCardTwoPageState
             ),
           ),
           if (pageCount > 1) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: 3),
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  width: _currentPage == 0 ? 14 : 6,
-                  height: 3.5,
+                  margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                  width: _currentPage == 0 ? 10 : 5,
+                  height: 2.5,
                   decoration: BoxDecoration(
                     color: _currentPage == 0
                         ? scheme.primary
                         : scheme.onSurfaceVariant.withValues(alpha: 0.35),
-                    borderRadius: BorderRadius.circular(2),
+                    borderRadius: BorderRadius.circular(1.5),
                   ),
                 ),
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  width: _currentPage == 1 ? 14 : 6,
-                  height: 3.5,
+                  margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                  width: _currentPage == 1 ? 10 : 5,
+                  height: 2.5,
                   decoration: BoxDecoration(
                     color: _currentPage == 1
                         ? scheme.primary
                         : scheme.onSurfaceVariant.withValues(alpha: 0.35),
-                    borderRadius: BorderRadius.circular(2),
+                    borderRadius: BorderRadius.circular(1.5),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
           ],
         ],
       ),
@@ -2423,7 +2455,7 @@ class _ChannelIconGridCardTwoPageState
         openHeadlineTarget(context, widget.api, item);
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(vertical: 2),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
@@ -2432,20 +2464,20 @@ class _ChannelIconGridCardTwoPageState
               CachedNetworkImage(
                 normalizeCoolapkImageUrl(pic),
                 headers: coolapkImageHeaders(pic, api: widget.api),
-                width: 44,
-                height: 44,
+                width: 36,
+                height: 36,
                 fit: BoxFit.contain,
                 errorBuilder: (_, _, _) => _solidIcon(title, scheme),
               )
             else
               _solidIcon(title, scheme),
-            const SizedBox(height: 5),
+            const SizedBox(height: 3),
             Text(
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 11.5,
                 color: scheme.onSurface,
                 fontWeight: FontWeight.w500,
               ),
@@ -2491,10 +2523,10 @@ class _ChannelIconGridCardTwoPageState
       bg = const Color(0xFF00C853);
     }
     return Container(
-      width: 44,
-      height: 44,
+      width: 36,
+      height: 36,
       decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
-      child: Icon(icon, color: Colors.white, size: 24),
+      child: Icon(icon, color: Colors.white, size: 20),
     );
   }
 }
@@ -2628,7 +2660,7 @@ class _ChannelMiniScrollCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: SizedBox(
-        height: 36,
+        height: 28,
         child: protectHorizontalDragFromVerticalRefresh(
           ListView.separated(
             scrollDirection: Axis.horizontal,
@@ -2642,21 +2674,21 @@ class _ChannelMiniScrollCard extends StatelessWidget {
                   .toString();
 
               return InkWell(
-                borderRadius: BorderRadius.circular(18),
+                borderRadius: BorderRadius.circular(14),
                 onTap: () {
                   HapticFeedbackUtil.selection();
                   openHeadlineTarget(context, api, item);
                 },
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
+                    horizontal: 8,
+                    vertical: 2,
                   ),
                   decoration: BoxDecoration(
                     color: scheme.surfaceContainerHighest.withValues(
                       alpha: 0.45,
                     ),
-                    borderRadius: BorderRadius.circular(18),
+                    borderRadius: BorderRadius.circular(14),
                     border: Border.all(
                       color: scheme.outlineVariant.withValues(alpha: 0.25),
                       width: 0.6,
@@ -2671,12 +2703,12 @@ class _ChannelMiniScrollCard extends StatelessWidget {
                           child: CachedNetworkImage(
                             normalizeCoolapkImageUrl(pic),
                             headers: coolapkImageHeaders(pic, api: api),
-                            width: 16,
-                            height: 16,
+                            width: 14,
+                            height: 14,
                             fit: BoxFit.cover,
                             errorBuilder: (_, _, _) => Icon(
                               Icons.phone_android_rounded,
-                              size: 14,
+                              size: 13,
                               color: scheme.primary,
                             ),
                           ),
@@ -2684,14 +2716,14 @@ class _ChannelMiniScrollCard extends StatelessWidget {
                       else
                         Icon(
                           Icons.phone_android_rounded,
-                          size: 14,
+                          size: 13,
                           color: scheme.primary,
                         ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 5),
                       Text(
                         title,
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 11.5,
                           color: scheme.onSurface,
                           fontWeight: FontWeight.w500,
                         ),
@@ -4103,7 +4135,7 @@ class _SearchPageState extends State<SearchPage>
           scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
           padding: EdgeInsets.fromLTRB(
             0,
-            6,
+            2,
             0,
             20 + MediaQuery.paddingOf(context).bottom,
           ),
@@ -4781,16 +4813,16 @@ class _FeedCardState extends State<FeedCard>
   Widget _buildQuickCommentBar(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(top: 8, bottom: 2),
+      padding: const EdgeInsets.only(top: 4, bottom: 2),
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         onTap: _openQuickReply,
         child: Container(
-          height: 36,
+          height: 28,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(14),
           ),
           child: Row(
             children: [
@@ -4800,15 +4832,15 @@ class _FeedCardState extends State<FeedCard>
                   try {
                     avatarUrl = widget.api.currentUserAvatar;
                   } catch (_) {}
-                  return AppAvatar(api: widget.api, url: avatarUrl, size: 22);
+                  return AppAvatar(api: widget.api, url: avatarUrl, size: 18);
                 },
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   '说点儿什么吧',
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 11.5,
                     color: scheme.onSurfaceVariant.withValues(alpha: 0.75),
                   ),
                 ),
@@ -4970,12 +5002,7 @@ class _FeedCardState extends State<FeedCard>
     final innerContent = Padding(
       padding: isDetail
           ? const EdgeInsets.symmetric(horizontal: 14, vertical: 6)
-          : EdgeInsets.fromLTRB(
-              productPrice == null ? 12 : 14,
-              12,
-              productPrice == null ? 12 : 14,
-              8,
-            ),
+          : const EdgeInsets.fromLTRB(12, 10, 12, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4995,11 +5022,9 @@ class _FeedCardState extends State<FeedCard>
                       url: feed.avatar,
                       size: (widget.articleLayout || isArticle)
                           ? 38
-                          : widget.officialLayout
-                          ? 32
-                          : productPrice != null
-                          ? 38
-                          : 42,
+                          : isDetail
+                          ? 40
+                          : 36,
                       name: feed.username,
                     ),
                   ),
@@ -5028,9 +5053,9 @@ class _FeedCardState extends State<FeedCard>
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    fontSize: productPrice != null ? 16 : 15,
+                                    fontSize: productPrice != null ? 15.5 : 14.5,
                                     fontWeight: context.adjustWeight(
-                                      FontWeight.bold,
+                                      FontWeight.w600,
                                     ),
                                     color: scheme.onSurface,
                                   ),
@@ -5477,8 +5502,8 @@ class _FeedCardState extends State<FeedCard>
                   api: widget.api,
                   text: feed.message.trimRight(),
                   style: TextStyle(
-                    fontSize: 16,
-                    height: 1.4,
+                    fontSize: 14.5,
+                    height: 1.38,
                     color: scheme.onSurface,
                   ),
                   lines: 6,
@@ -5522,8 +5547,12 @@ class _FeedCardState extends State<FeedCard>
                   maxLines: 8,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: productPrice != null ? 17.5 : 16,
-                    height: productPrice != null ? 1.4 : 1.3,
+                    fontSize: (widget.officialLayout || widget.isHeadline)
+                        ? (productPrice != null ? 15.5 : 14.5)
+                        : (productPrice != null ? 17.5 : 16),
+                    height: (widget.officialLayout || widget.isHeadline)
+                        ? 1.38
+                        : (productPrice != null ? 1.4 : 1.3),
                     color: scheme.onSurface,
                   ),
                 ),

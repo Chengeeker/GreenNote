@@ -733,6 +733,8 @@ void main() {
 
 class _FakeCoolapkApi implements CoolapkApi {
   @override
+  final ValueNotifier<int> accountProfileRevision = ValueNotifier<int>(0);
+  @override
   late final LocalAccount localAccount;
   @override
   bool get isAnonymous => anonymousValue;

@@ -152,7 +152,8 @@ class _OfficialNotificationCenterPageState
   Widget _shortcut(
     String title,
     IconData icon,
-    Color color,
+    Color iconColor,
+    Color bgColor,
     String countKey,
     VoidCallback onTap,
   ) {
@@ -160,26 +161,32 @@ class _OfficialNotificationCenterPageState
     return Expanded(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 18),
+          padding: const EdgeInsets.symmetric(vertical: 8),
           child: Column(
             children: [
               Badge(
                 isLabelVisible: count > 0,
                 label: Text(count > 99 ? '99+' : '$count'),
                 child: Container(
-                  width: 64,
-                  height: 64,
+                  width: 52,
+                  height: 52,
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(16),
+                    color: bgColor,
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                  child: Icon(icon, color: color, size: 32),
+                  child: Icon(icon, color: iconColor, size: 25),
                 ),
               ),
-              const SizedBox(height: 10),
-              Text(title, style: const TextStyle(fontSize: 16)),
+              const SizedBox(height: 7),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.normal,
+                ),
+              ),
             ],
           ),
         ),
@@ -191,6 +198,9 @@ class _OfficialNotificationCenterPageState
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final background = dark ? const Color(0xFF1E1E1E) : Colors.white;
+    final likeBg = dark ? const Color(0xFF332020) : const Color(0xFFFFEBEE);
+    final followBg = dark ? const Color(0xFF1B2838) : const Color(0xFFE3F2FD);
+    final messageBg = dark ? const Color(0xFF362817) : const Color(0xFFFFF3E0);
     return Theme(
       data: Theme.of(context).copyWith(
         scaffoldBackgroundColor: background,
@@ -208,25 +218,30 @@ class _OfficialNotificationCenterPageState
           centerTitle: false,
           backgroundColor: background,
           showBottomBorder: false,
-          toolbarHeight: 64,
+          toolbarHeight: 52,
           titleTextStyle: Theme.of(context).textTheme.titleLarge!.copyWith(
-            fontSize: 23,
+            fontSize: 19,
+            fontWeight: FontWeight.bold,
             color: dark ? const Color(0xFFD1D1D1) : const Color(0xFF222222),
           ),
           actions: [
             IconButton(
               tooltip: '设为全部已读',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
               onPressed: _working || !widget.api.hasCookie
                   ? null
                   : () => _action(clear: false),
-              icon: const _ReadAllIcon(),
+              icon: const Icon(Icons.done_all_rounded, size: 22),
             ),
             IconButton(
               tooltip: '清除通知',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
               onPressed: _working || !widget.api.hasCookie
                   ? null
                   : () => _action(clear: true),
-              icon: const Icon(Icons.delete_outline_rounded, size: 27),
+              icon: const Icon(Icons.delete_outline_rounded, size: 22),
             ),
             const SizedBox(width: 8),
           ],
@@ -240,13 +255,14 @@ class _OfficialNotificationCenterPageState
                 api: widget.api,
                 showAppBar: false,
                 header: Padding(
-                  padding: const EdgeInsets.fromLTRB(28, 0, 28, 14),
+                  padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
                   child: Row(
                     children: [
                       _shortcut(
                         '点赞',
                         Icons.thumb_up_alt_rounded,
-                        const Color(0xFFF44336),
+                        const Color(0xFFE53935),
+                        likeBg,
                         'feedlike',
                         () => _open(
                           '收到的赞',
@@ -261,6 +277,7 @@ class _OfficialNotificationCenterPageState
                         '关注',
                         Icons.person_rounded,
                         const Color(0xFF2196F3),
+                        followBg,
                         'contacts_follow',
                         () => _open(
                           '关注',
@@ -274,9 +291,18 @@ class _OfficialNotificationCenterPageState
                       _shortcut(
                         '私信',
                         Icons.mail_rounded,
-                        const Color(0xFFFF9800),
+                        const Color(0xFFFB8C00),
+                        messageBg,
                         'message',
-                        () => _open('私信', widget.messagesBuilder),
+                        () async {
+                          await Navigator.of(context).push<void>(
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  widget.messagesBuilder(context),
+                            ),
+                          );
+                          if (mounted) _loadCounts();
+                        },
                       ),
                     ],
                   ),
@@ -288,44 +314,4 @@ class _OfficialNotificationCenterPageState
       ),
     );
   }
-}
-
-class _ReadAllIcon extends StatelessWidget {
-  const _ReadAllIcon();
-  @override
-  Widget build(BuildContext context) => CustomPaint(
-    size: const Size(28, 28),
-    painter: _ReadAllPainter(IconTheme.of(context).color ?? Colors.grey),
-  );
-}
-
-class _ReadAllPainter extends CustomPainter {
-  _ReadAllPainter(this.color);
-  final Color color;
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    canvas.drawPath(
-      Path()
-        ..moveTo(3, 14)
-        ..lineTo(9, 23)
-        ..lineTo(20, 4),
-      paint,
-    );
-    for (var i = 0; i < 3; i++) {
-      canvas.drawLine(
-        Offset(21 - i * 2, 16 + i * 4),
-        Offset(25, 16 + i * 4),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_ReadAllPainter oldDelegate) => oldDelegate.color != color;
 }

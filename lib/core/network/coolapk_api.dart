@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -6,7 +7,7 @@ import 'package:bcrypt/bcrypt.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
-import 'package:flutter/foundation.dart' show FlutterError;
+import 'package:flutter/foundation.dart' show FlutterError, ValueNotifier;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,7 +29,11 @@ Future<Uint8List> loadCoolapkAuthBlob(AssetBundle bundle) async {
 }
 
 final coolapkApiProvider = FutureProvider<CoolapkApi>((ref) async {
-  return CoolapkApi.create();
+  final api = await CoolapkApi.create();
+  if (api.hasCookie) {
+    unawaited(api.checkLogin().catchError((Object _) => <String, dynamic>{}));
+  }
+  return api;
 });
 
 class CoolapkApi {
@@ -38,6 +43,7 @@ class CoolapkApi {
     this._secureStorage,
     this._cookie,
     this.localAccount,
+    this._preferences,
   );
 
   static const _apiCode = 2604201;
@@ -46,6 +52,8 @@ class CoolapkApi {
   _CoolapkAuth _auth;
   final FlutterSecureStorage _secureStorage;
   final LocalAccount localAccount;
+  final SharedPreferences _preferences;
+  final ValueNotifier<int> accountProfileRevision = ValueNotifier<int>(0);
   final _localUsers = <String, Map<String, dynamic>>{};
   String _cookie;
   String? guestSessionCookie;
@@ -170,13 +178,23 @@ class CoolapkApi {
           },
         );
     const secureStorage = FlutterSecureStorage();
-    return CoolapkApi._(
+    final api = CoolapkApi._(
       dio,
       auth,
       secureStorage,
       await secureStorage.read(key: 'coolapk_cookie') ?? '',
       LocalAccount(preferences),
+      preferences,
     ).._hasOfficialDeviceIdentity = hasOfficial;
+
+    if (api.hasCookie) {
+      api._currentUid = preferences.getString('cached_user_uid') ?? '';
+      api._currentUserAvatar =
+          preferences.getString('cached_user_avatar') ?? '';
+      api._currentUserNickname =
+          preferences.getString('cached_user_nickname') ?? '';
+    }
+    return api;
   }
 
   Future<void> importOfficialDeviceIdentity(String text) async {
@@ -250,6 +268,7 @@ class CoolapkApi {
   void close() {
     _dio.close(force: true);
     localAccount.dispose();
+    accountProfileRevision.dispose();
   }
 
   Map<String, String> imageHeadersFor() {
@@ -280,14 +299,16 @@ class CoolapkApi {
     if (value.isEmpty || value.contains('\r') || value.contains('\r\n')) {
       throw const CoolapkApiException('Cookie 格式无效');
     }
+    final preferences = await SharedPreferences.getInstance();
     final candidate = CoolapkApi._(
       _dio.clone(),
       _auth,
       _secureStorage,
       value,
-      LocalAccount(await SharedPreferences.getInstance())
+      LocalAccount(preferences)
         ..active = false
         ..cookieEnabled = true,
+      preferences,
     );
     await candidate.checkLogin();
     if (candidate._auth.deviceCode != _auth.deviceCode) {
@@ -300,6 +321,10 @@ class CoolapkApi {
     _currentUid = candidate.currentUid;
     _currentUserAvatar = candidate.currentUserAvatar;
     _currentUserNickname = candidate.currentUserNickname;
+    await _preferences.setString('cached_user_uid', _currentUid);
+    await _preferences.setString('cached_user_avatar', _currentUserAvatar);
+    await _preferences.setString('cached_user_nickname', _currentUserNickname);
+    accountProfileRevision.value++;
     await localAccount.setActive(false, enableCookie: true);
   }
 
@@ -317,6 +342,10 @@ class CoolapkApi {
       _currentUid = '';
       _currentUserAvatar = '';
       _currentUserNickname = '';
+      await _preferences.remove('cached_user_uid');
+      await _preferences.remove('cached_user_avatar');
+      await _preferences.remove('cached_user_nickname');
+      accountProfileRevision.value++;
       await _secureStorage.delete(key: 'coolapk_cookie');
     }
   }
@@ -326,22 +355,36 @@ class CoolapkApi {
     final data = response['data'];
     final result = data is Map ? Map<String, dynamic>.from(data) : response;
     final user = result['userInfo'] ?? result['user_info'];
-    _currentUid = _string(
+    final newUid = _string(
       result['uid'] ??
           result['userId'] ??
           result['id'] ??
           (user is Map ? user['uid'] ?? user['id'] : null),
     );
-    _currentUserAvatar = _string(
+    final newAvatar = _string(
       result['userAvatar'] ??
           result['avatar'] ??
           (user is Map ? user['userAvatar'] ?? user['avatar'] : null),
     );
-    _currentUserNickname = _string(
+    final newNickname = _string(
       result['username'] ??
           result['userName'] ??
           (user is Map ? user['username'] ?? user['userName'] : null),
     );
+    final changed = _currentUid != newUid ||
+        _currentUserAvatar != newAvatar ||
+        _currentUserNickname != newNickname;
+    _currentUid = newUid;
+    _currentUserAvatar = newAvatar;
+    _currentUserNickname = newNickname;
+    if (hasCookie) {
+      await _preferences.setString('cached_user_uid', _currentUid);
+      await _preferences.setString('cached_user_avatar', _currentUserAvatar);
+      await _preferences.setString('cached_user_nickname', _currentUserNickname);
+    }
+    if (changed) {
+      accountProfileRevision.value++;
+    }
     return response;
   }
 
@@ -991,19 +1034,87 @@ class CoolapkApi {
     String firstItem = '',
     String lastItem = '',
   }) async {
-    final headline = route == '/v6/main/headline' || route == '/main/headline';
-    final cardsFuture = headline && page == 1
-        ? _get('/v6/main/indexV8', {
-                'page': 1,
-                'firstLaunch': 0,
-                'installTime': 0,
-                'firstItem': '',
-                'lastItem': '',
-                'ids': '',
-              })
-              .then(_extractCards)
-              .catchError((Object _) => <Map<String, dynamic>>[])
-        : Future.value(<Map<String, dynamic>>[]);
+    final headline = route == '/v6/main/headline' ||
+        route == '/main/headline' ||
+        route == '/v6/main/indexV8' ||
+        route == '/main/indexV8';
+
+    if (headline) {
+      if (page == 1) {
+        final v8Future = _get('/v6/main/indexV8', {
+          'page': 1,
+          'firstLaunch': 0,
+          'installTime': 0,
+          'firstItem': '',
+          'lastItem': '',
+          'ids': '',
+        }).catchError((Object _) => <String, dynamic>{});
+
+        final headlineFuture = _get('/v6/main/headline', {
+          'page': 1,
+          'firstItem': '',
+          'lastItem': '',
+        }).catchError((Object _) => <String, dynamic>{});
+
+        final v8Root = await v8Future;
+        final headlineRoot = await headlineFuture;
+
+        final v8Cards = _extractCards(v8Root);
+        final headlineCards = _extractCards(headlineRoot);
+        final channelCards = v8Cards.isNotEmpty ? v8Cards : headlineCards;
+
+        final headlineFeeds = _extractFeeds(headlineRoot);
+        final v8Feeds = _extractFeeds(v8Root);
+
+        final seenIds = <String>{};
+        final items = <CoolapkFeed>[];
+        for (final feed in [...headlineFeeds, ...v8Feeds]) {
+          if (feed.id.isNotEmpty && seenIds.add(feed.id)) {
+            items.add(feed);
+          }
+        }
+
+        final effectiveV8Last = _string(v8Root['lastItem']).isNotEmpty
+            ? _string(v8Root['lastItem'])
+            : (v8Feeds.lastOrNull?.id ?? '');
+        final lastItemId = effectiveV8Last.isNotEmpty
+            ? effectiveV8Last
+            : (items.lastOrNull?.id ?? '');
+        final firstItemId = _string(v8Root['firstItem']).isNotEmpty
+            ? _string(v8Root['firstItem'])
+            : (items.firstOrNull?.id ?? '');
+
+        return FeedPage(
+          items: items,
+          cards: channelCards,
+          firstItem: firstItemId,
+          lastItem: lastItemId,
+          hasMore: items.isNotEmpty,
+        );
+      } else {
+        final query = <String, dynamic>{
+          'page': page,
+          'firstLaunch': 0,
+          'installTime': 0,
+          'firstItem': firstItem,
+          'lastItem': lastItem,
+          'ids': '',
+        };
+        final root = await _get('/v6/main/indexV8', query);
+        final items = _extractFeeds(root);
+        return FeedPage(
+          items: items,
+          cards: const [],
+          firstItem: _string(root['firstItem']).isNotEmpty
+              ? _string(root['firstItem'])
+              : items.firstOrNull?.id ?? '',
+          lastItem: _string(root['lastItem']).isNotEmpty
+              ? _string(root['lastItem'])
+              : items.lastOrNull?.id ?? '',
+          hasMore: _hasMore(root, items.length, allowShortPage: true),
+        );
+      }
+    }
 
     final String path;
     final Map<String, dynamic> query = {
@@ -1012,9 +1123,7 @@ class CoolapkApi {
       'lastItem': lastItem,
     };
 
-    if (headline) {
-      path = '/v6/main/headline';
-    } else if (route.startsWith('#/')) {
+    if (route.startsWith('#/')) {
       path = '/v6/page/dataList';
       query['url'] = route;
     } else if (route.startsWith('/page')) {
@@ -1038,20 +1147,8 @@ class CoolapkApi {
 
     final root = await _get(path, query);
     final items = _extractFeeds(root);
-    final List<Map<String, dynamic>> channelCards;
-    if (page == 1) {
-      final rootCards = _extractCards(root);
-      if (rootCards.isNotEmpty) {
-        channelCards = rootCards;
-      } else if (headline) {
-        final v8Cards = await cardsFuture;
-        channelCards = v8Cards.isNotEmpty ? v8Cards : rootCards;
-      } else {
-        channelCards = rootCards;
-      }
-    } else {
-      channelCards = const [];
-    }
+    final channelCards =
+        page == 1 ? _extractCards(root) : const <Map<String, dynamic>>[];
     return FeedPage(
       items: items,
       cards: channelCards,
@@ -1061,7 +1158,7 @@ class CoolapkApi {
       lastItem: _string(root['lastItem']).isNotEmpty
           ? _string(root['lastItem'])
           : items.lastOrNull?.id ?? '',
-      hasMore: _hasMore(root, items.length, allowShortPage: headline),
+      hasMore: _hasMore(root, items.length),
     );
   }
 
@@ -1378,6 +1475,8 @@ class CoolapkApi {
     }
     return _uploadImage(bytes, currentUid, message: false);
   }
+
+  Future<String> uploadFeedImage(Uint8List bytes) => uploadReplyImage(bytes);
 
   Future<String> _uploadImage(
     Uint8List bytes,

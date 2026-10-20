@@ -50,7 +50,7 @@ class _DigitalPageState extends State<DigitalPage>
   }
 
   PreferredSizeWidget _buildTabBar() => PreferredSize(
-    preferredSize: const Size.fromHeight(kTextTabBarHeight),
+    preferredSize: const Size.fromHeight(38),
     child: Builder(
       builder: (context) {
         final colorScheme = Theme.of(context).colorScheme;
@@ -72,7 +72,7 @@ class _DigitalPageState extends State<DigitalPage>
             fontSize: 15,
             fontWeight: FontWeight.normal,
           ),
-          tabs: [for (final tab in _tabs) Tab(text: tab.title)],
+          tabs: [for (final tab in _tabs) Tab(height: 38, text: tab.title)],
         );
       },
     ),

@@ -1,4 +1,5 @@
 import 'features/account/local_account_page.dart';
+import 'features/shared/api_list_page.dart' show UserSpacePage;
 
 import 'dart:async';
 import 'dart:io';
@@ -220,8 +221,8 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
       return _pageTabBars[_selectedIndex];
     }
     return const PreferredSize(
-      preferredSize: Size.fromHeight(kTextTabBarHeight),
-      child: SizedBox(height: kTextTabBarHeight),
+      preferredSize: Size.fromHeight(38),
+      child: SizedBox(height: 38),
     );
   }
 
@@ -421,7 +422,20 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
         padding: const EdgeInsets.only(left: 14),
         child: Center(
           child: GestureDetector(
-            onTap: () => _selectTab(3),
+            onTap: () {
+              final uid = client.isAnonymous
+                  ? (client.localAccount.publicIdentity?['uid'] as String?)
+                  : client.currentUid;
+              if (uid != null && uid.isNotEmpty) {
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => UserSpacePage(api: client, uid: uid),
+                  ),
+                );
+              } else {
+                _selectTab(3);
+              }
+            },
             child:
                 client.isAnonymous && client.localAccount.publicIdentity == null
                 ? LocalAvatar(
@@ -522,14 +536,16 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                   hasBottomInset: MediaQuery.paddingOf(context).bottom > 0,
                   onSelected: (index) {
                     if (index == 2) {
+                      HapticFeedbackUtil.light();
                       if (client.isAnonymous) {
                         AppToast.show(context, client.loginRequiredMessage);
                         return;
                       }
-                      Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => ComposeFeedPage(api: client),
-                        ),
+                      showModalBottomSheet<void>(
+                        context: context,
+                        backgroundColor: Colors.transparent,
+                        isScrollControlled: true,
+                        builder: (_) => CoolapkPublishPickerSheet(api: client),
                       );
                     } else {
                       _selectTab(index > 2 ? index - 1 : index);

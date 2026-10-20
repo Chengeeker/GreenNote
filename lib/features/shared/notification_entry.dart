@@ -196,18 +196,18 @@ class _NotificationEntryState extends State<NotificationEntry> {
     final textColor = dark ? const Color(0xFFCCCCCC) : const Color(0xFF292929);
     final muted = dark ? const Color(0xFF8C8C8C) : const Color(0xFF888888);
     final uid = actor.uid;
-    final bodyStyle = TextStyle(fontSize: 15, height: 1.35, color: textColor);
+    final bodyStyle = TextStyle(fontSize: 14, height: 1.35, color: textColor);
     return InkWell(
       onTap: _open,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (parts.system)
               Container(
-                width: 46,
-                height: 46,
+                width: 38,
+                height: 38,
                 decoration: const BoxDecoration(
                   color: Color(0xFFA767FF),
                   shape: BoxShape.circle,
@@ -215,7 +215,7 @@ class _NotificationEntryState extends State<NotificationEntry> {
                 child: const Icon(
                   Icons.notifications_rounded,
                   color: Colors.white,
-                  size: 27,
+                  size: 21,
                 ),
               )
             else
@@ -231,10 +231,10 @@ class _NotificationEntryState extends State<NotificationEntry> {
                   api: widget.api,
                   url: avatar,
                   name: parts.sender,
-                  size: 46,
+                  size: 38,
                 ),
               ),
-            const SizedBox(width: 13),
+            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -249,23 +249,33 @@ class _NotificationEntryState extends State<NotificationEntry> {
                             Text.rich(
                               TextSpan(
                                 children: [
-                                  TextSpan(text: parts.sender),
+                                  TextSpan(
+                                    text: parts.sender,
+                                    style: TextStyle(
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w500,
+                                      color: textColor,
+                                    ),
+                                  ),
                                   if (parts.action.isNotEmpty)
                                     TextSpan(
                                       text: ' ${parts.action}',
-                                      style: const TextStyle(fontSize: 15),
+                                      style: TextStyle(
+                                        fontSize: 13.5,
+                                        fontWeight: FontWeight.normal,
+                                        color: muted,
+                                      ),
                                     ),
                                 ],
                               ),
                               style: TextStyle(
-                                fontSize: 17,
                                 height: 1.3,
                                 color: textColor,
                               ),
                             ),
                             if (parts.content.isNotEmpty)
                               Padding(
-                                padding: const EdgeInsets.only(top: 7),
+                                padding: const EdgeInsets.only(top: 5),
                                 child: CoolapkRichText(
                                   api: widget.api,
                                   text: parts.content,
@@ -275,13 +285,13 @@ class _NotificationEntryState extends State<NotificationEntry> {
                               ),
                             if (quote.isNotEmpty)
                               Container(
-                                margin: const EdgeInsets.only(top: 6),
+                                margin: const EdgeInsets.only(top: 5),
                                 padding: const EdgeInsets.only(left: 8),
                                 decoration: BoxDecoration(
                                   border: Border(
                                     left: BorderSide(
                                       color: muted.withValues(alpha: .3),
-                                      width: 3,
+                                      width: 2.5,
                                     ),
                                   ),
                                 ),
@@ -291,7 +301,10 @@ class _NotificationEntryState extends State<NotificationEntry> {
                                     'message',
                                     'note',
                                   ]),
-                                  style: bodyStyle.copyWith(color: muted),
+                                  style: bodyStyle.copyWith(
+                                    fontSize: 13,
+                                    color: muted,
+                                  ),
                                   maxLines: 1,
                                 ),
                               ),
@@ -300,16 +313,17 @@ class _NotificationEntryState extends State<NotificationEntry> {
                       ),
                       if (!parts.system && previewText.isNotEmpty)
                         Padding(
-                          padding: const EdgeInsets.only(left: 14),
+                          padding: const EdgeInsets.only(left: 10),
                           child: SizedBox(
-                            width: 50,
+                            width: 68,
                             child: Text(
                               html.parseFragment(previewText).text ?? '',
                               maxLines: 3,
                               overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.end,
                               style: TextStyle(
-                                fontSize: 12,
-                                height: 1.2,
+                                fontSize: 11.5,
+                                height: 1.25,
                                 color: muted,
                               ),
                             ),
@@ -317,7 +331,7 @@ class _NotificationEntryState extends State<NotificationEntry> {
                         ),
                     ],
                   ),
-                  const SizedBox(height: 7),
+                  const SizedBox(height: 5),
                   Row(
                     children: [
                       Expanded(
@@ -329,7 +343,7 @@ class _NotificationEntryState extends State<NotificationEntry> {
                               'timestamp',
                             ]),
                           ),
-                          style: TextStyle(fontSize: 13, color: muted),
+                          style: TextStyle(fontSize: 12, color: muted),
                         ),
                       ),
                       if (!parts.system &&
@@ -338,16 +352,23 @@ class _NotificationEntryState extends State<NotificationEntry> {
                         IconButton(
                           tooltip: _liked ? '取消点赞评论' : '点赞评论',
                           onPressed: _busy ? null : () => _like(replyId),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 28,
+                          ),
+                          visualDensity: VisualDensity.compact,
                           icon: Icon(
                             _liked
                                 ? Icons.thumb_up_alt_rounded
                                 : Icons.thumb_up_alt_outlined,
-                            size: 20,
+                            size: 18,
                             color: _liked
                                 ? Theme.of(context).colorScheme.primary
                                 : muted,
                           ),
                         ),
+                        const SizedBox(width: 8),
                         IconButton(
                           tooltip: '回复评论',
                           onPressed: () => Navigator.push(
@@ -357,17 +378,23 @@ class _NotificationEntryState extends State<NotificationEntry> {
                                   ReplyThreadPage(api: widget.api, id: replyId),
                             ),
                           ),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 28,
+                          ),
+                          visualDensity: VisualDensity.compact,
                           icon: Icon(
                             Icons.chat_outlined,
-                            size: 20,
+                            size: 18,
                             color: muted,
                           ),
                         ),
-                        const SizedBox(width: 46),
+                        const SizedBox(width: 4),
                       ],
                     ],
                   ),
-                  const SizedBox(height: 11),
+                  const SizedBox(height: 10),
                   Divider(height: 1, color: muted.withValues(alpha: .13)),
                 ],
               ),

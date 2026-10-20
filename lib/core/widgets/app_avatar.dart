@@ -8,6 +8,7 @@ import '../utils/haptic_feedback_util.dart';
 /// Material You Avatar Widget with Graceful Error Fallback and Verified Badges
 class AppAvatar extends StatelessWidget {
   final String? url;
+  final String? avatarFrame;
   final CoolapkApi? api;
   final double size;
   final String name;
@@ -18,6 +19,7 @@ class AppAvatar extends StatelessWidget {
   const AppAvatar({
     super.key,
     required this.url,
+    this.avatarFrame,
     this.api,
     this.size = 42,
     this.name = '',
@@ -63,6 +65,27 @@ class AppAvatar extends StatelessWidget {
       clipBehavior: Clip.none,
       children: [
         ClipOval(child: avatarImage),
+        if (avatarFrame != null && normalizeCoolapkImageUrl(avatarFrame!).isNotEmpty)
+          Positioned(
+            left: -size * 0.18,
+            top: -size * 0.18,
+            right: -size * 0.18,
+            bottom: -size * 0.18,
+            child: IgnorePointer(
+              child: ExtendedImage.network(
+                normalizeCoolapkImageUrl(avatarFrame!),
+                headers: coolapkImageHeaders(avatarFrame!, api: api),
+                fit: BoxFit.contain,
+                cache: true,
+                loadStateChanged: (state) {
+                  if (state.extendedImageLoadState == LoadState.failed) {
+                    return const SizedBox.shrink();
+                  }
+                  return null;
+                },
+              ),
+            ),
+          ),
         if (verified)
           Positioned(
             right: 0,

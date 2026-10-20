@@ -89,7 +89,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
   }
 
   PreferredSizeWidget _buildTabBar() => PreferredSize(
-    preferredSize: const Size.fromHeight(kTextTabBarHeight),
+    preferredSize: const Size.fromHeight(38),
     child: Builder(
       builder: (context) {
         final colors = Theme.of(context).colorScheme;
@@ -111,7 +111,7 @@ class _DiscoveryPageState extends State<DiscoveryPage>
           ),
           unselectedLabelColor: colors.onSurfaceVariant,
           unselectedLabelStyle: const TextStyle(fontSize: 16),
-          tabs: [for (final channel in _channels) Tab(text: channel.title)],
+          tabs: [for (final channel in _channels) Tab(height: 38, text: channel.title)],
         );
       },
     ),
@@ -1156,6 +1156,8 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
   bool _more = true;
   bool _errorOnRefresh = false;
   int _page = 0;
+  bool _isSelecting = false;
+  final Set<String> _selectedUkeys = {};
 
   @override
   void initState() {
@@ -1175,6 +1177,40 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
   void _onScroll() {
     if (_scroll.hasClients && _scroll.position.extentAfter < 480) {
       _load(older: true);
+    }
+  }
+
+  String _formatMessageTime(Map<String, dynamic> row) {
+    final raw = _first(row, [
+      'dateline',
+      'created_at',
+      'last_update',
+      'time',
+      'date',
+      'last_time',
+    ]);
+    if (raw.isEmpty) return '';
+    final timestamp = int.tryParse(raw);
+    DateTime? dt;
+    if (timestamp != null) {
+      final sec = timestamp > 10000000000 ? timestamp ~/ 1000 : timestamp;
+      dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
+    } else {
+      dt = DateTime.tryParse(raw);
+    }
+    if (dt == null) return raw;
+
+    final now = DateTime.now();
+    if (dt.year == now.year) {
+      if (dt.month == now.month && dt.day == now.day) {
+        return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+      }
+      return '${dt.month}月${dt.day}日';
+    } else {
+      final yy = (dt.year % 100).toString().padLeft(2, '0');
+      final mm = dt.month.toString().padLeft(2, '0');
+      final dd = dt.day.toString().padLeft(2, '0');
+      return '$yy-$mm-$dd';
     }
   }
 
@@ -1216,8 +1252,126 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) => EasyRefresh(
+  void _enterSelectionMode([String? initialUkey]) {
+    HapticFeedbackUtil.light();
+    setState(() {
+      _isSelecting = true;
+      _selectedUkeys.clear();
+      if (initialUkey != null && initialUkey.isNotEmpty) {
+        _selectedUkeys.add(initialUkey);
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    HapticFeedbackUtil.light();
+    setState(() {
+      _isSelecting = false;
+      _selectedUkeys.clear();
+    });
+  }
+
+  void _toggleSelectAll() {
+    HapticFeedbackUtil.selection();
+    final allUkeys = _rows
+        .map((r) => _first(r, ['ukey', 'sessionKey', 'session_id']))
+        .where((k) => k.isNotEmpty)
+        .toSet();
+    setState(() {
+      if (_selectedUkeys.length == allUkeys.length && allUkeys.isNotEmpty) {
+        _selectedUkeys.clear();
+      } else {
+        _selectedUkeys.addAll(allUkeys);
+      }
+    });
+  }
+
+  void _toggleItem(String ukey) {
+    if (ukey.isEmpty) return;
+    HapticFeedbackUtil.selection();
+    setState(() {
+      if (_selectedUkeys.contains(ukey)) {
+        _selectedUkeys.remove(ukey);
+      } else {
+        _selectedUkeys.add(ukey);
+      }
+    });
+  }
+
+  Future<void> _deleteSession(String ukey) async {
+    final sure = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除会话？'),
+        content: const Text('确定要删除此私信会话吗？删除后不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || sure != true) return;
+    HapticFeedbackUtil.medium();
+    try {
+      await widget.api.request(
+        '/v6/message/deleteChat',
+        query: {'ukey': ukey},
+      );
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        _snack(context, error.toString());
+      }
+    }
+  }
+
+  Future<void> _deleteSelectedSessions() async {
+    if (_selectedUkeys.isEmpty) return;
+    final count = _selectedUkeys.length;
+    final sure = await showAppDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除私信？'),
+        content: Text('确定要删除选中的 $count 个会话吗？删除后不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || sure != true) return;
+    HapticFeedbackUtil.medium();
+    final targets = _selectedUkeys.toList();
+    for (final ukey in targets) {
+      try {
+        await widget.api.request(
+          '/v6/message/deleteChat',
+          query: {'ukey': ukey},
+        );
+      } catch (_) {}
+    }
+    _exitSelectionMode();
+    await _load();
+    if (mounted) {
+      AppToast.show(context, '已删除 $count 个会话');
+    }
+  }
+
+  Widget _buildBody(BuildContext context) => EasyRefresh(
     header: reviewDefaultRefreshHeader,
     onRefresh: () => _load(),
     child: _busy && _rows.isEmpty
@@ -1226,10 +1380,19 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
         ? ListView(
             children: [ListTile(title: Text(_error!), onTap: _load)],
           )
-        : ListView.builder(
+        : ListView.separated(
             controller: _scroll,
             physics: const AlwaysScrollableScrollPhysics(),
             itemCount: _rows.length + (_busy || _error != null ? 1 : 0),
+            separatorBuilder: (context, index) {
+              if (index >= _rows.length) return const SizedBox.shrink();
+              return Divider(
+                height: 0.5,
+                thickness: 0.5,
+                indent: 74,
+                color: Theme.of(context).dividerColor.withValues(alpha: 0.25),
+              );
+            },
             itemBuilder: (context, index) {
               if (index == _rows.length) {
                 if (_busy) {
@@ -1247,85 +1410,271 @@ class _MessageSessionsPageState extends State<_MessageSessionsPage> {
                 return TextButton(
                   onPressed: () =>
                       _load(older: _rows.isNotEmpty && !_errorOnRefresh),
-                  child: Text(_error == null ? '加载更多会话' : '加载失败，点击重试：$_error'),
+                  child: Text(_error == null ? '加载更多会话' : '加载失败，点击重试：'),
                 );
               }
               final row = _rows[index];
               final partner = messagePartner(row);
               final uid = partner.uid;
               final ukey = _first(row, ['ukey', 'sessionKey', 'session_id']);
-              return ListTile(
-                leading: AppAvatar(
-                  api: widget.api,
-                  url: partner.avatar,
-                  name: partner.name,
-                  size: 44,
-                ),
-                title: Text(partner.name.isEmpty ? '私信会话' : partner.name),
-                subtitle: Text(
-                  sanitizeCoolapkMessage(
-                    _first(row, ['lastMessage', 'message', 'description']),
+              final lastMsg = sanitizeCoolapkMessage(
+                _first(row, ['lastMessage', 'message', 'description']),
+              );
+              final timeStr = _formatMessageTime(row);
+              final isSelected = _selectedUkeys.contains(ukey);
+
+              return InkWell(
+                onTap: _isSelecting
+                    ? () => _toggleItem(ukey)
+                    : (ukey.isEmpty && uid.isEmpty
+                        ? null
+                        : () => Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => MessageChatPage(
+                                  api: widget.api,
+                                  uid: uid,
+                                  ukey: ukey,
+                                  username: partner.name,
+                                  avatar: partner.avatar,
+                                ),
+                              ),
+                            )),
+                onLongPress: ukey.isEmpty
+                    ? null
+                    : () {
+                        if (_isSelecting) {
+                          _toggleItem(ukey);
+                        } else {
+                          _enterSelectionMode(ukey);
+                        }
+                      },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 11,
                   ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: ukey.isEmpty
-                    ? null
-                    : PopupMenuButton<String>(
-                        onSelected: (value) async {
-                          if (value != 'delete') return;
-                          final sure = await showAppDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text('删除会话？'),
-                              content: const Text('会话删除请求会提交给酷安。'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(context, false),
-                                  child: const Text('取消'),
-                                ),
-                                FilledButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  child: const Text('删除'),
-                                ),
-                              ],
-                            ),
-                          );
-                          if (!context.mounted || sure != true) return;
-                          try {
-                            await widget.api.request(
-                              '/v6/message/deleteChat',
-                              query: {'ukey': ukey},
-                            );
-                            await _load();
-                          } catch (error) {
-                            if (context.mounted) {
-                              _snack(context, error.toString());
-                            }
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'delete', child: Text('删除会话')),
-                        ],
-                      ),
-                onTap: ukey.isEmpty && uid.isEmpty
-                    ? null
-                    : () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => MessageChatPage(
-                            api: widget.api,
-                            uid: uid,
-                            ukey: ukey,
-                            username: partner.name,
-                            avatar: partner.avatar,
+                  child: Row(
+                    children: [
+                      if (_isSelecting) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: Icon(
+                            isSelected
+                                ? Icons.check_circle_rounded
+                                : Icons.radio_button_unchecked,
+                            color: isSelected
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context)
+                                    .colorScheme
+                                    .outline
+                                    .withValues(alpha: 0.5),
+                            size: 22,
                           ),
                         ),
+                      ],
+                      AppAvatar(
+                        api: widget.api,
+                        url: partner.avatar,
+                        name: partner.name,
+                        size: 44,
                       ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    partner.name.isEmpty ? '私信会话' : partner.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                                if (timeStr.isNotEmpty) ...[
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    timeStr,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withValues(alpha: 0.75),
+                                    ),
+                                  ),
+                                ],
+                                if (!_isSelecting)
+                                  PopupMenuButton<String>(
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 28,
+                                      minHeight: 28,
+                                    ),
+                                    iconSize: 16,
+                                    icon: Icon(
+                                      Icons.more_vert_rounded,
+                                      size: 16,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withValues(alpha: 0.5),
+                                    ),
+                                    onSelected: (value) async {
+                                      if (value == 'delete') {
+                                        await _deleteSession(ukey);
+                                      }
+                                    },
+                                    itemBuilder: (_) => const [
+                                      PopupMenuItem(
+                                        value: 'delete',
+                                        child: Text('删除会话'),
+                                      ),
+                                    ],
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              lastMsg,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               );
             },
           ),
   );
+
+  @override
+  Widget build(BuildContext context) {
+    final allUkeys = _rows
+        .map((r) => _first(r, ['ukey', 'sessionKey', 'session_id']))
+        .where((k) => k.isNotEmpty)
+        .toSet();
+    final isAllSelected =
+        allUkeys.isNotEmpty && _selectedUkeys.length == allUkeys.length;
+
+    return PopScope(
+      canPop: !_isSelecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _isSelecting) {
+          _exitSelectionMode();
+        }
+      },
+      child: Scaffold(
+        appBar: ReviewFrostedAppBar(
+          toolbarHeight: 52,
+          leading: _isSelecting
+              ? TextButton(
+                  onPressed: _exitSelectionMode,
+                  child: const Text(
+                    '取消',
+                    style: TextStyle(fontSize: 15),
+                  ),
+                )
+              : null,
+          title: Text(
+            _isSelecting
+                ? (_selectedUkeys.isEmpty
+                    ? '选择会话'
+                    : '已选择 ${_selectedUkeys.length} 项')
+                : '私信',
+            style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+          ),
+          actions: [
+            if (_isSelecting) ...[
+              TextButton(
+                onPressed: _rows.isEmpty ? null : _toggleSelectAll,
+                child: Text(
+                  isAllSelected ? '取消全选' : '全选',
+                  style: const TextStyle(fontSize: 15),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ] else ...[
+              IconButton(
+                tooltip: '管理私信',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                icon: const Icon(Icons.delete_outline_rounded, size: 22),
+                onPressed: _rows.isEmpty ? null : _enterSelectionMode,
+              ),
+              const SizedBox(width: 8),
+            ],
+          ],
+        ),
+        body: _buildBody(context),
+        bottomNavigationBar: _isSelecting
+            ? Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  border: Border(
+                    top: BorderSide(
+                      color: Theme.of(context)
+                          .dividerColor
+                          .withValues(alpha: 0.15),
+                      width: 0.5,
+                    ),
+                  ),
+                ),
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  8,
+                  16,
+                  8 + MediaQuery.paddingOf(context).bottom,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size.fromHeight(42),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(21),
+                          ),
+                        ),
+                        onPressed: _selectedUkeys.isEmpty
+                            ? null
+                            : _deleteSelectedSessions,
+                        icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                        label: Text(
+                          _selectedUkeys.isEmpty
+                              ? '删除'
+                              : '删除 (${_selectedUkeys.length})',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            : null,
+      ),
+    );
+  }
 }
 
 class MessageChatPage extends StatefulWidget {
@@ -3545,145 +3894,1399 @@ class _CookieLoginPageState extends State<CookieLoginPage> {
   );
 }
 
+class CoolapkPublishPickerSheet extends StatelessWidget {
+  const CoolapkPublishPickerSheet({
+    required this.api,
+    this.onSelectType,
+    super.key,
+  });
+
+  final CoolapkApi api;
+  final ValueChanged<String>? onSelectType;
+
+  void _open(BuildContext context, String type) {
+    Navigator.of(context).pop();
+    if (onSelectType != null) {
+      onSelectType!(type);
+    } else {
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => ComposeFeedPage(api: api, initialType: type),
+        ),
+      );
+    }
+  }
+
+  Widget _buildItem(
+    BuildContext context, {
+    required String label,
+    required List<Color> gradient,
+    required IconData icon,
+    required VoidCallback onTap,
+    String? badge,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: () {
+        HapticFeedbackUtil.light();
+        onTap();
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: gradient,
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(17),
+                  boxShadow: [
+                    BoxShadow(
+                      color: gradient.first.withValues(alpha: 0.35),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Icon(icon, color: Colors.white, size: 28),
+                ),
+              ),
+              if (badge != null)
+                Positioned(
+                  top: -5,
+                  right: -6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isDark ? const Color(0xFF202023) : Colors.white,
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Text(
+                      badge,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 8.5,
+                        fontWeight: FontWeight.bold,
+                        height: 1.1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13.5,
+              color: isDark ? const Color(0xFFE2E2E6) : const Color(0xFF333333),
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF202023) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 26, 16, 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildItem(
+                context,
+                label: '动态',
+                gradient: const [Color(0xFF6DC83E), Color(0xFF7CD84C)],
+                icon: Icons.chat_bubble_rounded,
+                onTap: () => _open(context, 'feed'),
+              ),
+              _buildItem(
+                context,
+                label: '图文',
+                gradient: const [Color(0xFF2B9DF4), Color(0xFF43B6FC)],
+                icon: Icons.article_rounded,
+                onTap: () => _open(context, 'article'),
+              ),
+              _buildItem(
+                context,
+                label: '点评广场',
+                gradient: const [Color(0xFF2C6CE8), Color(0xFF4488FA)],
+                icon: Icons.forum_rounded,
+                badge: 'NEW',
+                onTap: () => _open(context, 'rating'),
+              ),
+              _buildItem(
+                context,
+                label: '二手',
+                gradient: const [Color(0xFFF59E0B), Color(0xFFFBBF24)],
+                icon: Icons.swap_horiz_rounded,
+                onTap: () => _open(context, 'ershou'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildItem(
+                context,
+                label: '酷图',
+                gradient: const [Color(0xFFF97316), Color(0xFFFB923C)],
+                icon: Icons.landscape_rounded,
+                onTap: () => _open(context, 'picture'),
+              ),
+              _buildItem(
+                context,
+                label: '清单',
+                gradient: const [Color(0xFF9333EA), Color(0xFFB066FC)],
+                icon: Icons.bookmark_rounded,
+                badge: 'NEW',
+                onTap: () => _open(context, 'collection'),
+              ),
+              _buildItem(
+                context,
+                label: '天梯榜',
+                gradient: const [Color(0xFFDC2626), Color(0xFFF04B4B)],
+                icon: Icons.military_tech_rounded,
+                badge: 'NEW',
+                onTap: () => _open(context, 'rank'),
+              ),
+              _buildItem(
+                context,
+                label: '投票',
+                gradient: const [Color(0xFFE11D48), Color(0xFFF84F75)],
+                icon: Icons.how_to_vote_rounded,
+                onTap: () => _open(context, 'vote'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 26),
+          InkWell(
+            onTap: () {
+              HapticFeedbackUtil.light();
+              Navigator.of(context).pop();
+            },
+            borderRadius: BorderRadius.circular(24),
+            child: Container(
+              width: double.infinity,
+              height: 48,
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF2E2E32) : const Color(0xFFF1F1F3),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '取消',
+                style: TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w500,
+                  color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF444444),
+                ),
+              ),
+            ),
+          ),
+          SizedBox(height: bottomInset + 4),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComposePictureItem {
+  _ComposePictureItem({this.bytes});
+
+  final Uint8List? bytes;
+  String? url;
+}
+
 class ComposeFeedPage extends StatefulWidget {
   const ComposeFeedPage({
     required this.api,
     this.initialTag,
     this.initialProductId,
     this.initialMessage,
+    this.initialType,
     super.key,
   });
+
   final CoolapkApi api;
   final String? initialTag;
   final String? initialProductId;
   final String? initialMessage;
+  final String? initialType;
 
   @override
   State<ComposeFeedPage> createState() => _ComposeFeedPageState();
 }
 
 class _ComposeFeedPageState extends State<ComposeFeedPage> {
-  late final _message = TextEditingController(
+  late final TextEditingController _message = TextEditingController(
     text: widget.initialMessage ?? '',
   );
-  final _picture = TextEditingController();
-  final _extraTitle = TextEditingController();
-  late final _tag = TextEditingController(text: widget.initialTag ?? '');
-  final _location = TextEditingController();
-  late final _productId = TextEditingController(
-    text: widget.initialProductId ?? '',
-  );
-  final _voteId = TextEditingController();
-  String _type = 'feed';
+  final FocusNode _focusNode = FocusNode();
+  final List<_ComposePictureItem> _pictures = [];
+  bool _isCoverMode = true; // 大封面 (true) vs 九宫格 (false)
+  String? _selectedTopic;
+  String _visibility = 'public'; // public, private, friends
+  late String _type;
+  String? _extraTitle;
+  String? _location;
+  String? _productId;
+  String? _voteId;
+  bool _showEmojiPicker = false;
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _type = widget.initialType ?? 'feed';
+    if (_type == 'picture') {
+      _isCoverMode = false;
+    }
+    _selectedTopic = widget.initialTag;
+    _productId = widget.initialProductId;
+    _message.addListener(() => setState(() {}));
+  }
 
   @override
   void dispose() {
     _message.dispose();
-    _picture.dispose();
-    _extraTitle.dispose();
-    _tag.dispose();
-    _location.dispose();
-    _productId.dispose();
-    _voteId.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
+  bool get _canSubmit => _message.text.trim().isNotEmpty || _pictures.isNotEmpty;
+  bool get _hasDraft => _message.text.trim().isNotEmpty || _pictures.isNotEmpty;
+
+  String get _visibilityLabel {
+    switch (_visibility) {
+      case 'private':
+        return '仅自己可见';
+      case 'friends':
+        return '好友圈';
+      case 'public':
+      default:
+        return '公开';
+    }
+  }
+
   Future<void> _submit() async {
-    if (_message.text.trim().isEmpty || _busy) return;
+    final text = _message.text.trim();
+    if ((text.isEmpty && _pictures.isEmpty) || _busy) return;
+    HapticFeedbackUtil.light();
     setState(() => _busy = true);
     try {
+      final uploadedUrls = <String>[];
+      for (final pic in _pictures) {
+        if (pic.url != null && pic.url!.isNotEmpty) {
+          uploadedUrls.add(pic.url!);
+        } else if (pic.bytes != null) {
+          final url = await widget.api.uploadFeedImage(pic.bytes!);
+          pic.url = url;
+          uploadedUrls.add(url);
+        }
+      }
+
       await widget.api.createFeed(
-        _message.text.trim(),
-        pic: _picture.text.trim().isEmpty ? null : _picture.text.trim(),
+        text.isNotEmpty ? text : '分享图片',
+        pic: uploadedUrls.isNotEmpty ? uploadedUrls.join(',') : null,
         type: _type,
-        extraTitle: _extraTitle.text.trim(),
-        tag: _tag.text.trim(),
-        location: _location.text.trim(),
-        productId: _productId.text.trim(),
-        voteId: _voteId.text.trim(),
+        extraTitle: _extraTitle,
+        tag: _selectedTopic,
+        location: _location,
+        productId: _productId,
+        voteId: _voteId,
       );
       if (mounted) {
-        _snack(context, '已提交给酷安');
-        Navigator.pop(context);
+        HapticFeedbackUtil.medium();
+        AppToast.show(context, '发布成功');
+        Navigator.of(context).pop();
       }
     } catch (error) {
-      if (mounted) _snack(context, error.toString());
+      if (mounted) AppToast.show(context, error.toString());
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: ReviewFrostedAppBar(
-      title: const Text('发布动态'),
-      actions: [
-        TextButton(onPressed: _busy ? null : _submit, child: const Text('发布')),
-      ],
-    ),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        SegmentedButton<String>(
-          segments: const [
-            ButtonSegment(value: 'feed', label: Text('动态')),
-            ButtonSegment(value: 'picture', label: Text('酷图')),
-            ButtonSegment(value: 'article', label: Text('文章')),
-            ButtonSegment(value: 'ershou', label: Text('好物')),
+  Future<void> _handleClose() async {
+    if (_hasDraft) {
+      final discard = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('确定放弃编辑吗？'),
+          content: const Text('退出后已输入的内容将不会被保存。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('继续编辑'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+              ),
+              child: const Text('放弃'),
+            ),
           ],
-          selected: {_type},
-          onSelectionChanged: (value) => setState(() => _type = value.first),
         ),
-        const SizedBox(height: 14),
-        TextField(
-          controller: _message,
-          minLines: 5,
-          maxLines: 12,
-          maxLength: 5000,
-          decoration: const InputDecoration(
-            hintText: '分享新鲜事…',
-            border: OutlineInputBorder(),
+      );
+      if (discard == true && mounted) {
+        Navigator.of(context).pop();
+      }
+    } else {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _pickImage() async {
+    HapticFeedbackUtil.light();
+    final maxCount = _isCoverMode ? 1 : 9;
+    if (_pictures.length >= maxCount) {
+      AppToast.show(
+        context,
+        _isCoverMode ? '大封面模式只能添加 1 张图片' : '九宫格模式最多添加 9 张图片',
+      );
+      return;
+    }
+    try {
+      final bytes = await const MethodChannel('com.green.note/avatar')
+          .invokeMethod<Uint8List>('pickImage');
+      if (bytes != null && mounted) {
+        setState(() {
+          if (_isCoverMode) {
+            _pictures.clear();
+          }
+          _pictures.add(_ComposePictureItem(bytes: bytes));
+        });
+      }
+    } catch (_) {
+      if (mounted) AppToast.show(context, '无法打开相册，请检查相册访问权限');
+    }
+  }
+
+  Future<void> _showTopicPicker() async {
+    HapticFeedbackUtil.light();
+    const defaultTopics = [
+      '数码日常',
+      '玩机技巧',
+      '酷安日常',
+      '今日份日常',
+      '好物推荐',
+      '手机摄影',
+      '电脑讨论',
+      '搞机日记',
+      '开箱体验',
+      '每日打卡',
+      '123云盘',
+      'VibeCoding',
+      '魅族PA',
+    ];
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        String query = '';
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            final filtered = defaultTopics
+                .where((t) => t.toLowerCase().contains(query.toLowerCase()))
+                .toList();
+            return Material(
+              color: isDark ? const Color(0xFF222226) : Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+              child: SizedBox(
+                height: MediaQuery.of(ctx).size.height * 0.65,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Column(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white24 : Colors.black12,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '选择发布的板块 / 话题',
+                        style: TextStyle(
+                          fontSize: 16.5,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      hintText: '搜索或输入自定义话题…',
+                      filled: true,
+                      fillColor: isDark ? const Color(0xFF2A2A2E) : const Color(0xFFF0F0F2),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    ),
+                    onChanged: (val) => setModalState(() => query = val),
+                    onSubmitted: (val) {
+                      if (val.trim().isNotEmpty) {
+                        HapticFeedbackUtil.selection();
+                        Navigator.of(ctx).pop(val.trim());
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: filtered.length + (query.trim().isNotEmpty && !filtered.contains(query.trim()) ? 1 : 0),
+                      separatorBuilder: (_, _) => Divider(
+                        height: 0.5,
+                        color: isDark ? Colors.white12 : Colors.black12,
+                      ),
+                      itemBuilder: (ctx, index) {
+                        if (index == filtered.length) {
+                          return ListTile(
+                            leading: const Icon(Icons.add_rounded, color: Color(0xFF34D399)),
+                            title: Text('使用自定义话题 "#${query.trim()}#"'),
+                            onTap: () {
+                              HapticFeedbackUtil.selection();
+                              Navigator.of(ctx).pop(query.trim());
+                            },
+                          );
+                        }
+                        final topic = filtered[index];
+                        final isChosen = _selectedTopic == topic;
+                        return ListTile(
+                          leading: Icon(
+                            Icons.tag_rounded,
+                            color: isChosen ? const Color(0xFF34D399) : (isDark ? Colors.white54 : Colors.black54),
+                          ),
+                          title: Text(
+                            topic,
+                            style: TextStyle(
+                              color: isChosen ? const Color(0xFF34D399) : (isDark ? Colors.white : Colors.black87),
+                              fontWeight: isChosen ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                          trailing: isChosen
+                              ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
+                              : null,
+                          onTap: () {
+                            HapticFeedbackUtil.selection();
+                            Navigator.of(ctx).pop(topic);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+          },
+        );
+      },
+    );
+    if (selected != null && mounted) {
+      setState(() => _selectedTopic = selected);
+    }
+  }
+
+  Future<void> _showVisibilityPicker() async {
+    HapticFeedbackUtil.light();
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return Material(
+          color: isDark ? const Color(0xFF222226) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
+            child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '谁可以看',
+                style: TextStyle(
+                  fontSize: 16.5,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.public_rounded),
+                title: const Text('公开'),
+                subtitle: const Text('所有人可见（默认）'),
+                trailing: _visibility == 'public'
+                    ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
+                    : null,
+                onTap: () {
+                  HapticFeedbackUtil.selection();
+                  Navigator.of(ctx).pop('public');
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.lock_outline_rounded),
+                title: const Text('仅自己可见'),
+                subtitle: const Text('私密动态，仅本人可查阅'),
+                trailing: _visibility == 'private'
+                    ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
+                    : null,
+                onTap: () {
+                  HapticFeedbackUtil.selection();
+                  Navigator.of(ctx).pop('private');
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.people_outline_rounded),
+                title: const Text('好友圈'),
+                subtitle: const Text('仅互相关注的酷友好友可见'),
+                trailing: _visibility == 'friends'
+                    ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
+                    : null,
+                onTap: () {
+                  HapticFeedbackUtil.selection();
+                  Navigator.of(ctx).pop('friends');
+                },
+              ),
+            ],
           ),
         ),
-        ExpansionTile(
-          leading: const Icon(Icons.tune_rounded),
-          title: const Text('更多发布信息'),
-          childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
-          children: [
-            for (final field in [
-              (_extraTitle, '文章标题'),
-              (_tag, '话题标签'),
-              (_location, '位置名称'),
-              (_productId, '关联产品 ID'),
-              (_voteId, '关联投票 ID'),
-            ])
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: TextField(
-                  controller: field.$1,
-                  decoration: InputDecoration(
-                    labelText: field.$2,
-                    border: const OutlineInputBorder(),
+      );
+      },
+    );
+    if (selected != null && mounted) {
+      setState(() => _visibility = selected);
+    }
+  }
+
+  void _insertTopic(String topic) {
+    HapticFeedbackUtil.selection();
+    final text = _message.text;
+    final selection = _message.selection;
+    final insertText = '#$topic# ';
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, insertText);
+    _message.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + insertText.length),
+    );
+    if (_selectedTopic == null || _selectedTopic!.isEmpty) {
+      setState(() => _selectedTopic = topic);
+    }
+  }
+
+  void _insertEmoji(String emojiName) {
+    HapticFeedbackUtil.selection();
+    final text = _message.text;
+    final selection = _message.selection;
+    final insertText = '[$emojiName]';
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, insertText);
+    _message.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + insertText.length),
+    );
+  }
+
+  void _insertTagSymbol() {
+    HapticFeedbackUtil.light();
+    final text = _message.text;
+    final selection = _message.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, '##');
+    _message.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + 1),
+    );
+    _focusNode.requestFocus();
+  }
+
+  void _insertAtSymbol() {
+    HapticFeedbackUtil.light();
+    final text = _message.text;
+    final selection = _message.selection;
+    int start = selection.start;
+    int end = selection.end;
+    if (start < 0 || end < 0) {
+      start = text.length;
+      end = text.length;
+    }
+    final newText = text.replaceRange(start, end, '@');
+    _message.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + 1),
+    );
+    _focusNode.requestFocus();
+  }
+
+  Future<void> _showMoreOptions() async {
+    final titleController = TextEditingController(text: _extraTitle ?? '');
+    final locationController = TextEditingController(text: _location ?? '');
+    final productController = TextEditingController(text: _productId ?? '');
+    final voteController = TextEditingController(text: _voteId ?? '');
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF222226) : Colors.white,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '扩展信息与设置',
+                      style: TextStyle(
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    labelText: '文章标题（可选）',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: locationController,
+                  decoration: const InputDecoration(
+                    labelText: '发布位置（可选）',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: productController,
+                  decoration: const InputDecoration(
+                    labelText: '关联产品 ID（可选）',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: voteController,
+                  decoration: const InputDecoration(
+                    labelText: '关联投票 ID（可选）',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: FilledButton(
+                    onPressed: () {
+                      HapticFeedbackUtil.light();
+                      setState(() {
+                        _extraTitle = titleController.text.trim().isEmpty ? null : titleController.text.trim();
+                        _location = locationController.text.trim().isEmpty ? null : locationController.text.trim();
+                        _productId = productController.text.trim().isEmpty ? null : productController.text.trim();
+                        _voteId = voteController.text.trim().isEmpty ? null : voteController.text.trim();
+                      });
+                      Navigator.of(ctx).pop();
+                    },
+                    child: const Text('保存设置'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMediaArea(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final maxCount = _isCoverMode ? 1 : 9;
+
+    if (_pictures.isEmpty) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          GestureDetector(
+            key: const ValueKey('compose-media-add-box'),
+            onTap: _pickImage,
+            child: Container(
+              width: 104,
+              height: 104,
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF262629) : const Color(0xFFF2F2F4),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.add_rounded,
+                size: 38,
+                color: isDark ? const Color(0xFF6E6E73) : const Color(0xFFAAAAAA),
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '长按图片可拖动排序',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    height: 1.5,
+                  ),
+                ),
+                Text(
+                  '发无关图、色情图将会被禁言',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    height: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        for (var i = 0; i < _pictures.length; i++)
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: 104,
+                  height: 104,
+                  child: _pictures[i].bytes != null
+                      ? Image.memory(
+                          _pictures[i].bytes!,
+                          fit: BoxFit.cover,
+                        )
+                      : Image.network(
+                          _pictures[i].url ?? '',
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Container(
+                            color: isDark ? const Color(0xFF2A2A2E) : const Color(0xFFE5E5E5),
+                            child: const Icon(Icons.image_outlined, color: Colors.grey),
+                          ),
+                        ),
+                ),
+              ),
+              Positioned(
+                top: 4,
+                right: 4,
+                child: GestureDetector(
+                  onTap: () {
+                    HapticFeedbackUtil.light();
+                    setState(() => _pictures.removeAt(i));
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(3),
+                    decoration: const BoxDecoration(
+                      color: Color(0x99000000),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close_rounded, size: 14, color: Colors.white),
                   ),
                 ),
               ),
+            ],
+          ),
+        if (_pictures.length < maxCount)
+          GestureDetector(
+            key: const ValueKey('compose-media-add-box'),
+            onTap: _pickImage,
+            child: Container(
+              width: 104,
+              height: 104,
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF262629) : const Color(0xFFF2F2F4),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.add_rounded,
+                size: 38,
+                color: isDark ? const Color(0xFF6E6E73) : const Color(0xFFAAAAAA),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTopicChip(
+    BuildContext context,
+    String title, {
+    bool isFeatured = false,
+    required VoidCallback onTap,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: () {
+        HapticFeedbackUtil.selection();
+        onTap();
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: isFeatured
+              ? (isDark ? const Color(0xFF1B2A22) : const Color(0xFFE8F5E9))
+              : (isDark ? const Color(0xFF222225) : const Color(0xFFF0F0F2)),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isFeatured) ...[
+              Icon(
+                Icons.campaign_rounded,
+                size: 15,
+                color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+              ),
+              const SizedBox(width: 5),
+            ],
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: isFeatured ? FontWeight.w600 : FontWeight.normal,
+                color: isFeatured
+                    ? (isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32))
+                    : (isDark ? const Color(0xFFCCCCCC) : const Color(0xFF555555)),
+              ),
+            ),
           ],
         ),
-        TextField(
-          controller: _picture,
-          keyboardType: TextInputType.url,
-          decoration: const InputDecoration(
-            labelText: '图片 URL（可选）',
-            helperText: '接口文档仅列出图片 URL 参数；本版不上传本地图片。',
-            border: OutlineInputBorder(),
-          ),
+      ),
+    );
+  }
+
+  Widget _buildEmojiKeyboard(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    const commonEmojis = [
+      '滑稽', 'doge', '笑哭', '捂脸', '点赞', '妙啊', '机智', '吃瓜',
+      '微笑', '思考', '流泪', '白眼', '发怒', '疑问', '酷', '偷笑',
+      '爱心', 'OK', '强', '抱拳', '握手', '胜利', '二哈', '黑线',
+      '委屈', '再见', '可怜', '亲亲', '坏笑', '阴险', '傲慢', '害羞',
+    ];
+
+    return Container(
+      height: 220,
+      color: isDark ? const Color(0xFF1B1B1E) : const Color(0xFFF6F6F8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: GridView.builder(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 8,
+          mainAxisSpacing: 8,
+          crossAxisSpacing: 8,
         ),
-        const SizedBox(height: 12),
-        if (_busy) const LinearProgressIndicator(),
-      ],
-    ),
-  );
+        itemCount: commonEmojis.length,
+        itemBuilder: (ctx, index) {
+          final emojiName = commonEmojis[index];
+          return InkWell(
+            onTap: () => _insertEmoji(emojiName),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              alignment: Alignment.center,
+              child: Tooltip(
+                message: emojiName,
+                child: Text(
+                  '[$emojiName]',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final scheme = theme.colorScheme;
+    final topPadding = MediaQuery.paddingOf(context).top;
+
+    final hasDraft = _hasDraft;
+
+    return PopScope(
+      canPop: !hasDraft,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && hasDraft) _handleClose();
+      },
+      child: Scaffold(
+        backgroundColor: isDark ? const Color(0xFF141416) : Colors.white,
+        body: Column(
+          children: [
+            // Top Bar
+            SizedBox(height: topPadding),
+            Container(
+              height: 52,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 24,
+                      color: isDark ? Colors.white70 : Colors.black87,
+                    ),
+                    onPressed: _handleClose,
+                  ),
+                  const Spacer(),
+                  // Center Segmented Capsule: 大封面 | 九宫格
+                  Container(
+                    height: 34,
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF222225) : const Color(0xFFEAEAEA),
+                      borderRadius: BorderRadius.circular(17),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            HapticFeedbackUtil.selection();
+                            setState(() => _isCoverMode = true);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: _isCoverMode
+                                  ? (isDark ? const Color(0xFF1B382B) : const Color(0xFFE8F5E9))
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            child: Text(
+                              '大封面',
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: _isCoverMode ? FontWeight.bold : FontWeight.normal,
+                                color: _isCoverMode
+                                  ? (isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32))
+                                  : (isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666)),
+                              ),
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            HapticFeedbackUtil.selection();
+                            setState(() => _isCoverMode = false);
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: !_isCoverMode
+                                  ? (isDark ? const Color(0xFF1B382B) : const Color(0xFFE8F5E9))
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            child: Text(
+                              '九宫格',
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: !_isCoverMode ? FontWeight.bold : FontWeight.normal,
+                                color: !_isCoverMode
+                                    ? (isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32))
+                                    : (isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666)),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Spacer(),
+                  // Right "发布" Button
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: OutlinedButton(
+                      onPressed: (_canSubmit && !_busy) ? _submit : null,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(60, 30),
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        side: BorderSide(
+                          color: _canSubmit
+                              ? (isDark ? const Color(0xFF34D399) : scheme.primary)
+                              : (isDark ? const Color(0xFF48484C) : const Color(0xFFCCCCCC)),
+                          width: 0.8,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
+                      child: _busy
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              '发布',
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                color: _canSubmit
+                                    ? (isDark ? const Color(0xFF34D399) : scheme.primary)
+                                    : (isDark ? const Color(0xFFC0C0C4) : const Color(0xFF999999)),
+                              ),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Middle Scrollable Area
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  // "发布到" Row
+                  InkWell(
+                    onTap: _showTopicPicker,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: isDark ? const Color(0xFF163324) : const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Icon(
+                              Icons.add_rounded,
+                              size: 16,
+                              color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '发布到',
+                            style: TextStyle(
+                              fontSize: 15.5,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
+                          ),
+                          if (_selectedTopic != null && _selectedTopic!.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isDark ? const Color(0xFF1B382B) : const Color(0xFFE8F5E9),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                '# $_selectedTopic',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+                                ),
+                              ),
+                            ),
+                          ],
+                          const Spacer(),
+                          Text(
+                            _selectedTopic == null || _selectedTopic!.isEmpty
+                                ? '选择合适的板块会有更多的赞'
+                                : '更换板块',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: isDark ? const Color(0xFF7C7C82) : const Color(0xFF888888),
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            size: 16,
+                            color: isDark ? const Color(0xFF7C7C82) : const Color(0xFF888888),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Media Box Area
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+                    child: _buildMediaArea(context),
+                  ),
+                  // Text Input Field
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: TextField(
+                      controller: _message,
+                      focusNode: _focusNode,
+                      minLines: 5,
+                      maxLines: 15,
+                      style: TextStyle(
+                        fontSize: 15.5,
+                        height: 1.45,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: '分享你此刻的想法…',
+                        hintStyle: TextStyle(
+                          fontSize: 15,
+                          color: isDark ? const Color(0xFF5A5A60) : const Color(0xFF999999),
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ),
+                  // Divider & "谁可以看" Row
+                  Divider(
+                    height: 1,
+                    thickness: 0.5,
+                    color: isDark ? const Color(0xFF2C2C30) : const Color(0xFFE5E5E5),
+                  ),
+                  InkWell(
+                    onTap: _showVisibilityPicker,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.visibility_outlined,
+                            size: 20,
+                            color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            '谁可以看',
+                            style: TextStyle(
+                              fontSize: 14.5,
+                              color: isDark ? const Color(0xFFE0E0E0) : const Color(0xFF333333),
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            _visibilityLabel,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF777777),
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            size: 16,
+                            color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF777777),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Recommended Topics Chips Strip
+            Container(
+              height: 36,
+              color: isDark ? const Color(0xFF141416) : Colors.white,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                children: [
+                  _buildTopicChip(
+                    context,
+                    '# 数码日常',
+                    isFeatured: true,
+                    onTap: () => _insertTopic('数码日常'),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildTopicChip(context, '# 123云盘', onTap: () => _insertTopic('123云盘')),
+                  const SizedBox(width: 8),
+                  _buildTopicChip(context, '# VibeCoding', onTap: () => _insertTopic('VibeCoding')),
+                  const SizedBox(width: 8),
+                  _buildTopicChip(context, '# 魅族PA...', onTap: () => _insertTopic('魅族PA')),
+                  const SizedBox(width: 8),
+                  _buildTopicChip(context, '# 今日份日常', onTap: () => _insertTopic('今日份日常')),
+                  const SizedBox(width: 8),
+                  _buildTopicChip(context, '# 玩机日记', onTap: () => _insertTopic('玩机日记')),
+                  const SizedBox(width: 8),
+                  _buildTopicChip(context, '# 手机摄影', onTap: () => _insertTopic('手机摄影')),
+                ],
+              ),
+            ),
+            // Bottom Dock Toolbar
+            Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              color: isDark ? const Color(0xFF141416) : Colors.white,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      Icons.sentiment_satisfied_alt_outlined,
+                      size: 24,
+                      color: _showEmojiPicker
+                          ? const Color(0xFF34D399)
+                          : (isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666)),
+                    ),
+                    onPressed: () {
+                      HapticFeedbackUtil.light();
+                      setState(() {
+                        _showEmojiPicker = !_showEmojiPicker;
+                        if (_showEmojiPicker) {
+                          _focusNode.unfocus();
+                        } else {
+                          _focusNode.requestFocus();
+                        }
+                      });
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.image_outlined,
+                      size: 24,
+                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    ),
+                    onPressed: _pickImage,
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.alternate_email_rounded,
+                      size: 24,
+                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    ),
+                    onPressed: _insertAtSymbol,
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.tag_rounded,
+                      size: 24,
+                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    ),
+                    onPressed: _insertTagSymbol,
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.add_circle_outline_rounded,
+                      size: 24,
+                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    ),
+                    onPressed: _showMoreOptions,
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.language_rounded,
+                      size: 24,
+                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    ),
+                    onPressed: _showVisibilityPicker,
+                  ),
+                ],
+              ),
+            ),
+            if (_showEmojiPicker) _buildEmojiKeyboard(context),
+            SizedBox(height: MediaQuery.paddingOf(context).bottom),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class UpdateCheckPage extends StatefulWidget {

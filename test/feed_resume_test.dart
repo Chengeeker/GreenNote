@@ -98,18 +98,24 @@ class _FollowingApi extends MockChannelApi {
       if (Uri.parse(route).queryParameters['type'] == 'circle') {
         recentRequested = true;
         return Future.value(
-          FeedPage(
-            items: [
-              CoolapkFeed.fromJson({
-                'id': '401',
-                'uid': '21',
-                'username': '优先出现的酷友',
-                'message': '最近更新',
-              }),
+          const FeedPage(
+            items: [],
+            cards: [
+              {
+                'entityTemplate': 'iconMiniScrollCard',
+                'title': '最近更新',
+                'entities': [
+                  {
+                    'entityType': 'user',
+                    'uid': '21',
+                    'username': '优先出现的酷友',
+                    'userAvatar': '',
+                  },
+                ],
+              },
             ],
-            cards: [],
-            firstItem: '401',
-            lastItem: '401',
+            firstItem: '',
+            lastItem: '',
             hasMore: false,
           ),
         );

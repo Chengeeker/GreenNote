@@ -22,6 +22,8 @@ class TimelineApi implements CoolapkApi {
   @override
   final LocalAccount localAccount;
   @override
+  final ValueNotifier<int> accountProfileRevision = ValueNotifier<int>(0);
+  @override
   bool get isAnonymous => true;
   @override
   bool get hasCookie => false;

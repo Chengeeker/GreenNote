@@ -488,7 +488,10 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
                                     ),
                                     behavior: HitTestBehavior.opaque,
                                     excludeFromSemantics: true,
-                                    onTap: () => widget.onSelected(index),
+                                    onTap: () {
+                                      HapticFeedbackUtil.light();
+                                      widget.onSelected(index);
+                                    },
                                     child: Center(
                                       child: Container(
                                         width: 50,

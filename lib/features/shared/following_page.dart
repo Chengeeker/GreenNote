@@ -417,34 +417,34 @@ class FollowingChannelHeader extends StatelessWidget {
           children: [
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(8, 10, 8, 4),
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 72,
+                    width: 58,
                     child: InkWell(
                       onTap: () => onSelect(''),
                       child: Column(
                         children: [
                           CircleAvatar(
-                            radius: 26,
+                            radius: 19,
                             backgroundColor: const Color(0xFF00AC86),
                             child: Icon(
                               Icons.people,
                               color: Colors.white,
-                              size: 30,
+                              size: 20,
                             ),
                           ),
-                          const SizedBox(height: 7),
-                          const Text('最近更新', style: TextStyle(fontSize: 12)),
+                          const SizedBox(height: 4),
+                          const Text('最近更新', style: TextStyle(fontSize: 11.5)),
                         ],
                       ),
                     ),
                   ),
                   for (final user in users)
                     SizedBox(
-                      width: 72,
+                      width: 58,
                       child: InkWell(
                         onTap: () => Navigator.push(
                           context,
@@ -460,18 +460,18 @@ class FollowingChannelHeader extends StatelessWidget {
                             AppAvatar(
                               api: api,
                               url: communityText(user, ['userAvatar']),
-                              size: 52,
+                              size: 38,
                               verified: communityFlag(user['verify_status']),
                               verifiedType:
                                   int.tryParse('${user['verify_show_type']}') ??
                                   0,
                             ),
-                            const SizedBox(height: 7),
+                            const SizedBox(height: 4),
                             Text(
                               communityText(user, ['username']),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12),
+                              style: const TextStyle(fontSize: 11.5),
                             ),
                           ],
                         ),
@@ -483,7 +483,7 @@ class FollowingChannelHeader extends StatelessWidget {
             if (recentFollowingUsers(cards, const []).isEmpty &&
                 users.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(left: 12, top: 2),
+                padding: const EdgeInsets.only(left: 12, top: 1, bottom: 2),
                 child: Text(
                   '按已加载动态的发布时间排序',
                   style: TextStyle(
@@ -494,7 +494,7 @@ class FollowingChannelHeader extends StatelessWidget {
               ),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.fromLTRB(8, 2, 8, 4),
               child: Row(
                 children: [
                   for (final entry in const {
@@ -507,6 +507,10 @@ class FollowingChannelHeader extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: ChoiceChip(
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                        labelPadding: EdgeInsets.zero,
                         label: Text(entry.value),
                         selected: selected == entry.key,
                         selectedColor: theme.brightness == Brightness.dark
@@ -522,9 +526,10 @@ class FollowingChannelHeader extends StatelessWidget {
                           width: 1.2,
                         ),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         labelStyle: TextStyle(
+                          fontSize: 12,
                           color: selected == entry.key
                               ? scheme.primary
                               : scheme.onSurface,

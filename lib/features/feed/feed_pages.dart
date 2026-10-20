@@ -7205,6 +7205,11 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   final _scroll = ScrollController();
   final _detailAnchor = GlobalKey();
   final _targetAnchor = GlobalKey();
+  final _commentsHeaderKey = GlobalKey();
+  final Map<String, List<CoolapkFeed>> _commentModeReplies = {};
+  final Map<String, int> _commentModePages = {};
+  final Map<String, bool> _commentModeHasMore = {};
+  int _replyLoadRequestId = 0;
   CoolapkFeed? _targetReply;
   String? _targetReplyError;
   bool _targetPositioned = false;
@@ -7315,10 +7320,85 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     }
   }
 
+  void _alignCommentsHeaderIfNeeded() {
+    if (!_scroll.hasClients) return;
+    try {
+      final box =
+          _commentsHeaderKey.currentContext?.findRenderObject() as RenderBox?;
+      final scrollableBox =
+          _scroll.position.context.notificationContext?.findRenderObject()
+              as RenderBox?;
+      if (box != null && box.hasSize && scrollableBox != null) {
+        final pos = box.localToGlobal(Offset.zero, ancestor: scrollableBox);
+        if (pos.dy < 0) {
+          final targetScroll = _scroll.offset + pos.dy;
+          _scroll.jumpTo(
+            targetScroll.clamp(0.0, _scroll.position.maxScrollExtent),
+          );
+        }
+        return;
+      }
+    } catch (_) {}
+
+    final detail = _detailAnchor.currentContext?.findRenderObject();
+    if (detail is RenderBox) {
+      final commentSectionTop = detail.size.height + 16;
+      if (_scroll.offset > commentSectionTop) {
+        _scroll.jumpTo(
+          commentSectionTop.clamp(0.0, _scroll.position.maxScrollExtent),
+        );
+      }
+    }
+  }
+
+  void _switchCommentMode(String mode) {
+    if (_commentMode == mode) return;
+    HapticFeedbackUtil.selection();
+
+    // Cache current mode's loaded replies so switching back is instant and smooth
+    if (_replies.isNotEmpty) {
+      _commentModeReplies[_commentMode] = List<CoolapkFeed>.from(_replies);
+      _commentModePages[_commentMode] = _replyPage;
+      _commentModeHasMore[_commentMode] = _replyHasMore;
+    }
+
+    final cached = _commentModeReplies[mode];
+    if (cached != null) {
+      setState(() {
+        _commentMode = mode;
+        _replies.clear();
+        _replies.addAll(cached);
+        _replyPage = _commentModePages[mode] ?? 1;
+        _replyHasMore = _commentModeHasMore[mode] ?? true;
+        _loadingReplies = false;
+        _replyError = null;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _alignCommentsHeaderIfNeeded();
+      });
+      return;
+    }
+
+    setState(() {
+      _commentMode = mode;
+      _replyPage = 0;
+      _replyHasMore = true;
+      _loadingReplies = true;
+      _replyError = null;
+      // Do NOT clear _replies here to prevent scroll collapse and jumping to top
+    });
+
+    _alignCommentsHeaderIfNeeded();
+    _loadReplies(refresh: true);
+  }
+
   Future<void> _load() async {
+    _commentModeReplies.clear();
+    _commentModePages.clear();
+    _commentModeHasMore.clear();
     await Future.wait([
       _loadDetail(),
-      _loadReplies(),
+      _loadReplies(refresh: true),
       if (widget.initialReplyId.isNotEmpty) _loadTargetReply(),
     ]);
     _positionTargetReply();
@@ -7425,9 +7505,14 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   }
 
   Future<void> _loadReplies({bool refresh = true}) async {
-    if (_loadingReplies || (!refresh && !_replyHasMore)) {
+    if (_loadingReplies && !refresh) {
       return;
     }
+    if (!refresh && !_replyHasMore) {
+      return;
+    }
+    final requestId = ++_replyLoadRequestId;
+    final targetMode = _commentMode;
     final next = refresh ? 1 : _replyPage + 1;
     setState(() {
       _loadingReplies = true;
@@ -7447,7 +7532,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     final feedType = rawFeedType == 'feed_reply' ? 'feed_reply' : 'feed';
 
     try {
-      var result = switch (_commentMode) {
+      var result = switch (targetMode) {
         'hot' => await widget.api.getHotReplyPage(widget.feed.id, next),
         'latest' => await widget.api.getReplyPage(
           widget.feed.id,
@@ -7477,7 +7562,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
       };
 
       // 仅看楼主模式下：在客户端严格执行楼主 UID 校验，过滤掉任何非楼主本人的数据
-      if (_commentMode == 'author') {
+      if (targetMode == 'author') {
         final authorId = _authorUid;
         if (authorId.isNotEmpty) {
           final authorItems = result.items.where((item) {
@@ -7500,7 +7585,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
 
       // 当非“仅看楼主”模式时，如果热门或普通评论返回空列表时（例如个人主页自发动态、冷门动态、头条部分评论），
       // 深度提取冷门评论：尝试从 recent_reply_ids 拉取具体回复（该接口未受未登录风控限制）
-      if (_commentMode != 'author' && result.items.isEmpty && refresh) {
+      if (targetMode != 'author' && result.items.isEmpty && refresh) {
         if (_detail == null && _loadingDetail) {
           try {
             final res = await widget.api.getFeedDetail(widget.feed.id);
@@ -7544,7 +7629,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
         }
 
         // 如果依然为空且处于 hot 模式，尝试普通排序请求（针对登录用户或免风控节点）
-        if (result.items.isEmpty && _commentMode == 'hot') {
+        if (result.items.isEmpty && targetMode == 'hot') {
           try {
             final regularResult = await widget.api.getReplyPage(
               widget.feed.id,
@@ -7559,83 +7644,129 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
         }
       }
 
+      if (!mounted ||
+          requestId != _replyLoadRequestId ||
+          _commentMode != targetMode) {
+        if (mounted && _commentMode != targetMode) {
+          final authorId = _authorUid;
+          final ids = <String>{};
+          final items = result.items.map(CoolapkFeed.fromJson).where((reply) {
+            final type = (reply.raw['entityType'] ??
+                    reply.raw['entity_type'] ??
+                    reply.raw['type'] ??
+                    '')
+                .toString()
+                .toLowerCase();
+            if (type == 'feed_detail_reply_sponsor_card' ||
+                reply.message.trim().toUpperCase() ==
+                    'FEED_DETAIL_REPLY_SPONSOR_CARD') {
+              return false;
+            }
+            if (targetMode == 'author' &&
+                authorId.isNotEmpty &&
+                reply.uid != authorId) {
+              return false;
+            }
+            return reply.id.isEmpty || ids.add(reply.id);
+          }).toList();
+          _commentModeReplies[targetMode] = items;
+          _commentModePages[targetMode] = next;
+          _commentModeHasMore[targetMode] = result.hasMore && items.isNotEmpty;
+        }
+        return;
+      }
+
       if (mounted) {
         _applyReplyPage(result, refresh: refresh, page: next);
       }
     } catch (error) {
-      if (mounted) {
-        // 彻底去除评论区报错与重试条，非致命风控错误静默降级展示；仅看楼主模式下绝不回退至热门
-        _replyError = null;
-        if (_commentMode != 'hot' && _commentMode != 'author') {
-          try {
-            final fallback = await widget.api.getHotReplyPage(
-              widget.feed.id,
-              1,
-            );
-            if (mounted && fallback.items.isNotEmpty) {
-              setState(() => _commentMode = 'hot');
-              _applyReplyPage(fallback, refresh: true, page: 1);
-              return;
-            }
-          } catch (_) {}
-        }
-
-        if (_detail == null && _loadingDetail) {
-          try {
-            final res = await widget.api.getFeedDetail(widget.feed.id);
-            if (mounted) _detail = res;
-          } catch (_) {}
-        }
-
-        if (_commentMode != 'author') {
-          final recentIdsRaw =
-              (_detail?['recent_reply_ids'] ??
-                      widget.feed.raw['recent_reply_ids'])
-                  ?.toString() ??
-              '';
-          final recentIds = recentIdsRaw
-              .split(',')
-              .map((s) => s.trim())
-              .where((s) => s.isNotEmpty)
-              .toList();
-          if (recentIds.isNotEmpty && _replies.isEmpty) {
-            try {
-              final futures = recentIds.take(15).map((rid) async {
-                try {
-                  final res = await widget.api.getReplyDetail(rid);
-                  final data = res['data'];
-                  if (data is Map<String, dynamic> && data['id'] != null) {
-                    return CoolapkFeed.fromJson(data);
-                  }
-                } catch (_) {}
-                return null;
-              });
-              final fetched = (await Future.wait(futures))
-                  .whereType<CoolapkFeed>()
-                  .toList();
-              if (mounted && fetched.isNotEmpty) {
-                setState(() {
-                  final ids = _replies.map((r) => r.id).toSet();
-                  for (final r in fetched) {
-                    if (ids.add(r.id)) _replies.add(r);
-                  }
-                });
-              }
-            } catch (_) {}
+      if (!mounted ||
+          requestId != _replyLoadRequestId ||
+          _commentMode != targetMode) {
+        return;
+      }
+      // 彻底去除评论区报错与重试条，非致命风控错误静默降级展示；仅看楼主模式下绝不回退至热门
+      _replyError = null;
+      if (targetMode != 'hot' && targetMode != 'author') {
+        try {
+          final fallback = await widget.api.getHotReplyPage(
+            widget.feed.id,
+            1,
+          );
+          if (mounted &&
+              fallback.items.isNotEmpty &&
+              requestId == _replyLoadRequestId &&
+              _commentMode == targetMode) {
+            setState(() => _commentMode = 'hot');
+            _applyReplyPage(fallback, refresh: true, page: 1);
+            return;
           }
+        } catch (_) {}
+      }
 
-          if (mounted && _replies.isEmpty) {
-            final embedded = _extractEmbeddedReplies();
-            if (embedded.isNotEmpty) {
+      if (_detail == null && _loadingDetail) {
+        try {
+          final res = await widget.api.getFeedDetail(widget.feed.id);
+          if (mounted) _detail = res;
+        } catch (_) {}
+      }
+
+      if (targetMode != 'author') {
+        final recentIdsRaw =
+            (_detail?['recent_reply_ids'] ??
+                    widget.feed.raw['recent_reply_ids'])
+                ?.toString() ??
+            '';
+        final recentIds = recentIdsRaw
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        if (recentIds.isNotEmpty && _replies.isEmpty) {
+          try {
+            final futures = recentIds.take(15).map((rid) async {
+              try {
+                final res = await widget.api.getReplyDetail(rid);
+                final data = res['data'];
+                if (data is Map<String, dynamic> && data['id'] != null) {
+                  return CoolapkFeed.fromJson(data);
+                }
+              } catch (_) {}
+              return null;
+            });
+            final fetched = (await Future.wait(futures))
+                .whereType<CoolapkFeed>()
+                .toList();
+            if (mounted &&
+                fetched.isNotEmpty &&
+                requestId == _replyLoadRequestId &&
+                _commentMode == targetMode) {
               setState(() {
-                _replies.addAll(embedded);
+                final ids = _replies.map((r) => r.id).toSet();
+                for (final r in fetched) {
+                  if (ids.add(r.id)) _replies.add(r);
+                }
               });
             }
+          } catch (_) {}
+        }
+
+        if (mounted &&
+            _replies.isEmpty &&
+            requestId == _replyLoadRequestId &&
+            _commentMode == targetMode) {
+          final embedded = _extractEmbeddedReplies();
+          if (embedded.isNotEmpty) {
+            setState(() {
+              _replies.addAll(embedded);
+            });
           }
         }
       }
     } finally {
-      if (mounted) setState(() => _loadingReplies = false);
+      if (mounted && requestId == _replyLoadRequestId) {
+        setState(() => _loadingReplies = false);
+      }
     }
   }
 
@@ -7686,7 +7817,15 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
       }
       _replyPage = page;
       _replyHasMore = result.hasMore && result.items.isNotEmpty;
+      _commentModeReplies[_commentMode] = List<CoolapkFeed>.from(_replies);
+      _commentModePages[_commentMode] = _replyPage;
+      _commentModeHasMore[_commentMode] = _replyHasMore;
     });
+    if (refresh) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _alignCommentsHeaderIfNeeded();
+      });
+    }
   }
 
   Future<void> _toggleLike() async {
@@ -7762,7 +7901,12 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     if (!mounted || sure != true) return;
     try {
       await widget.api.deleteReply(reply.id);
-      if (mounted) await _loadReplies();
+      if (mounted) {
+        _commentModeReplies.clear();
+        _commentModePages.clear();
+        _commentModeHasMore.clear();
+        await _loadReplies();
+      }
     } catch (error) {
       if (mounted) _showMessage(error.toString());
     }
@@ -7983,6 +8127,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
       _replyPicture.clear();
       _replyImage = null;
       setState(() => _replyTo = '');
+      _commentModeReplies.clear();
+      _commentModePages.clear();
+      _commentModeHasMore.clear();
       await _loadReplies();
       if (mounted) _showMessage('评论已提交');
     } catch (error) {
@@ -8382,6 +8529,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                       .withValues(alpha: 0.25),
                 ),
                 Padding(
+                  key: _commentsHeaderKey,
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -8486,59 +8634,53 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                     ),
                   )
                 else
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (var index = 0; index < _replies.length; index++)
-                        if (_replies[index].id != _targetReply?.id)
-                          _ReplyTile(
-                            api: widget.api,
-                            reply: _replies[index],
-                            authorUid: authorUid,
-                            showDivider: index + 1 < _replies.length,
-                            onFilterAuthor: () {
-                              if (_commentMode != 'author') {
-                                HapticFeedbackUtil.selection();
+                  Opacity(
+                    opacity:
+                        _loadingReplies && _replies.isNotEmpty ? 0.65 : 1.0,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var index = 0; index < _replies.length; index++)
+                          if (_replies[index].id != _targetReply?.id)
+                            _ReplyTile(
+                              api: widget.api,
+                              reply: _replies[index],
+                              authorUid: authorUid,
+                              showDivider: index + 1 < _replies.length,
+                              onFilterAuthor: () => _switchCommentMode('author'),
+                              onReply: () {
                                 setState(() {
-                                  _commentMode = 'author';
-                                  _replyPage = 0;
-                                  _replyHasMore = true;
-                                  _replies.clear();
+                                  _replyTo = _replies[index].id;
                                 });
-                                _loadReplies();
-                              }
-                            },
-                            onReply: () {
-                              setState(() {
-                                _replyTo = _replies[index].id;
-                              });
-                              _openCommentComposer();
-                            },
-                            liked:
-                                _replyLikes[_replies[index].id] ??
-                                _replies[index].liked,
-                            onLike: () => _toggleReplyLike(_replies[index]),
-                            onDelete:
-                                widget.api.currentUid.isNotEmpty &&
-                                    widget.api.currentUid == _replies[index].uid
-                                ? () => _deleteReply(_replies[index])
-                                : null,
-                            onDetails: () => Navigator.of(context).push<void>(
-                              MaterialPageRoute<void>(
-                                builder: (_) => ApiDetailPage(
-                                  api: widget.api,
-                                  title: '评论详情',
-                                  path: '/v6/feed/replyDetail',
-                                  query: {'id': _replies[index].id},
+                                _openCommentComposer();
+                              },
+                              liked:
+                                  _replyLikes[_replies[index].id] ??
+                                  _replies[index].liked,
+                              onLike: () => _toggleReplyLike(_replies[index]),
+                              onDelete:
+                                  widget.api.currentUid.isNotEmpty &&
+                                          widget.api.currentUid ==
+                                              _replies[index].uid
+                                      ? () => _deleteReply(_replies[index])
+                                      : null,
+                              onDetails: () => Navigator.of(context).push<void>(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => ApiDetailPage(
+                                    api: widget.api,
+                                    title: '评论详情',
+                                    path: '/v6/feed/replyDetail',
+                                    query: {'id': _replies[index].id},
+                                  ),
                                 ),
                               ),
+                              onThread: () =>
+                                  _showReplyThread(_replies[index], authorUid),
                             ),
-                            onThread: () =>
-                                _showReplyThread(_replies[index], authorUid),
-                          ),
-                    ],
+                      ],
+                    ),
                   ),
-                if (_loadingReplies && _replies.isNotEmpty)
+                if (_loadingReplies && _replies.isNotEmpty && _replyPage > 0)
                   const Padding(
                     padding: EdgeInsets.all(14),
                     child: Center(child: CircularProgressIndicator()),
@@ -8775,19 +8917,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
       borderRadius: BorderRadius.circular(14),
-      onTap: _loadingReplies
-          ? null
-          : () {
-              if (_commentMode == mode) return;
-              HapticFeedbackUtil.selection();
-              setState(() {
-                _commentMode = mode;
-                _replyPage = 0;
-                _replyHasMore = true;
-                _replies.clear();
-              });
-              _loadReplies();
-            },
+      onTap: () => _switchCommentMode(mode),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),

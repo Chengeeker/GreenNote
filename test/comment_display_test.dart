@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,6 +28,7 @@ class CommentTestApi extends MockChannelApi {
   String lastListType = '';
   int hotReplyCallCount = 0;
   int replyListCallCount = 0;
+  Completer<ApiPage>? delayReplyPage;
 
   @override
   LocalAccount get localAccount => LocalAccount(_sharedPreferences);
@@ -107,6 +109,10 @@ class CommentTestApi extends MockChannelApi {
     replyListCallCount++;
     lastFromFeedAuthor = fromFeedAuthor;
     lastListType = listType;
+    if (delayReplyPage != null) {
+      final res = await delayReplyPage!.future;
+      return res;
+    }
     if (replyListThrowsRestricted) {
       throw const CoolapkApiException('当前访问需要验证码');
     }
@@ -462,5 +468,94 @@ void main() {
     expect(find.text('该动态下暂无楼主回复'), findsOneWidget);
     // 绝不静默回退展示热门评论
     expect(find.text('热门评论用户1'), findsNothing);
+  });
+
+  testWidgets('切换评论筛选方式时保留现有评论内容，不提前清空销毁列表，防止页面高度坍缩', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = CommentTestApi(hasCookie: false);
+    await tester.pumpWidget(buildTestApp(api: api, feed: testFeed));
+    await tester.pumpAndSettle();
+
+    // 默认展示热门评论
+    expect(find.text('热门评论用户1'), findsOneWidget);
+
+    // 模拟网络请求尚未返回（异步挂起）
+    final completer = Completer<ApiPage>();
+    api.delayReplyPage = completer;
+
+    // 点击“最新”过滤按钮
+    final latestChip = find.text('最新');
+    expect(latestChip, findsWidgets);
+    await tester.tap(latestChip.first);
+    // 只 pump 一帧，此时网络尚未返回
+    await tester.pump();
+
+    // 核心断言：在请求返回前，原有的评论绝不被清空销毁，继续留在屏幕上，防止列表坍缩跳回顶部
+    expect(find.text('热门评论用户1'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+
+    // 此时网络返回新模式数据
+    completer.complete(
+      const ApiPage(
+        items: [
+          {
+            'id': 'latest_reply_1',
+            'uid': 'user_latest',
+            'username': '最新评论用户',
+            'message': '这是最新发表的评论',
+            'likenum': 0,
+            'replynum': 0,
+            'entityType': 'feed_reply',
+          },
+        ],
+        page: 1,
+        hasMore: false,
+        firstItem: 'latest_reply_1',
+        lastItem: 'latest_reply_1',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 加载完成后原地替换为最新评论
+    expect(find.text('最新评论用户'), findsOneWidget);
+    expect(find.text('热门评论用户1'), findsNothing);
+  });
+
+  testWidgets('多筛选模式具备内存缓存，切换回已加载模式时即时秒切无网络请求', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = CommentTestApi(hasCookie: false);
+    await tester.pumpWidget(buildTestApp(api: api, feed: testFeed));
+    await tester.pumpAndSettle();
+
+    // 初始热门已加载：hotReplyCallCount 为 1
+    expect(find.text('热门评论用户1'), findsOneWidget);
+    expect(api.hotReplyCallCount, 1);
+
+    // 切换到“最新”
+    await tester.tap(find.text('最新').first);
+    await tester.pumpAndSettle();
+    expect(find.text('全部评论用户1'), findsOneWidget);
+    expect(find.text('热门评论用户1'), findsNothing);
+    final replyCallsAfterLatest = api.replyListCallCount;
+
+    // 切换回“热门”：直接从缓存秒切，不产生新的网络请求
+    await tester.tap(find.text('热门').first);
+    await tester.pump(); // 0ms 瞬间渲染
+    expect(find.text('热门评论用户1'), findsOneWidget);
+    expect(api.hotReplyCallCount, 1); // 未产生二次请求
+
+    // 再次切换回“最新”：直接从缓存秒切，不产生新的网络请求
+    await tester.tap(find.text('最新').first);
+    await tester.pump();
+    expect(find.text('全部评论用户1'), findsOneWidget);
+    expect(api.replyListCallCount, replyCallsAfterLatest); // 未产生二次请求
   });
 }

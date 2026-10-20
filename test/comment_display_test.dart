@@ -22,6 +22,9 @@ class CommentTestApi extends MockChannelApi {
   final bool replyListThrowsRestricted;
   final bool feedDetailThrowsRestricted;
   final bool hotReplyEmpty;
+  bool authorRepliesEmpty = false;
+  bool lastFromFeedAuthor = false;
+  String lastListType = '';
   int hotReplyCallCount = 0;
   int replyListCallCount = 0;
 
@@ -102,8 +105,38 @@ class CommentTestApi extends MockChannelApi {
     bool fromFeedAuthor = false,
   }) async {
     replyListCallCount++;
+    lastFromFeedAuthor = fromFeedAuthor;
+    lastListType = listType;
     if (replyListThrowsRestricted) {
       throw const CoolapkApiException('当前访问需要验证码');
+    }
+    if (fromFeedAuthor) {
+      if (authorRepliesEmpty) {
+        return const ApiPage(
+          items: [],
+          page: 1,
+          hasMore: false,
+          firstItem: '',
+          lastItem: '',
+        );
+      }
+      return ApiPage(
+        items: [
+          {
+            'id': 'author_reply_$page',
+            'uid': 'feed_author',
+            'username': '动态发布者',
+            'message': '这是楼主本人的回复内容',
+            'likenum': 5,
+            'replynum': 0,
+            'entityType': 'feed_reply',
+          },
+        ],
+        page: page,
+        hasMore: false,
+        firstItem: 'author_reply_$page',
+        lastItem: 'author_reply_$page',
+      );
     }
     return ApiPage(
       items: [
@@ -378,5 +411,56 @@ void main() {
     // 绝对不展示“当前访问需要验证码”或“重试”
     expect(find.text('当前访问需要验证码'), findsNothing);
     expect(find.text('重试'), findsNothing);
+  });
+
+  testWidgets('点击“楼主”（仅看楼主）按钮，调用 fromFeedAuthor 并仅展示楼主本人的回复', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = CommentTestApi(hasCookie: false);
+    await tester.pumpWidget(buildTestApp(api: api, feed: testFeed));
+    await tester.pumpAndSettle();
+
+    // 点击“楼主”过滤按钮
+    final authorChip = find.text('楼主');
+    expect(authorChip, findsWidgets);
+    await tester.tap(authorChip.first);
+    await tester.pumpAndSettle();
+
+    // 验证调用了 fromFeedAuthor == true
+    expect(api.lastFromFeedAuthor, isTrue);
+    expect(api.lastListType, 'dateline_desc');
+
+    // 仅展示楼主本人的回复
+    expect(find.text('这是楼主本人的回复内容'), findsOneWidget);
+    expect(find.text('热门评论用户1'), findsNothing);
+  });
+
+  testWidgets('当“楼主”模式下无楼主回复时，展示“该动态下暂无楼主回复”，绝不静默回退至热门评论', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = CommentTestApi(hasCookie: false)
+      ..authorRepliesEmpty = true;
+    await tester.pumpWidget(buildTestApp(api: api, feed: testFeed));
+    await tester.pumpAndSettle();
+
+    // 点击“楼主”过滤按钮
+    final authorChip = find.text('楼主');
+    expect(authorChip, findsWidgets);
+    await tester.tap(authorChip.first);
+    await tester.pumpAndSettle();
+
+    // 验证调用了 fromFeedAuthor == true
+    expect(api.lastFromFeedAuthor, isTrue);
+
+    // 验证明确展示空状态占位
+    expect(find.text('该动态下暂无楼主回复'), findsOneWidget);
+    // 绝不静默回退展示热门评论
+    expect(find.text('热门评论用户1'), findsNothing);
   });
 }

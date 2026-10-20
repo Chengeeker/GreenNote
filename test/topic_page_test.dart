@@ -6,6 +6,9 @@ import 'package:greennote/features/shared/api_list_page.dart';
 class _MockCoolapkApi extends Fake implements CoolapkApi {
   Map<String, dynamic>? followDetail;
   bool? previousFollow;
+  List<Map<String, dynamic>> mockFeedItemsPage1 = [];
+  List<Map<String, dynamic>> mockFeedItemsPage2 = [];
+
   @override
   Future<void> followTopic(String tag, {required bool following}) async {
     previousFollow = following;
@@ -50,8 +53,30 @@ class _MockCoolapkApi extends Fake implements CoolapkApi {
     };
   }
 
+  final List<Map<String, dynamic>> requestedQueries = [];
+
   @override
   Future<ApiPage> getList(String path, {Map<String, dynamic>? query}) async {
+    if (query != null) requestedQueries.add(Map<String, dynamic>.from(query));
+    final pageNum = query?['page'] as int? ?? 1;
+    if (pageNum == 1 && mockFeedItemsPage1.isNotEmpty) {
+      return ApiPage(
+        items: mockFeedItemsPage1,
+        page: 1,
+        hasMore: mockFeedItemsPage2.isNotEmpty,
+        firstItem: '1',
+        lastItem: '20',
+      );
+    }
+    if (pageNum == 2 && mockFeedItemsPage2.isNotEmpty) {
+      return ApiPage(
+        items: mockFeedItemsPage2,
+        page: 2,
+        hasMore: false,
+        firstItem: '21',
+        lastItem: '40',
+      );
+    }
     return const ApiPage(
       items: [],
       page: 1,
@@ -275,6 +300,265 @@ void main() {
           (widget) => widget is SizedBox && widget.height == 120,
         );
         expect(topBannerFinder, findsNothing);
+      },
+    );
+
+    testWidgets(
+      'switching sort buttons (默认/最新/热度) triggers API requests with lastupdate_desc, dateline_desc, hot',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(
+              api: mockApi,
+              tag: 'ColorOS17',
+              initialTitle: 'ColorOS17',
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        // Initial default sort is lastupdate_desc
+        expect(
+          mockApi.requestedQueries.any(
+            (q) => q['listType'] == 'lastupdate_desc',
+          ),
+          isTrue,
+        );
+
+        mockApi.requestedQueries.clear();
+
+        // Tap "最新"
+        await tester.tap(find.text('最新'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(
+          mockApi.requestedQueries.any(
+            (q) => q['listType'] == 'dateline_desc',
+          ),
+          isTrue,
+        );
+
+        mockApi.requestedQueries.clear();
+
+        // Tap "热度"
+        await tester.tap(find.text('热度'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(
+          mockApi.requestedQueries.any(
+            (q) => q['listType'] == 'hot',
+          ),
+          isTrue,
+        );
+
+        mockApi.requestedQueries.clear();
+
+        // Tap "默认"
+        await tester.tap(find.text('默认'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(
+          mockApi.requestedQueries.any(
+            (q) => q['listType'] == 'lastupdate_desc',
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    testWidgets(
+      'normal topic page tabs (热门/最新发布/最新回复) map correctly to hot, dateline_desc, lastupdate_desc',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(
+              api: mockApi,
+              tag: '普通摄影',
+              initialTitle: '普通摄影',
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        // Initial tab is 热门 -> listType 'hot'
+        expect(
+          mockApi.requestedQueries.any(
+            (q) => q['listType'] == 'hot',
+          ),
+          isTrue,
+        );
+
+        mockApi.requestedQueries.clear();
+
+        // Switch to '最新发布' -> listType 'dateline_desc'
+        await tester.tap(find.text('最新发布'));
+        await tester.pumpAndSettle();
+
+        expect(
+          mockApi.requestedQueries.any(
+            (q) => q['listType'] == 'dateline_desc',
+          ),
+          isTrue,
+        );
+
+        mockApi.requestedQueries.clear();
+
+        // Switch to '最新回复' -> listType 'lastupdate_desc'
+        await tester.tap(find.text('最新回复'));
+        await tester.pumpAndSettle();
+
+        expect(
+          mockApi.requestedQueries.any(
+            (q) => q['listType'] == 'lastupdate_desc',
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('getFeedHeatScore calculates engagement and parses various count formats', () {
+      final normalFeed = {
+        'likenum': 100,
+        'replynum': 30,
+        'favnum': 10,
+        'forwardnum': 5,
+        'dateline': 1700000000,
+      };
+      // 100*2 + 30*3 + 10*2 + 5*3 = 200 + 90 + 20 + 15 = 325
+      expect(getFeedHeatScore(normalFeed), 325);
+
+      final wanFeed = {
+        'likenum': '1.5万',
+        'replynum': '200',
+        'favnum': '0',
+        'forwardnum': '0',
+      };
+      // 15000*2 + 200*3 = 30000 + 600 = 30600
+      expect(getFeedHeatScore(wanFeed), 30600);
+
+      final pinnedFeed = {
+        'is_top': 1,
+        'likenum': 0,
+        'replynum': 0,
+      };
+      expect(getFeedHeatScore(pinnedFeed), 1000000000);
+    });
+
+    test('compareTopicFeedsByHeat places highest interaction feed first and preserves pinned priority', () {
+      final feedLow = {
+        'id': 'low',
+        'message': 'Low activity post',
+        'likenum': 1,
+        'replynum': 0,
+        'dateline': 1700000100,
+      };
+      final feedMed = {
+        'id': 'med',
+        'message': 'Medium activity post',
+        'likenum': 50,
+        'replynum': 20,
+        'dateline': 1700000050,
+      };
+      final feedHigh = {
+        'id': 'high',
+        'message': 'High activity viral post',
+        'likenum': 800,
+        'replynum': 250,
+        'dateline': 1700000000,
+      };
+      final feedPinned = {
+        'id': 'pin',
+        'message': 'Pinned post',
+        'is_top': 1,
+        'likenum': 0,
+        'replynum': 0,
+        'dateline': 1699999999,
+      };
+
+      final list = [feedLow, feedPinned, feedHigh, feedMed];
+      list.sort(compareTopicFeedsByHeat);
+
+      expect(list.map((e) => e['id']).toList(), ['pin', 'high', 'med', 'low']);
+    });
+
+    test('compareTopicFeedsByDate sorts feeds by dateline descending', () {
+      final oldFeed = {'id': 'old', 'dateline': 1600000000};
+      final newFeed = {'id': 'new', 'dateline': 1700000000};
+      final pinnedFeed = {'id': 'pin', 'is_top': 1, 'dateline': 1500000000};
+
+      final list = [oldFeed, newFeed, pinnedFeed];
+      list.sort(compareTopicFeedsByDate);
+
+      expect(list.map((e) => e['id']).toList(), ['pin', 'new', 'old']);
+    });
+
+    testWidgets(
+      'topic page hot sort prefetches and displays high-engagement post at top',
+      (tester) async {
+        final mockApi = _MockCoolapkApi();
+        mockApi.mockFeedItemsPage1 = [
+          {
+            'id': 'p1_low',
+            'entityType': 'feed',
+            'feedType': 'feed',
+            'message': 'Page1 low post',
+            'username': 'UserA',
+            'likenum': 2,
+            'replynum': 0,
+            'dateline': 1700000200,
+          },
+          {
+            'id': 'p1_med',
+            'entityType': 'feed',
+            'feedType': 'feed',
+            'message': 'Page1 med post',
+            'username': 'UserB',
+            'likenum': 30,
+            'replynum': 10,
+            'dateline': 1700000100,
+          },
+        ];
+        mockApi.mockFeedItemsPage2 = [
+          {
+            'id': 'p2_viral',
+            'entityType': 'feed',
+            'feedType': 'feed',
+            'message': 'Page2 viral hot post',
+            'username': 'UserC',
+            'likenum': 999,
+            'replynum': 300,
+            'dateline': 1700000050,
+          },
+        ];
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(
+              api: mockApi,
+              tag: '普通摄影',
+              initialTitle: '普通摄影',
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pumpAndSettle();
+
+        // In normal topic, first tab is 热门 with prefetchPages=2 & compareTopicFeedsByHeat
+        // Page 1 and Page 2 should both be queried
+        expect(mockApi.requestedQueries.any((q) => q['page'] == 1), isTrue);
+        expect(mockApi.requestedQueries.any((q) => q['page'] == 2), isTrue);
+
+        // Find rendered messages; viral post from page 2 must be rendered
+        expect(find.text('Page2 viral hot post'), findsOneWidget);
+        expect(find.text('Page1 med post'), findsOneWidget);
       },
     );
   });

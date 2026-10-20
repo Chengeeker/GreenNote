@@ -7230,6 +7230,13 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   String _commentMode = 'hot';
   int _replyPage = 0;
 
+  String get _authorUid => (_detail?['uid'] ??
+          _detail?['userInfo']?['uid'] ??
+          _detail?['user_info']?['uid'] ??
+          widget.feed.uid)
+      .toString()
+      .trim();
+
   @override
   void initState() {
     super.initState();
@@ -7454,6 +7461,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
           widget.feed.id,
           next,
           fromFeedAuthor: true,
+          listType: 'dateline_desc',
           feedType: feedType,
           firstItem: refresh ? null : _replies.firstOrNull?.id,
           lastItem: refresh ? null : _replies.lastOrNull?.id,
@@ -7468,9 +7476,31 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
         ),
       };
 
-      // 当热门或普通评论返回空列表时（例如个人主页自发动态、冷门动态、头条部分评论），
+      // 仅看楼主模式下：在客户端严格执行楼主 UID 校验，过滤掉任何非楼主本人的数据
+      if (_commentMode == 'author') {
+        final authorId = _authorUid;
+        if (authorId.isNotEmpty) {
+          final authorItems = result.items.where((item) {
+            final uid = (item['uid'] ??
+                    item['userInfo']?['uid'] ??
+                    item['user_info']?['uid'])
+                ?.toString()
+                .trim();
+            return uid == authorId;
+          }).toList();
+          result = ApiPage(
+            items: authorItems,
+            page: result.page,
+            firstItem: result.firstItem,
+            lastItem: result.lastItem,
+            hasMore: result.hasMore,
+          );
+        }
+      }
+
+      // 当非“仅看楼主”模式时，如果热门或普通评论返回空列表时（例如个人主页自发动态、冷门动态、头条部分评论），
       // 深度提取冷门评论：尝试从 recent_reply_ids 拉取具体回复（该接口未受未登录风控限制）
-      if (result.items.isEmpty && refresh) {
+      if (_commentMode != 'author' && result.items.isEmpty && refresh) {
         if (_detail == null && _loadingDetail) {
           try {
             final res = await widget.api.getFeedDetail(widget.feed.id);
@@ -7534,9 +7564,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
       }
     } catch (error) {
       if (mounted) {
-        // 彻底去除评论区报错与重试条，非致命风控错误静默降级展示
+        // 彻底去除评论区报错与重试条，非致命风控错误静默降级展示；仅看楼主模式下绝不回退至热门
         _replyError = null;
-        if (_commentMode != 'hot') {
+        if (_commentMode != 'hot' && _commentMode != 'author') {
           try {
             final fallback = await widget.api.getHotReplyPage(
               widget.feed.id,
@@ -7557,48 +7587,50 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
           } catch (_) {}
         }
 
-        final recentIdsRaw =
-            (_detail?['recent_reply_ids'] ??
-                    widget.feed.raw['recent_reply_ids'])
-                ?.toString() ??
-            '';
-        final recentIds = recentIdsRaw
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .toList();
-        if (recentIds.isNotEmpty && _replies.isEmpty) {
-          try {
-            final futures = recentIds.take(15).map((rid) async {
-              try {
-                final res = await widget.api.getReplyDetail(rid);
-                final data = res['data'];
-                if (data is Map<String, dynamic> && data['id'] != null) {
-                  return CoolapkFeed.fromJson(data);
-                }
-              } catch (_) {}
-              return null;
-            });
-            final fetched = (await Future.wait(futures))
-                .whereType<CoolapkFeed>()
-                .toList();
-            if (mounted && fetched.isNotEmpty) {
+        if (_commentMode != 'author') {
+          final recentIdsRaw =
+              (_detail?['recent_reply_ids'] ??
+                      widget.feed.raw['recent_reply_ids'])
+                  ?.toString() ??
+              '';
+          final recentIds = recentIdsRaw
+              .split(',')
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+          if (recentIds.isNotEmpty && _replies.isEmpty) {
+            try {
+              final futures = recentIds.take(15).map((rid) async {
+                try {
+                  final res = await widget.api.getReplyDetail(rid);
+                  final data = res['data'];
+                  if (data is Map<String, dynamic> && data['id'] != null) {
+                    return CoolapkFeed.fromJson(data);
+                  }
+                } catch (_) {}
+                return null;
+              });
+              final fetched = (await Future.wait(futures))
+                  .whereType<CoolapkFeed>()
+                  .toList();
+              if (mounted && fetched.isNotEmpty) {
+                setState(() {
+                  final ids = _replies.map((r) => r.id).toSet();
+                  for (final r in fetched) {
+                    if (ids.add(r.id)) _replies.add(r);
+                  }
+                });
+              }
+            } catch (_) {}
+          }
+
+          if (mounted && _replies.isEmpty) {
+            final embedded = _extractEmbeddedReplies();
+            if (embedded.isNotEmpty) {
               setState(() {
-                final ids = _replies.map((r) => r.id).toSet();
-                for (final r in fetched) {
-                  if (ids.add(r.id)) _replies.add(r);
-                }
+                _replies.addAll(embedded);
               });
             }
-          } catch (_) {}
-        }
-
-        if (mounted && _replies.isEmpty) {
-          final embedded = _extractEmbeddedReplies();
-          if (embedded.isNotEmpty) {
-            setState(() {
-              _replies.addAll(embedded);
-            });
           }
         }
       }
@@ -7613,11 +7645,12 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     required int page,
   }) {
     setState(() {
-      // 仅在获取到了新数据时清空旧数据，防止冷门帖子因空响应误清空已有的内嵌或保底评论
-      if (refresh && result.items.isNotEmpty) {
+      // 刷新模式下清空旧数据
+      if (refresh) {
         _replies.clear();
       }
       final ids = _replies.map((reply) => reply.id).toSet();
+      final authorId = _authorUid;
       _replies.addAll(
         result.items.map(CoolapkFeed.fromJson).where((reply) {
           final type =
@@ -7627,15 +7660,25 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                       '')
                   .toString()
                   .toLowerCase();
-          return type != 'feed_detail_reply_sponsor_card' &&
-              reply.message.trim().toUpperCase() !=
-                  'FEED_DETAIL_REPLY_SPONSOR_CARD' &&
-              (reply.id.isEmpty || ids.add(reply.id));
+          if (type == 'feed_detail_reply_sponsor_card' ||
+              reply.message.trim().toUpperCase() ==
+                  'FEED_DETAIL_REPLY_SPONSOR_CARD') {
+            return false;
+          }
+          if (_commentMode == 'author' && authorId.isNotEmpty) {
+            if (reply.uid != authorId) return false;
+          }
+          return reply.id.isEmpty || ids.add(reply.id);
         }),
       );
       if (_replies.isEmpty) {
         final embedded = _extractEmbeddedReplies();
         for (final reply in embedded) {
+          if (_commentMode == 'author' &&
+              authorId.isNotEmpty &&
+              reply.uid != authorId) {
+            continue;
+          }
           if (ids.add(reply.id)) {
             _replies.add(reply);
           }
@@ -8427,7 +8470,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            '还没有回复哦，快来回复一下吧~',
+                            _commentMode == 'author'
+                                ? '该动态下暂无楼主回复'
+                                : '还没有回复哦，快来回复一下吧~',
                             style: TextStyle(
                               fontSize: 13,
                               color: Theme.of(context)
@@ -8451,6 +8496,18 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                             reply: _replies[index],
                             authorUid: authorUid,
                             showDivider: index + 1 < _replies.length,
+                            onFilterAuthor: () {
+                              if (_commentMode != 'author') {
+                                HapticFeedbackUtil.selection();
+                                setState(() {
+                                  _commentMode = 'author';
+                                  _replyPage = 0;
+                                  _replyHasMore = true;
+                                  _replies.clear();
+                                });
+                                _loadReplies();
+                              }
+                            },
                             onReply: () {
                               setState(() {
                                 _replyTo = _replies[index].id;
@@ -8722,10 +8779,12 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
           ? null
           : () {
               if (_commentMode == mode) return;
+              HapticFeedbackUtil.selection();
               setState(() {
                 _commentMode = mode;
                 _replyPage = 0;
                 _replyHasMore = true;
+                _replies.clear();
               });
               _loadReplies();
             },
@@ -9011,6 +9070,7 @@ class _ReplyTile extends StatelessWidget {
     required this.onThread,
     this.authorUid = '',
     this.onDelete,
+    this.onFilterAuthor,
     this.showSubReplies = true,
     this.showThreadAction = true,
   });
@@ -9025,6 +9085,7 @@ class _ReplyTile extends StatelessWidget {
   final VoidCallback onThread;
   final String authorUid;
   final VoidCallback? onDelete;
+  final VoidCallback? onFilterAuthor;
   final bool showSubReplies;
   final bool showThreadAction;
 
@@ -9102,21 +9163,24 @@ class _ReplyTile extends StatelessWidget {
                           ),
                           if (isAuthor) ...[
                             const SizedBox(width: 5),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 4,
-                                vertical: 1,
-                              ),
-                              decoration: BoxDecoration(
-                                color: scheme.primary.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                              child: Text(
-                                '楼主',
-                                style: TextStyle(
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.bold,
-                                  color: scheme.primary,
+                            GestureDetector(
+                              onTap: onFilterAuthor,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                  vertical: 1,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: scheme.primary.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  '楼主',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: scheme.primary,
+                                  ),
                                 ),
                               ),
                             ),

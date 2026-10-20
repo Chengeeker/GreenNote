@@ -44,6 +44,105 @@ import 'community_library_page.dart';
 import 'community_detail_page.dart';
 import 'reply_notifications_page.dart';
 
+int _parseCount(dynamic value) {
+  if (value == null) return 0;
+  if (value is int) return value;
+  if (value is num) return value.round();
+  final s = value.toString().trim();
+  if (s.isEmpty) return 0;
+  final direct = int.tryParse(s);
+  if (direct != null) return direct;
+  final lower = s.toLowerCase();
+  if (lower.endsWith('万') || lower.endsWith('w')) {
+    final numPart =
+        double.tryParse(lower.substring(0, lower.length - 1).trim());
+    if (numPart != null) return (numPart * 10000).round();
+  }
+  if (lower.endsWith('k')) {
+    final numPart =
+        double.tryParse(lower.substring(0, lower.length - 1).trim());
+    if (numPart != null) return (numPart * 1000).round();
+  }
+  return double.tryParse(s)?.round() ?? 0;
+}
+
+int _parseDateline(dynamic value) {
+  if (value == null) return 0;
+  if (value is int) return value;
+  if (value is num) return value.round();
+  final s = value.toString().trim();
+  if (s.isEmpty) return 0;
+  return int.tryParse(s) ?? 0;
+}
+
+bool _isTopFeedItem(Map<String, dynamic> item) {
+  final v = item['is_top'] ?? item['istop'] ?? item['isTop'];
+  if (v == null) return false;
+  if (v == true || v == 1 || v == '1') return true;
+  return false;
+}
+
+/// Calculate engagement heat score for a feed or topic item.
+/// Higher score indicates higher user interaction (likes, comments, favs, shares).
+int getFeedHeatScore(Map<String, dynamic> item) {
+  if (_isTopFeedItem(item)) {
+    return 1000000000;
+  }
+
+  final serverRank =
+      num.tryParse('${item['rank_score'] ?? item['heat'] ?? 0}')?.toDouble() ??
+      0.0;
+
+  final likes = _parseCount(
+    item['likenum'] ?? item['likeNum'] ?? item['like_num'],
+  );
+  final replies = _parseCount(
+    item['replynum'] ??
+        item['replyNum'] ??
+        item['reply_num'] ??
+        item['commentnum'],
+  );
+  final favs = _parseCount(
+    item['favnum'] ?? item['favNum'] ?? item['fav_num'],
+  );
+  final shares = _parseCount(
+    item['forwardnum'] ??
+        item['forwardNum'] ??
+        item['forward_num'] ??
+        item['share_num'],
+  );
+
+  final engagement = likes * 2 + replies * 3 + favs * 2 + shares * 3;
+  return (serverRank * 10).round() + engagement;
+}
+
+/// Comparator that ranks feeds by heat (engagement score) descending.
+/// If heat is equal, more recent feeds are placed first.
+int compareTopicFeedsByHeat(Map<String, dynamic> a, Map<String, dynamic> b) {
+  final isTopA = _isTopFeedItem(a);
+  final isTopB = _isTopFeedItem(b);
+  if (isTopA != isTopB) return isTopA ? -1 : 1;
+
+  final heatA = getFeedHeatScore(a);
+  final heatB = getFeedHeatScore(b);
+  if (heatA != heatB) return heatB.compareTo(heatA);
+
+  final dateA = _parseDateline(a['dateline']);
+  final dateB = _parseDateline(b['dateline']);
+  return dateB.compareTo(dateA);
+}
+
+/// Comparator that ranks feeds by creation date (dateline) descending.
+int compareTopicFeedsByDate(Map<String, dynamic> a, Map<String, dynamic> b) {
+  final isTopA = _isTopFeedItem(a);
+  final isTopB = _isTopFeedItem(b);
+  if (isTopA != isTopB) return isTopA ? -1 : 1;
+
+  final dateA = _parseDateline(a['dateline']);
+  final dateB = _parseDateline(b['dateline']);
+  return dateB.compareTo(dateA);
+}
+
 class ApiListPage extends StatefulWidget {
   const ApiListPage({
     required this.api,
@@ -58,6 +157,8 @@ class ApiListPage extends StatefulWidget {
     this.showAccessErrors = true,
     this.itemBuilderWithIndex,
     this.itemFilter,
+    this.itemComparator,
+    this.prefetchPages = 1,
     this.onPageItemsLoaded,
     this.onPageLoaded,
     this.initialItems = const [],
@@ -77,6 +178,8 @@ class ApiListPage extends StatefulWidget {
   final Widget Function(BuildContext, Map<String, dynamic>, int)?
   itemBuilderWithIndex;
   final bool Function(Map<String, dynamic>)? itemFilter;
+  final int Function(Map<String, dynamic>, Map<String, dynamic>)? itemComparator;
+  final int prefetchPages;
   final void Function(List<Map<String, dynamic>>)? onPageItemsLoaded;
   final void Function(ApiPage)? onPageLoaded;
   final List<Map<String, dynamic>> initialItems;
@@ -138,7 +241,9 @@ class _ApiListPageState extends State<ApiListPage>
   void didUpdateWidget(covariant ApiListPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.path != oldWidget.path ||
-        !mapEquals(widget.query, oldWidget.query)) {
+        !mapEquals(widget.query, oldWidget.query) ||
+        widget.itemComparator != oldWidget.itemComparator ||
+        widget.prefetchPages != oldWidget.prefetchPages) {
       _requestVersion++;
       if (_loading) {
         _pendingRefresh = true;
@@ -194,35 +299,63 @@ class _ApiListPageState extends State<ApiListPage>
               path.startsWith('/v6/feed/hotReplyList'))
           ? 'https://api2.coolapk.com$path'
           : path;
-      ApiPage page;
-      try {
-        page = await widget.api.getList(
-          requestPath,
-          query: {
-            ...query,
-            'page': next,
-            if (!refresh && _first.isNotEmpty) 'firstItem': _first,
-            if (!refresh && _last.isNotEmpty) 'lastItem': _last,
-          },
-        );
-      } catch (_) {
-        if (requestPath != path) {
-          page = await widget.api.getList(
-            path,
-            query: {
-              ...query,
-              'page': next,
-              if (!refresh && _first.isNotEmpty) 'firstItem': _first,
-              if (!refresh && _last.isNotEmpty) 'lastItem': _last,
-            },
-          );
-        } else {
-          rethrow;
+
+      Future<ApiPage> fetchApiPage({
+        required int pageNum,
+        String? firstItem,
+        String? lastItem,
+      }) async {
+        final queryParams = {
+          ...query,
+          'page': pageNum,
+          if (firstItem != null && firstItem.isNotEmpty) 'firstItem': firstItem,
+          if (lastItem != null && lastItem.isNotEmpty) 'lastItem': lastItem,
+        };
+        try {
+          return await widget.api.getList(requestPath, query: queryParams);
+        } catch (_) {
+          if (requestPath != path) {
+            return await widget.api.getList(path, query: queryParams);
+          } else {
+            rethrow;
+          }
         }
       }
+
+      ApiPage page = await fetchApiPage(
+        pageNum: next,
+        firstItem: (!refresh && _first.isNotEmpty) ? _first : null,
+        lastItem: (!refresh && _last.isNotEmpty) ? _last : null,
+      );
+
+      var combinedItems = List<Map<String, dynamic>>.from(page.items);
+      var lastPage = page;
+      int pagesFetched = 1;
+      final targetPages =
+          (refresh && widget.prefetchPages > 1) ? widget.prefetchPages : 1;
+      while (pagesFetched < targetPages &&
+          lastPage.hasMore &&
+          lastPage.lastItem.isNotEmpty) {
+        try {
+          final nextSubPage = next + pagesFetched;
+          final subPage = await fetchApiPage(
+            pageNum: nextSubPage,
+            firstItem: page.firstItem,
+            lastItem: lastPage.lastItem,
+          );
+          if (subPage.items.isEmpty) break;
+          pagesFetched++;
+          lastPage = subPage;
+          combinedItems.addAll(subPage.items);
+          if (!subPage.hasMore) break;
+        } catch (_) {
+          break;
+        }
+      }
+
       if (!mounted || requestVersion != _requestVersion) return;
-      widget.onPageItemsLoaded?.call(page.items);
-      widget.onPageLoaded?.call(page);
+      widget.onPageItemsLoaded?.call(combinedItems);
+      widget.onPageLoaded?.call(lastPage);
       setState(() {
         if (refresh) {
           _items.clear();
@@ -237,13 +370,17 @@ class _ApiListPageState extends State<ApiListPage>
           ..._items.map(_entityKey),
           ..._bufferedItems.map(_entityKey),
         };
-        final newItems = page.items
+        final newItems = combinedItems
             .where(
               (item) =>
                   (widget.itemFilter?.call(item) ?? true) &&
                   known.add(_entityKey(item)),
             )
             .toList();
+
+        if (widget.itemComparator != null) {
+          newItems.sort(widget.itemComparator);
+        }
 
         if (newItems.length <= 4) {
           _items.addAll(newItems);
@@ -256,12 +393,12 @@ class _ApiListPageState extends State<ApiListPage>
           _bufferedItems.addAll(newItems.skip(stage1Count));
         }
 
-        _page = next;
-        if (page.firstItem.isNotEmpty) _first = page.firstItem;
-        if (page.lastItem.isNotEmpty) _last = page.lastItem;
+        _page = refresh ? pagesFetched : next;
+        if (page.firstItem.isNotEmpty && _first.isEmpty) _first = page.firstItem;
+        if (lastPage.lastItem.isNotEmpty) _last = lastPage.lastItem;
         _more =
-            page.hasMore &&
-            (page.items.isNotEmpty || _bufferedItems.isNotEmpty);
+            lastPage.hasMore &&
+            (combinedItems.isNotEmpty || _bufferedItems.isNotEmpty);
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _bufferedItems.isEmpty) return;
@@ -278,7 +415,8 @@ class _ApiListPageState extends State<ApiListPage>
       final hasNoFeedsInSearchAll = isSearchAll && !_items.any(_isFeedEntity);
       final shouldPreloadNext =
           refresh &&
-          page.hasMore &&
+          widget.prefetchPages <= 1 &&
+          lastPage.hasMore &&
           (_items.length <= 4 || hasNoFeedsInSearchAll);
       if (shouldPreloadNext) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -5460,7 +5598,9 @@ class _ProductPageState extends State<ProductPage>
     final inner = Uri.tryParse(uri?.queryParameters['url'] ?? tab.url ?? '');
     return RepaintBoundary(
       child: ApiListPage(
-        key: ValueKey('prod-${tab.type}-${tab.subId ?? ""}-${widget.id}'),
+        key: ValueKey(
+          'prod-${tab.type}-${tab.subId ?? ""}-${widget.id}-$_sortMode',
+        ),
         api: widget.api,
         title: tab.title,
         path: '/v6/page/dataList',
@@ -5484,6 +5624,10 @@ class _ProductPageState extends State<ProductPage>
             'listType': _sortMode == 'latest' ? 'dateline_desc' : 'rank_score',
           if (tab.type == 'trade') 'listType': 'dateline_desc',
         },
+        itemComparator: _sortMode == 'hot'
+            ? compareTopicFeedsByHeat
+            : (_sortMode == 'latest' ? compareTopicFeedsByDate : null),
+        prefetchPages: _sortMode == 'hot' ? 2 : 1,
         header: _buildProductListHeader(tab, raw),
         showAppBar: false,
         nested: true,
@@ -6425,12 +6569,12 @@ class _TopicPageState extends State<TopicPage>
   String get _apiSortKey {
     switch (_sortMode) {
       case 'latest':
-        return 'lastupdate_desc';
+        return 'dateline_desc';
       case 'hot':
         return 'hot';
       case 'default':
       default:
-        return 'hot';
+        return 'lastupdate_desc';
     }
   }
 
@@ -7402,11 +7546,12 @@ class _TopicPageState extends State<TopicPage>
           setState(() => _sortMode = key);
         }
       },
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
         decoration: BoxDecoration(
           color: isSelected
-              ? Colors.white.withValues(alpha: 0.2)
+              ? Colors.white.withValues(alpha: 0.22)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
         ),
@@ -7417,7 +7562,7 @@ class _TopicPageState extends State<TopicPage>
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             color: isSelected
                 ? Colors.white
-                : Colors.white.withValues(alpha: 0.6),
+                : Colors.white.withValues(alpha: 0.65),
           ),
         ),
       ),
@@ -7678,13 +7823,26 @@ class _TopicPageState extends State<TopicPage>
             ],
             body: TabBarView(
               children: [
-                for (final sort in ['hot', 'lastupdate_desc', 'dateline_desc'])
+                for (final sort in ['hot', 'dateline_desc', 'lastupdate_desc'])
                   ApiListPage(
                     key: PageStorageKey('$_cleanTag:$sort'),
                     api: widget.api,
                     title: '话题',
                     path: '/v6/topic/tagFeedList',
-                    query: {'tag': _cleanTag, 'listType': sort},
+                    query: {
+                      'tag': _cleanTag,
+                      'listType': sort,
+                      if (sort == 'hot') ...{
+                        'sort': 'hot',
+                        'sortField': 'rank_score',
+                      },
+                    },
+                    itemComparator: sort == 'hot'
+                        ? compareTopicFeedsByHeat
+                        : (sort == 'dateline_desc'
+                            ? compareTopicFeedsByDate
+                            : null),
+                    prefetchPages: sort == 'hot' ? 2 : 1,
                     showAppBar: false,
                     nested: true,
                   ),
@@ -7869,7 +8027,7 @@ class _TopicPageState extends State<TopicPage>
                   ? [
                       // 0: 新特性
                       ApiListPage(
-                        key: PageStorageKey('$_cleanTag:digest'),
+                        key: ValueKey('$_cleanTag:digest:$_apiSortKey'),
                         api: widget.api,
                         title: '新特性',
                         path: '/v6/topic/tagFeedList',
@@ -7877,17 +8035,40 @@ class _TopicPageState extends State<TopicPage>
                           'tag': _cleanTag,
                           'feedType': 'digest',
                           'listType': _apiSortKey,
+                          if (_sortMode == 'hot') ...{
+                            'sort': 'hot',
+                            'sortField': 'rank_score',
+                          },
                         },
+                        itemComparator: _sortMode == 'hot'
+                            ? compareTopicFeedsByHeat
+                            : (_sortMode == 'latest'
+                                ? compareTopicFeedsByDate
+                                : null),
+                        prefetchPages: _sortMode == 'hot' ? 2 : 1,
                         showAppBar: false,
                         nested: true,
                       ),
                       // 1: 讨论
                       ApiListPage(
-                        key: PageStorageKey('$_cleanTag:discuss'),
+                        key: ValueKey('$_cleanTag:discuss:$_apiSortKey'),
                         api: widget.api,
                         title: '讨论',
                         path: '/v6/topic/tagFeedList',
-                        query: {'tag': _cleanTag, 'listType': _apiSortKey},
+                        query: {
+                          'tag': _cleanTag,
+                          'listType': _apiSortKey,
+                          if (_sortMode == 'hot') ...{
+                            'sort': 'hot',
+                            'sortField': 'rank_score',
+                          },
+                        },
+                        itemComparator: _sortMode == 'hot'
+                            ? compareTopicFeedsByHeat
+                            : (_sortMode == 'latest'
+                                ? compareTopicFeedsByDate
+                                : null),
+                        prefetchPages: _sortMode == 'hot' ? 2 : 1,
                         showAppBar: false,
                         nested: true,
                       ),
@@ -7909,7 +8090,7 @@ class _TopicPageState extends State<TopicPage>
                       ),
                       // 3: 点评
                       ApiListPage(
-                        key: PageStorageKey('$_cleanTag:rating'),
+                        key: ValueKey('$_cleanTag:rating:$_apiSortKey'),
                         api: widget.api,
                         title: '点评',
                         path: _productId != null && _productId!.isNotEmpty
@@ -7920,8 +8101,27 @@ class _TopicPageState extends State<TopicPage>
                                 'url': '/page?url=/product/feedList',
                                 'id': _productId!,
                                 'type': 'rating',
+                                'listType': _apiSortKey,
+                                if (_sortMode == 'hot') ...{
+                                  'sort': 'hot',
+                                  'sortField': 'rank_score',
+                                },
                               }
-                            : {'tag': _cleanTag, 'feedType': 'rating'},
+                            : {
+                                'tag': _cleanTag,
+                                'feedType': 'rating',
+                                'listType': _apiSortKey,
+                                if (_sortMode == 'hot') ...{
+                                  'sort': 'hot',
+                                  'sortField': 'rank_score',
+                                },
+                              },
+                        itemComparator: _sortMode == 'hot'
+                            ? compareTopicFeedsByHeat
+                            : (_sortMode == 'latest'
+                                ? compareTopicFeedsByDate
+                                : null),
+                        prefetchPages: _sortMode == 'hot' ? 2 : 1,
                         showAppBar: false,
                         nested: true,
                       ),
@@ -7929,17 +8129,30 @@ class _TopicPageState extends State<TopicPage>
                   : [
                       // 0: 讨论
                       ApiListPage(
-                        key: PageStorageKey('$_cleanTag:discuss'),
+                        key: ValueKey('$_cleanTag:discuss:$_apiSortKey'),
                         api: widget.api,
                         title: '讨论',
                         path: '/v6/topic/tagFeedList',
-                        query: {'tag': _cleanTag, 'listType': _apiSortKey},
+                        query: {
+                          'tag': _cleanTag,
+                          'listType': _apiSortKey,
+                          if (_sortMode == 'hot') ...{
+                            'sort': 'hot',
+                            'sortField': 'rank_score',
+                          },
+                        },
+                        itemComparator: _sortMode == 'hot'
+                            ? compareTopicFeedsByHeat
+                            : (_sortMode == 'latest'
+                                ? compareTopicFeedsByDate
+                                : null),
+                        prefetchPages: _sortMode == 'hot' ? 2 : 1,
                         showAppBar: false,
                         nested: true,
                       ),
                       // 1: 点评
                       ApiListPage(
-                        key: PageStorageKey('$_cleanTag:rating'),
+                        key: ValueKey('$_cleanTag:rating:$_apiSortKey'),
                         api: widget.api,
                         title: '点评',
                         path: _productId != null && _productId!.isNotEmpty
@@ -7950,8 +8163,27 @@ class _TopicPageState extends State<TopicPage>
                                 'url': '/page?url=/product/feedList',
                                 'id': _productId!,
                                 'type': 'rating',
+                                'listType': _apiSortKey,
+                                if (_sortMode == 'hot') ...{
+                                  'sort': 'hot',
+                                  'sortField': 'rank_score',
+                                },
                               }
-                            : {'tag': _cleanTag, 'feedType': 'rating'},
+                            : {
+                                'tag': _cleanTag,
+                                'feedType': 'rating',
+                                'listType': _apiSortKey,
+                                if (_sortMode == 'hot') ...{
+                                  'sort': 'hot',
+                                  'sortField': 'rank_score',
+                                },
+                              },
+                        itemComparator: _sortMode == 'hot'
+                            ? compareTopicFeedsByHeat
+                            : (_sortMode == 'latest'
+                                ? compareTopicFeedsByDate
+                                : null),
+                        prefetchPages: _sortMode == 'hot' ? 2 : 1,
                         showAppBar: false,
                         nested: true,
                       ),

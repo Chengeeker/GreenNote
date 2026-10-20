@@ -1062,6 +1062,9 @@ class _DigitalServerChannelViewState extends State<DigitalServerChannelView>
             (it) => (it['entityType'] ?? '').toString().toLowerCase() != 'card',
           )
           .toList();
+      if (title.contains('热门')) {
+        newFeeds.sort(compareTopicFeedsByHeat);
+      }
       setState(() {
         if (title.contains('热门')) {
           _cachedHotFeeds = newFeeds;

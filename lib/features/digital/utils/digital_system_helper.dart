@@ -6,6 +6,7 @@ class DigitalProductInfo {
   const DigitalProductInfo({
     this.logo,
     this.productId,
+    this.topicTag,
     this.title,
     this.score,
     this.commentCount,
@@ -13,6 +14,7 @@ class DigitalProductInfo {
 
   final String? logo;
   final String? productId;
+  final String? topicTag;
   final String? title;
   final double? score;
   final String? commentCount;
@@ -21,6 +23,54 @@ class DigitalProductInfo {
 class DigitalSystemHelper {
   static final Map<String, DigitalProductInfo> _deviceInfoCache = {};
   static final Map<String, DigitalProductInfo> _systemInfoCache = {};
+
+  static (String, String?)? _systemIdentity(String name) {
+    final normalized = name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s_-]'), '')
+        .replaceFirst(RegExp(r'^(小米|华为|三星|荣耀|魅族|vivo|oppo|一加)'), '');
+    for (final names in const [
+      ['originos'],
+      ['funtouchos', 'funtouch'],
+      ['hyperos', '澎湃os', '澎湃'],
+      ['miui'],
+      ['coloros'],
+      ['oxygenos'],
+      ['harmonyos', '鸿蒙'],
+      ['emui'],
+      ['magicos'],
+      ['magicui'],
+      ['oneui'],
+      ['realmeui'],
+      ['flyme'],
+      ['ipados'],
+      ['ios'],
+      ['android', 'aosp'],
+      ['redmagicos', 'redmagic'],
+      ['myui'],
+      ['nothingos'],
+    ]) {
+      for (final alias in names) {
+        if (!normalized.startsWith(alias)) continue;
+        final version = RegExp(r'^[^0-9]*([0-9]+)')
+            .firstMatch(normalized.substring(alias.length))
+            ?.group(1);
+        return (names.first, version);
+      }
+    }
+    return null;
+  }
+
+  static bool _matchesSystem(String query, String title) {
+    final expected = _systemIdentity(query);
+    final candidate = _systemIdentity(title);
+    return expected != null &&
+        candidate != null &&
+        expected.$1 == candidate.$1 &&
+        (expected.$2 == null ||
+            candidate.$2 == null ||
+            expected.$2 == candidate.$2);
+  }
 
   /// Known official Coolapk CDN logos for major mobile operating systems.
   static final Map<String, String> _presetSystemLogos = {
@@ -197,7 +247,7 @@ class DigitalSystemHelper {
 
     final presetLogo = getSystemPresetLogo(query);
 
-    // 1. First attempt: search product catalog (many ROMs have full rating cards)
+    // Search results also contain phones; only accept the requested OS family/version.
     try {
       final res = await api.getList(
         '/v6/search',
@@ -210,6 +260,7 @@ class DigitalSystemHelper {
                 .trim();
         final id = (item['id'] ?? item['productId'] ?? '').toString().trim();
         final title = (item['title'] ?? item['name'] ?? '').toString().trim();
+        if (!_matchesSystem(query, title)) continue;
         final scoreRaw =
             (item['star_average_score'] ??
                     item['score'] ??
@@ -255,6 +306,7 @@ class DigitalSystemHelper {
                 .trim();
         final id = (item['tag'] ?? item['id'] ?? '').toString().trim();
         final title = (item['title'] ?? item['name'] ?? '').toString().trim();
+        if (!_matchesSystem(query, title)) continue;
         final scoreRaw = (item['score'] ?? '').toString().trim();
         final score = double.tryParse(scoreRaw);
         final commentCount =
@@ -269,7 +321,7 @@ class DigitalSystemHelper {
         if (resolvedLogo != null || id.isNotEmpty) {
           final info = DigitalProductInfo(
             logo: resolvedLogo,
-            productId: id.isNotEmpty ? id : null,
+            topicTag: (item['tag'] ?? title).toString().trim(),
             title: title.isNotEmpty ? title : null,
             score: score,
             commentCount: commentCount.isNotEmpty ? commentCount : null,

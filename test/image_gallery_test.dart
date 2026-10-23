@@ -62,6 +62,91 @@ class _DoubleTapState extends Fake implements ExtendedImageGestureState {
 
 void main() {
   testWidgets(
+    'second page keeps its own preview while original decode is pending',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      const pics = [
+        GalleryImage('https://example.com/preview-first.jpg'),
+        GalleryImage('https://example.com/preview-second.jpg'),
+      ];
+      final recorder = ui.PictureRecorder();
+      Canvas(recorder).drawColor(Colors.blue, BlendMode.src);
+      final picture = recorder.endRecording();
+      final pixels = (await tester.runAsync(() => picture.toImage(40, 80)))!;
+      picture.dispose();
+      final pending = Completer<ImageInfo>();
+      final keys = <Object>[];
+      for (var index = 0; index < pics.length; index++) {
+        for (final width in <int?>[null, 160]) {
+          final provider = ExtendedImage.network(
+            pics[index].originalUrl,
+            cache: true,
+            cacheWidth: width,
+            headers: coolapkImageHeaders(pics[index].originalUrl),
+          ).image;
+          final key = await provider.obtainKey(ImageConfiguration.empty);
+          keys.add(key);
+          tester.binding.imageCache.putIfAbsent(
+            key,
+            () => OneFrameImageStreamCompleter(
+              index == 1 && width == null
+                  ? pending.future
+                  : Future.value(ImageInfo(image: pixels.clone())),
+            ),
+          );
+        }
+      }
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: ImageGalleryPage(
+              api: const GalleryApi(),
+              pics: pics,
+              initialIndex: 0,
+              statusId: 'slow-second',
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+      final pager = tester.widget<ExtendedImageGesturePageView>(
+        find.byType(ExtendedImageGesturePageView),
+      );
+      pager.controller.jumpToPage(1);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final preview = find.byKey(const ValueKey('gallery-loading-preview-1'));
+      expect(preview, findsOneWidget);
+      final previewImage = tester.widget<ExtendedImage>(
+        find.descendant(of: preview, matching: find.byType(ExtendedImage)),
+      );
+      expect((previewImage.image as ExtendedResizeImage).width, 160);
+      expect(previewImage.fit, BoxFit.contain);
+      expect(
+        await previewImage.image.obtainKey(ImageConfiguration.empty),
+        keys[3],
+      );
+      expect(
+        tester
+            .widget<ExtendedImage>(
+              find.byKey(const ValueKey('gallery-image-1')),
+            )
+            .gaplessPlayback,
+        isTrue,
+      );
+      pending.complete(ImageInfo(image: pixels.clone()));
+      await tester.pump();
+      await tester.pump();
+      expect(preview, findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      for (final key in keys) {
+        tester.binding.imageCache.evict(key);
+      }
+      pixels.dispose();
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
     'double tap zoom emits one medium haptic per action and respects disabled feedback',
     (tester) async {
       SharedPreferences.setMockInitialValues({});
@@ -1323,7 +1408,10 @@ void main() {
         expect(find.byType(ExtendedImageSlidePage), findsNothing);
 
         // Drag down on the image
-        await tester.drag(find.byType(ExtendedImage), const Offset(0, 300));
+        await tester.drag(
+          find.byKey(const ValueKey('gallery-image-0')),
+          const Offset(0, 300),
+        );
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 250));
 

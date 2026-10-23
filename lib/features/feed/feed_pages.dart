@@ -506,7 +506,7 @@ class _FeedListPageState extends State<_FeedListPage>
   int _activeCategoryIndex = 0;
   String _followFilter = 'circle';
   bool _needsRecovery = false;
-  DateTime? _backgroundAt;
+  bool _recoveryOnlyIfEmpty = false;
   bool _loadingRecent = false;
   DateTime? _recentLoadedAt;
   List<Map<String, dynamic>> _recentFollowingCards = [];
@@ -537,8 +537,6 @@ class _FeedListPageState extends State<_FeedListPage>
           _cachedHeadlineFeeds!.isNotEmpty) {
         _feeds.addAll(_cachedHeadlineFeeds!);
         _banners = _cachedHeadlineBanners ?? const [];
-      } else {
-        unawaited(_loadInitialHeadlineCache());
       }
     }
     if (widget.channel.id == 'follow') {
@@ -547,11 +545,19 @@ class _FeedListPageState extends State<_FeedListPage>
     }
     if (widget.channel.id != 'topic' &&
         (widget.channel.id != 'follow' || widget.api.hasCookie)) {
-      _load(refresh: true);
+      unawaited(_loadInitialContent());
     }
   }
 
+  Future<void> _loadInitialContent() async {
+    if (widget.channel.id == 'headline') {
+      await _loadInitialHeadlineCache();
+    }
+    if (mounted && _feeds.isEmpty) await _load(refresh: true);
+  }
+
   void _cacheCleared() {
+    _recoveryOnlyIfEmpty = false;
     _cachedHeadlineFeeds = null;
     _cachedHeadlineBanners = null;
     _needsRecovery = true;
@@ -576,6 +582,7 @@ class _FeedListPageState extends State<_FeedListPage>
       }
       if (_busy) return;
       _needsRecovery = false;
+      if (_recoveryOnlyIfEmpty && _feeds.isNotEmpty) return;
       unawaited(_load(refresh: true));
     });
   }
@@ -620,6 +627,8 @@ class _FeedListPageState extends State<_FeedListPage>
 
   Future<void> _loadInitialHeadlineCache() async {
     if (_feeds.isNotEmpty) return;
+    final scope = _headlineScope;
+    final revision = CacheService.revision.value;
     try {
       final prefs = await SharedPreferences.getInstance();
       final cachedRaw = prefs.getString('cached_home_headline_v1');
@@ -642,7 +651,11 @@ class _FeedListPageState extends State<_FeedListPage>
                       .map(Map<String, dynamic>.from)
                       .toList()
                 : <Map<String, dynamic>>[];
-            if (mounted && _feeds.isEmpty && feeds.isNotEmpty) {
+            if (mounted &&
+                _headlineScope == scope &&
+                CacheService.revision.value == revision &&
+                _feeds.isEmpty &&
+                feeds.isNotEmpty) {
               setState(() {
                 _cachedHeadlineScope = _headlineScope;
                 _cachedHeadlineRevision = CacheService.revision.value;
@@ -666,6 +679,7 @@ class _FeedListPageState extends State<_FeedListPage>
       return;
     }
     if (oldWidget.route == widget.route) return;
+    if (widget.channel.id == 'headline' && _feeds.isNotEmpty) return;
     _activeCategoryUrl = null;
     _activeCategoryIndex = 0;
     if (_busy) {
@@ -689,16 +703,12 @@ class _FeedListPageState extends State<_FeedListPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) _backgroundAt = DateTime.now();
     if (state != AppLifecycleState.resumed) return;
-    if (_feeds.isEmpty ||
-        (_backgroundAt != null &&
-            DateTime.now().difference(_backgroundAt!) >=
-                const Duration(minutes: 5))) {
+    if (_feeds.isEmpty) {
+      if (!_needsRecovery) _recoveryOnlyIfEmpty = true;
       _needsRecovery = true;
       _recoverWhenVisible();
     }
-    _backgroundAt = null;
   }
 
   void _onScroll() {

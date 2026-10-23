@@ -380,14 +380,15 @@ class MainActivity : FlutterActivity() {
 
     private fun getCustomOsName(): String {
         // Vivo / iQOO (OriginOS / Funtouch OS)
-        val vivoDisplay = getSystemProperty("ro.vivo.os.build.display.id")
-        if (vivoDisplay.isNotBlank()) return vivoDisplay
         val vivoVer = getSystemProperty("ro.vivo.os.version")
         val vivoName = getSystemProperty("ro.vivo.os.name")
         if (vivoVer.isNotBlank()) {
             val prefix = if (vivoName.contains("funtouch", ignoreCase = true)) "Funtouch OS" else "OriginOS"
             return "$prefix $vivoVer"
         }
+        val vivoDisplay = getSystemProperty("ro.vivo.os.build.display.id")
+        if (vivoDisplay.startsWith("OriginOS", ignoreCase = true) ||
+            vivoDisplay.startsWith("Funtouch", ignoreCase = true)) return vivoDisplay
 
         // Xiaomi / Redmi (HyperOS / MIUI)
         val hyperOs = getSystemProperty("ro.mi.os.version.name")

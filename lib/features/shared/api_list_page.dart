@@ -75,6 +75,77 @@ int _parseDateline(dynamic value) {
   return int.tryParse(s) ?? 0;
 }
 
+List<String> _officialProductSpecTags(Map source) {
+  for (final key in const ['product_specs', 'productSpecs', 'tagArr', 'tag_arr']) {
+    final values = source[key];
+    if (values is! List) continue;
+    final tags = values
+        .whereType<String>()
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty && value != '-')
+        .toList(growable: false);
+    if (tags.isNotEmpty) return tags;
+  }
+  return const [];
+}
+
+String _productSpecValue(Map source, Set<String> aliases) {
+  String find(Map values, int depth) {
+    if (depth > 8) return '';
+    for (final alias in aliases) {
+      final expected = alias
+          .replaceAll(RegExp(r'[\s_./-]'), '')
+          .toLowerCase();
+      for (final entry in values.entries) {
+        final key = '${entry.key}'
+            .replaceAll(RegExp(r'[\s_./-]'), '')
+            .toLowerCase();
+        if (key != expected) continue;
+        final value = entry.value;
+        if (value is Map) {
+          final nested = find(value, depth + 1);
+          if (nested.isNotEmpty) return nested;
+        } else if (value is List) {
+          final text = value.join('、').trim();
+          if (text.isNotEmpty && text != '-') return text;
+        } else {
+          final text = '${value ?? ''}'.trim();
+          if (text.isNotEmpty && text != '-' && text.toLowerCase() != 'null') {
+            return text;
+          }
+        }
+      }
+    }
+    for (final value in values.values) {
+      if (value is Map) {
+        final nested = find(value, depth + 1);
+        if (nested.isNotEmpty) return nested;
+      }
+    }
+    return '';
+  }
+
+  return find(source, 0);
+}
+
+String _productChip(Map source) => _productSpecValue(source, const {
+  'chip',
+  'soc',
+  'processor',
+  'cpu型号',
+  '处理器',
+  '芯片',
+  'soc型号',
+  '处理器型号',
+});
+
+String _productScreenSize(Map source) => _productSpecValue(source, const {
+  'screen_size',
+  'screen',
+  '屏幕尺寸',
+  '主屏尺寸',
+});
+
 bool _isTopFeedItem(Map<String, dynamic> item) {
   final v = item['is_top'] ?? item['istop'] ?? item['isTop'];
   if (v == null) return false;
@@ -4339,7 +4410,7 @@ class _ProductPageState extends State<ProductPage>
           } else if (feedType.isNotEmpty) {
             tabs.add(_ProductTab(title: title, type: feedType, url: url));
           }
-        } else if (url.startsWith('/')) {
+        } else if (url.startsWith('/') || url.startsWith('#/')) {
           tabs.add(_ProductTab(title: title, type: 'external', url: url));
         }
       } catch (_) {}
@@ -4407,7 +4478,41 @@ class _ProductPageState extends State<ProductPage>
             _following = following;
           });
         }
+        unawaited(_loadMissingHeaderSpecs(res));
       }
+    } catch (_) {}
+  }
+
+  Future<void> _loadMissingHeaderSpecs(Map<String, dynamic> detail) async {
+    if (_officialProductSpecTags(detail).isNotEmpty) return;
+    if (_productChip(detail).isNotEmpty &&
+        _productScreenSize(detail).isNotEmpty) {
+      return;
+    }
+    final configs = detail['configRows'];
+    if (configs is! List || configs.isEmpty || configs.first is! Map) return;
+    final configId = '${configs.first['id'] ?? ''}'.trim();
+    if (configId.isEmpty) return;
+
+    try {
+      final response = await widget.api.request(
+        '/v6/product/config',
+        query: {'id': configId},
+      );
+      final data = decodeProductObject(response['data']);
+      final config = decodeProductObject(data['config_data']);
+      final chip = _productChip(config);
+      final screenSize = _productScreenSize(config);
+      if (!mounted || !identical(_detail, detail)) return;
+      if (chip.isEmpty && screenSize.isEmpty) return;
+      setState(() {
+        _detail = {
+          ...detail,
+          if (_productChip(detail).isEmpty && chip.isNotEmpty) 'chip': chip,
+          if (_productScreenSize(detail).isEmpty && screenSize.isNotEmpty)
+            'screen_size': screenSize,
+        };
+      });
     } catch (_) {}
   }
 
@@ -4600,25 +4705,16 @@ class _ProductPageState extends State<ProductPage>
         ? '${raw['owner_star_total_count'] ?? 0}机主点评 ${raw['rating_total_num'] ?? 0}详细点评'
         : '${raw['owner_comment_num'] ?? '3550'}机主点评 ${raw['detail_comment_num'] ?? '3327'}详细点评';
 
-    final specsTags = <String>[
-      if (releaseTime.isNotEmpty)
-        '$releaseTime 上市'
-      else if (!isUnreleased)
-        '2025-10-13 上市',
-      if ((raw['chip'] ?? raw['soc'] ?? raw['processor'] ?? '')
-          .toString()
-          .isNotEmpty)
-        (raw['chip'] ?? raw['soc'] ?? raw['processor']).toString()
-      else if (!isUnreleased)
-        '天玑 9500',
-      if ((raw['screen_size'] ?? raw['screen'] ?? '').toString().isNotEmpty)
-        (raw['screen_size'] ?? raw['screen']).toString()
-      else if (!isUnreleased)
-        '6.78 英寸',
-      if ((raw['screen_type'] ?? '').toString().isNotEmpty)
-        raw['screen_type'].toString()
-      else if (!isUnreleased)
-        '直屏',
+    final chip = _productChip(raw);
+    final screenSize = _productScreenSize(raw);
+    final officialTags = _officialProductSpecTags(raw);
+    final specsTags = officialTags.isNotEmpty ? officialTags : <String>[
+      if (releaseTime.isNotEmpty) '$releaseTime 上市',
+      if (chip.isNotEmpty) chip,
+      if (screenSize.isNotEmpty) screenSize,
+      if ((raw['screen_type'] ?? '').toString().trim().isNotEmpty &&
+          raw['screen_type'].toString().trim() != '-')
+        raw['screen_type'].toString().trim(),
       if ((raw['battery'] ?? '').toString().isNotEmpty)
         raw['battery'].toString(),
       if ((raw['charging'] ?? '').toString().isNotEmpty)
@@ -5076,6 +5172,7 @@ class _ProductPageState extends State<ProductPage>
                   SizedBox(
                     height: 32,
                     child: ListView.separated(
+                      key: const ValueKey('product-spec-tags'),
                       scrollDirection: Axis.horizontal,
                       itemCount: specsTags.length,
                       separatorBuilder: (_, _) => const SizedBox(width: 8),
@@ -5638,9 +5735,24 @@ class _ProductPageState extends State<ProductPage>
 
   static (String, Map<String, dynamic>) _parseApiRoute(String route) {
     if (route.isEmpty) return ('/v6/page/dataList', <String, dynamic>{});
-    final uri = Uri.tryParse(route);
+    final uri = Uri.tryParse(route.startsWith('#') ? route.substring(1) : route);
     if (uri == null) return ('/v6/page/dataList', {'url': route});
+    if (uri.path == '/topic/tagList' || uri.path == '/v6/topic/tagList') {
+      // This filtered page loses its keywords when called as a direct API.
+      return (
+        '/v6/page/dataList',
+        {'url': '#${uri.replace(path: '/topic/tagList')}'},
+      );
+    }
     if (uri.path == '/page' || uri.queryParameters.containsKey('url')) {
+      final inner = Uri.tryParse(uri.queryParameters['url'] ?? '');
+      if (inner?.path == '/topic/tagList') {
+        final params = {...uri.queryParameters}..remove('url');
+        return _parseApiRoute(inner!.replace(queryParameters: {
+          ...inner.queryParameters,
+          ...params,
+        }).toString());
+      }
       return (
         '/v6/page/dataList',
         Map<String, dynamic>.from(uri.queryParameters),

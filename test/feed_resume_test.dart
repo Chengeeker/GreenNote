@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:easy_refresh/easy_refresh.dart';
 
 import 'package:greennote/core/services/cache_service.dart';
 import 'package:greennote/features/shared/notification_entry.dart';
@@ -45,6 +48,37 @@ class _ResumeApi extends MockChannelApi {
       ],
       firstItem: '',
       lastItem: '',
+      hasMore: false,
+    );
+  }
+}
+
+class _CacheApi extends MockChannelApi {
+  _CacheApi(String uid) : super(currentUid: uid);
+  int reads = 0;
+  @override
+  Future<Map<String, String>> loadHomeTabRoutes() async => {
+    'headline': '/page?url=CACHED_HEADLINE',
+  };
+  @override
+  Future<FeedPage> getHomeChannelPage(
+    String route,
+    int page, {
+    String firstItem = '',
+    String lastItem = '',
+  }) async {
+    reads++;
+    return FeedPage(
+      items: [
+        CoolapkFeed.fromJson({
+          'id': '800',
+          'username': '缓存作者',
+          'message': '手动刷新后的内容',
+        }),
+      ],
+      cards: [],
+      firstItem: '800',
+      lastItem: '800',
       hasMore: false,
     );
   }
@@ -200,6 +234,76 @@ class _PagingApi extends MockChannelApi {
 }
 
 void main() {
+  testWidgets(
+    'cached headline survives startup and long background until manual refresh',
+    (tester) async {
+      final api = _CacheApi('cache-first-account');
+      SharedPreferences.setMockInitialValues({
+        'cached_home_headline_v1': jsonEncode({
+          'scope': api.notificationSessionKey,
+          'feeds': [
+            {'id': '799', 'username': '缓存作者', 'message': '保留当前浏览内容'},
+          ],
+          'banners': [],
+        }),
+      });
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: FeedHomePage(api: api, onLoginRequested: () async {}),
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.text('保留当前浏览内容', findRichText: true), findsOneWidget);
+      expect(api.reads, 0);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump(const Duration(minutes: 6));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(api.reads, 0);
+      expect(find.text('保留当前浏览内容', findRichText: true), findsOneWidget);
+      await tester
+          .widget<EasyRefresh>(find.byType(EasyRefresh).first)
+          .onRefresh!();
+      await tester.pump();
+      expect(api.reads, 1);
+      expect(find.text('手动刷新后的内容', findRichText: true), findsOneWidget);
+    },
+  );
+
+  testWidgets('another account headline cache is ignored on startup', (
+    tester,
+  ) async {
+    final api = _CacheApi('cache-isolated-account');
+    SharedPreferences.setMockInitialValues({
+      'cached_home_headline_v1': jsonEncode({
+        'scope': 'session-other-account',
+        'feeds': [
+          {'id': '799', 'message': '其他账号的内容'},
+        ],
+      }),
+    });
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: FeedHomePage(api: api, onLoginRequested: () async {}),
+          ),
+        ),
+      ),
+    );
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(api.reads, 1);
+    expect(find.text('其他账号的内容', findRichText: true), findsNothing);
+    expect(find.text('手动刷新后的内容', findRichText: true), findsOneWidget);
+  });
   testWidgets(
     'headline shows full first batch and continues through short pages without refresh',
     (tester) async {

@@ -49,7 +49,6 @@ class _DigitalDeviceOverviewState extends State<DigitalDeviceOverview> {
       final osName = (profile['osName'] ?? '').toString().trim();
       final manufacturer = (profile['manufacturer'] ?? '').toString().trim();
       final model = (profile['model'] ?? '').toString().trim();
-      final display = (profile['display'] ?? '').toString().trim();
       final android = (profile['androidVersion'] ?? '').toString().trim();
       final hardwareModel = [
         manufacturer,
@@ -58,9 +57,7 @@ class _DigitalDeviceOverviewState extends State<DigitalDeviceOverview> {
       final deviceName = marketName.isNotEmpty ? marketName : hardwareModel;
       final systemName = osName.isNotEmpty
           ? osName
-          : (display.isNotEmpty
-                ? display
-                : (android.isNotEmpty ? 'Android $android' : ''));
+          : (android.isNotEmpty ? 'Android $android' : '');
 
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -222,15 +219,15 @@ class _OfficialSystemCardState extends State<_OfficialSystemCard> {
 
   Future<void> _load() async {
     final name = widget.name.trim();
+    _info = const DigitalProductInfo();
     if (name.isEmpty) return;
 
     final api = widget.api;
     if (api != null) {
       final info = await DigitalSystemHelper.resolveSystemProduct(api, name);
-      if (mounted) {
-        setState(() => _info = info);
-        return;
-      }
+      if (!mounted || widget.name.trim() != name || widget.api != api) return;
+      setState(() => _info = info);
+      return;
     }
 
     final preset = DigitalSystemHelper.getSystemPresetLogo(name);
@@ -244,7 +241,7 @@ class _OfficialSystemCardState extends State<_OfficialSystemCard> {
     final title = widget.isWaiting
         ? '读取中…'
         : widget.name.isNotEmpty
-        ? (_info.title ?? widget.name)
+        ? widget.name
         : '无法读取系统';
 
     return _OfficialOverviewCard(
@@ -259,6 +256,16 @@ class _OfficialSystemCardState extends State<_OfficialSystemCard> {
       commentUnit: '人点评',
       onTap: () {
         final api = widget.api;
+        final topicTag = _info.topicTag;
+        if (api != null && topicTag != null && topicTag.isNotEmpty) {
+          Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  TopicPage(api: api, tag: topicTag, initialTitle: title),
+            ),
+          );
+          return;
+        }
         final productId = _info.productId;
         if (api != null && productId != null && productId.isNotEmpty) {
           Navigator.of(context).push<void>(

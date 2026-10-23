@@ -458,6 +458,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   bool _isDoubleTapZooming = false;
   final ValueNotifier<bool> _isMainPageScrolling = ValueNotifier<bool>(false);
   Timer? _mainPageScrollEndTimer;
+  Timer? _previewWarmupTimer;
   int _doubleTapAnimationEpoch = 0;
 
   @override
@@ -486,6 +487,40 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     unawaited(_checkHdrDisplaySupport());
     HdrImageDetector.notifier.addListener(_onHdrDetected);
     _updateWindowHdr();
+    _precacheNearbyPreviews();
+  }
+
+  ExtendedImage _previewImage(int index, {BoxFit fit = BoxFit.contain}) =>
+      ExtendedImage.network(
+        widget.pics[index].previewUrl,
+        headers: coolapkImageHeaders(
+          widget.pics[index].previewUrl,
+          api: widget.api,
+        ),
+        cache: true,
+        cacheWidth: 160,
+        fit: fit,
+      );
+
+  void _precacheNearbyPreviews() {
+    _previewWarmupTimer?.cancel();
+    _previewWarmupTimer = Timer(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      for (final index in [
+        _currentIndex - 1,
+        _currentIndex,
+        _currentIndex + 1,
+      ]) {
+        if (index < 0 || index >= widget.pics.length) continue;
+        unawaited(
+          precacheImage(
+            _previewImage(index).image,
+            context,
+            onError: (_, _) {},
+          ),
+        );
+      }
+    });
   }
 
   Future<void> _checkHdrDisplaySupport() async {
@@ -566,6 +601,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
 
   @override
   void dispose() {
+    _previewWarmupTimer?.cancel();
     _openingPreview?.dispose();
     HdrImageDetector.notifier.removeListener(_onHdrDetected);
     _mediaChannel.setMethodCallHandler(null);
@@ -955,16 +991,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          ExtendedImage.network(
-                            widget.pics[index].previewUrl,
-                            headers: coolapkImageHeaders(
-                              widget.pics[index].previewUrl,
-                              api: widget.api,
-                            ),
-                            fit: BoxFit.cover,
-                            cacheWidth: 160,
-                            cache: true,
-                          ),
+                          _previewImage(index, fit: BoxFit.cover),
                           if (widget.pics[index].badgeText.isNotEmpty)
                             Positioned(
                               bottom: 2,
@@ -1120,6 +1147,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                     setState(() {
                       _currentIndex = index;
                     });
+                    _precacheNearbyPreviews();
                     _updateWindowHdr();
                     if (!_thumbnailUserScrolling &&
                         !_thumbnailSettling &&
@@ -1143,6 +1171,8 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                           : (pic.largeUrl.isNotEmpty
                                 ? pic.largeUrl
                                 : pic.bmiddleUrl),
+                      key: ValueKey('gallery-image-$index'),
+                      gaplessPlayback: true,
                       width: double.infinity,
                       height: double.infinity,
                       headers: coolapkImageHeaders(
@@ -1161,6 +1191,12 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                             key: const ValueKey('gallery-opening-preview'),
                             image: _openingPreview,
                             fit: BoxFit.contain,
+                          );
+                        }
+                        if (state.extendedImageLoadState == LoadState.loading) {
+                          return KeyedSubtree(
+                            key: ValueKey('gallery-loading-preview-$index'),
+                            child: _previewImage(index),
                           );
                         }
                         if (state.extendedImageLoadState !=

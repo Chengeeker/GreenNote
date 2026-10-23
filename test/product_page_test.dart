@@ -13,6 +13,8 @@ class _MockProductCoolapkApi extends Fake implements CoolapkApi {
   final List<Map<String, dynamic>> requestedQueries = [];
 
   Map<String, dynamic>? mockProductDetail;
+  Map<String, dynamic> mockProductConfig = const {};
+  final List<String> requestedConfigIds = [];
 
   @override
   bool get hasCookie => false;
@@ -41,6 +43,20 @@ class _MockProductCoolapkApi extends Fake implements CoolapkApi {
           'charging': '90W 有线 + 50W 无线',
           'is_follow': 0,
         };
+  }
+
+  @override
+  Future<dynamic> request(
+    String path, {
+    String method = 'GET',
+    Map<String, dynamic> query = const {},
+    Map<String, dynamic>? body,
+  }) async {
+    if (path == '/v6/product/config') {
+      requestedConfigIds.add('${query['id'] ?? ''}');
+      return mockProductConfig;
+    }
+    throw UnimplementedError('Unexpected request: $path');
   }
 
   @override
@@ -95,6 +111,51 @@ class _MockProductCoolapkApi extends Fake implements CoolapkApi {
 }
 
 void main() {
+  for (final route in [
+    '/topic/tagList?keywords=鸿蒙6&filterId=1&ratingUI=1',
+    '#/topic/tagList?keywords=鸿蒙6&filterId=1&ratingUI=1',
+    '/page?url=%2Ftopic%2FtagList%3Fkeywords%3D%E9%B8%BF%E8%92%996&filterId=1&ratingUI=1',
+  ]) {
+    testWidgets('system subtab retains filtered page route: $route', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final api = _MockProductCoolapkApi()
+        ..mockProductDetail = {
+          'title': '华为 Mate',
+          'tabList': [
+            {'title': '讨论', 'url': '/product/feedList?id=500&type=feed'},
+            {'title': '鸿蒙', 'url': route},
+          ],
+        };
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProductPage(api: api, id: '500', title: '华为 Mate'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.widgetWithText(Tab, '鸿蒙'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      final page = tester
+          .widgetList<ApiListPage>(find.byType(ApiListPage))
+          .firstWhere((page) => page.title == '鸿蒙');
+      expect(page.path, '/v6/page/dataList');
+      final url = page.query['url'] as String;
+      final target = Uri.parse(url.substring(1));
+      expect(target.path, '/topic/tagList');
+      expect(target.queryParameters, {
+        'keywords': '鸿蒙6',
+        'filterId': '1',
+        'ratingUI': '1',
+      });
+    });
+  }
   group('ProductPage Tests', () {
     testWidgets(
       'renders ProductPage with default tabs and opens 讨论 tab by default',
@@ -120,6 +181,8 @@ void main() {
         expect(find.text('小米 14'), findsWidgets);
         expect(find.text('9.1'), findsOneWidget);
         expect(find.text('酷安评分'), findsOneWidget);
+        expect(find.text('骁龙 8 Gen 3'), findsOneWidget);
+        expect(find.text('6.36 英寸'), findsOneWidget);
 
         // Verify default tabs exist: 参数, 讨论, 点评, 图文, 问答, 视频, 二手
         expect(find.text('参数'), findsOneWidget);
@@ -212,6 +275,138 @@ void main() {
         expect(find.widgetWithText(Tab, '续航'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'missing model chip and screen size are loaded from its real config',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 1600);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final mockApi = _MockProductCoolapkApi()
+          ..mockProductDetail = {
+            'title': 'vivo X300 Pro',
+            'configRows': [
+              {'id': 'config-x300-pro'},
+            ],
+          }
+          ..mockProductConfig = {
+            'data': {
+              'config_data': {
+                '处理器': {'CPU型号': '天玑 9400+'},
+                '屏幕与显示': {'屏幕尺寸': '6.78英寸'},
+              },
+            },
+          };
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ProductPage(
+              api: mockApi,
+              id: '35000',
+              title: 'vivo X300 Pro',
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump();
+        await tester.pump();
+
+        expect(mockApi.requestedConfigIds, ['config-x300-pro']);
+        expect(find.text('天玑 9400+'), findsOneWidget);
+        expect(find.text('6.78英寸'), findsOneWidget);
+        expect(find.text('天玑 9500'), findsNothing);
+        expect(find.text('6.78 英寸'), findsNothing);
+      },
+    );
+
+    testWidgets('official spec tags stay complete and in server order', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const tags = [
+        '2024-10 上市',
+        '骁龙 8 至尊版',
+        '6.36英寸',
+        'LTPO OLED',
+        '120Hz',
+        '2670×1200',
+        '5400mAh',
+        '90W有线充电',
+        '50W无线充电',
+        'IP68',
+        '徕卡影像',
+        '超声波指纹',
+      ];
+      final api = _MockProductCoolapkApi()
+        ..mockProductDetail = {
+          'title': '测试机型',
+          'product_specs': tags,
+          'chip': '不应覆盖官方标签',
+          'configRows': [
+            {'id': 'unused-config'},
+          ],
+        };
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProductPage(api: api, id: '35002', title: '测试机型'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final list = tester.widget<ListView>(
+        find.byKey(const ValueKey('product-spec-tags')),
+      );
+      final delegate = list.childrenDelegate as SliverChildBuilderDelegate;
+      expect(delegate.childCount, tags.length * 2 - 1);
+      final context = tester.element(
+        find.byKey(const ValueKey('product-spec-tags')),
+      );
+      for (var i = 0; i < tags.length; i++) {
+        final tag = delegate.builder(context, i * 2)! as Container;
+        expect((tag.child! as Text).data, tags[i]);
+      }
+      expect(api.requestedConfigIds, isEmpty);
+      expect(find.text('不应覆盖官方标签'), findsNothing);
+      await tester.drag(
+        find.byKey(const ValueKey('product-spec-tags')),
+        const Offset(-2200, 0),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('超声波指纹'), findsOneWidget);
+    });
+
+    testWidgets('missing model specs never display shared fabricated values', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final mockApi = _MockProductCoolapkApi()
+        ..mockProductDetail = {'title': '未知机型'};
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProductPage(api: mockApi, id: '35001', title: '未知机型'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      expect(find.text('天玑 9500'), findsNothing);
+      expect(find.text('6.78 英寸'), findsNothing);
+      expect(find.text('2025-10-13 上市'), findsNothing);
+      expect(find.text('直屏'), findsNothing);
+      expect(mockApi.requestedConfigIds, isEmpty);
+    });
 
     testWidgets('tapping sort chips updates listType filter', (tester) async {
       tester.view.physicalSize = const Size(800, 1600);

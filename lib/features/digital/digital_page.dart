@@ -50,7 +50,7 @@ class _DigitalPageState extends State<DigitalPage>
   }
 
   PreferredSizeWidget _buildTabBar() => PreferredSize(
-    preferredSize: const Size.fromHeight(38),
+    preferredSize: const Size.fromHeight(35),
     child: Builder(
       builder: (context) {
         final colorScheme = Theme.of(context).colorScheme;
@@ -59,9 +59,9 @@ class _DigitalPageState extends State<DigitalPage>
           isScrollable: true,
           tabAlignment: TabAlignment.start,
           dividerColor: Colors.transparent,
-          indicatorSize: TabBarIndicatorSize.label,
-          indicatorColor: colorScheme.primary,
-          indicatorWeight: 3,
+          indicator: const BoxDecoration(color: Colors.transparent),
+          indicatorColor: Colors.transparent,
+          indicatorWeight: 0.001,
           labelColor: colorScheme.primary,
           labelStyle: const TextStyle(
             fontSize: 16,

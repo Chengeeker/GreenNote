@@ -83,6 +83,7 @@ void main() {
         ),
       );
       final glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      expect(glassBar.settings?.shadowElevation, 0);
       expect(glassBar.indicatorSettings?.rimLight, 0);
       expect(glassBar.indicatorSettings?.rimShade, 0);
       expect(
@@ -198,6 +199,7 @@ void main() {
     final glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
     expect(glassBar.settings?.glassColor, const Color(0xF0FFFFFF));
     expect(glassBar.settings?.rimLight, 1);
+    expect(glassBar.settings?.shadowElevation, 0.55);
     expect(glassBar.indicatorSettings?.glassColor, const Color(0x18000000));
     expect(glassBar.indicatorSettings?.bodyMode, GlassBodyMode.clear);
     expect(glassBar.indicatorSettings?.rimShade, 0.12);

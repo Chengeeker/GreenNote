@@ -113,6 +113,13 @@ class _DoubleTapState extends Fake implements ExtendedImageGestureState {
 }
 
 void main() {
+  test('gallery route uses the requested open and return durations', () {
+    final route = PhysicsSpringGalleryRoute<void>(child: const SizedBox());
+
+    expect(route.transitionDuration, const Duration(milliseconds: 330));
+    expect(route.reverseTransitionDuration, const Duration(milliseconds: 200));
+  });
+
   test(
     'official userAction flags take priority and legacy flags remain supported',
     () {
@@ -689,7 +696,7 @@ void main() {
     expect(find.byTooltip('返回'), findsOneWidget);
     expect(find.byTooltip('保存高清大图到相册'), findsOneWidget);
 
-    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 330));
     expect(tester.widget<AnimatedOpacity>(fade).opacity, 1);
     expect(tester.widget<IgnorePointer>(topControlsGate).ignoring, isFalse);
     await tester.pump(const Duration(milliseconds: 70));
@@ -719,7 +726,7 @@ void main() {
     expect(tester.getSize(pageView), pageSize);
     expect(tester.getSize(pageView), pageSize);
 
-    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 200));
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
@@ -750,7 +757,7 @@ void main() {
     nav.currentState!.push(route);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 1));
-    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 330));
     await tester.pump(const Duration(milliseconds: 140));
     final follow = find.byWidgetPredicate(
       (w) => w is GlassButton && w.label == '关注',
@@ -774,7 +781,7 @@ void main() {
     );
     route.cancelReturn();
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 330));
     await tester.pump(const Duration(milliseconds: 140));
     expect(tester.widget<GlassButton>(like).quality, GlassQuality.premium);
     expect(tester.widget<GlassButton>(follow).quality, GlassQuality.premium);
@@ -806,7 +813,7 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 1));
-    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 330));
     await tester.pump(const Duration(milliseconds: 140));
     expect(
       tester

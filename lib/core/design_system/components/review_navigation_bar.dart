@@ -394,7 +394,12 @@ class _ReviewNavigationBarState extends ConsumerState<ReviewNavigationBar> {
         ? const Color(0x26000000)
         : const Color(0x66000000);
     const interactionGlowColor = Color(0x20FFFFFF);
-    final glassSettings = ReviewNavigationBar.liquidGlassSettingsFor(context);
+    final glassSettings = ReviewNavigationBar.liquidGlassSettingsFor(
+      context,
+      ReviewNavigationBar.liquidGlassSettings.copyWith(
+        shadowElevation: isLightMode ? 0.55 : 0,
+      ),
+    );
     final selectedContentColor = isLightMode
         ? colorScheme.primary
         : Colors.white;

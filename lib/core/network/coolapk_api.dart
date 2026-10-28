@@ -2078,6 +2078,11 @@ class CoolapkFeed {
   }
 
   factory CoolapkFeed.fromJson(Map<String, dynamic> json) {
+    final action = json['userAction'];
+    final userAction = action is Map ? action : const {};
+    final like = userAction['like'] ?? json['isLike'] ?? json['is_like'];
+    final favorite = userAction['favorite'] ?? userAction['collect'] ??
+        json['isFavorite'] ?? json['is_favorite'];
     final user = json['userInfo'] ?? json['user_info'] ?? json['user'];
     final userInfo = user is Map ? Map<String, dynamic>.from(user) : const {};
     final isFeedHdr =
@@ -2173,14 +2178,8 @@ class CoolapkFeed {
       ),
       pictures: images.toList(growable: false),
       pictureMetadata: pictureMetadataFromJson(json),
-      liked:
-          json['isLike'] == true ||
-          json['is_like'] == true ||
-          _int(json['isLike'] ?? json['is_like']) == 1,
-      favorited:
-          json['isFavorite'] == true ||
-          json['is_favorite'] == true ||
-          _int(json['isFavorite'] ?? json['is_favorite']) == 1,
+      liked: like == true || _int(like) == 1,
+      favorited: favorite == true || _int(favorite) == 1,
       raw: json,
     );
   }

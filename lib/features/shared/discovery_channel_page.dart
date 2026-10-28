@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:easy_refresh/easy_refresh.dart';
+import 'package:extended_image/extended_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:html/parser.dart' as html;
@@ -14,6 +15,9 @@ import '../../core/widgets/app_avatar.dart';
 import '../../core/widgets/cached_network_image.dart';
 import '../../core/widgets/review_refresh_header.dart';
 import '../feed/feed_pages.dart';
+import '../feed/image_gallery_page.dart';
+import '../../core/utils/haptic_feedback_util.dart';
+import '../../core/utils/spring_page_route.dart';
 import 'api_list_page.dart';
 import 'home_destination_page.dart' show officialHomeTheme;
 import 'community_library_page.dart';
@@ -343,7 +347,34 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
   Widget build(BuildContext context) {
     super.build(context);
     final theme = officialHomeTheme(Theme.of(context));
-    final waterfall = widget.title == '二手' || widget.title == '商家';
+    final coolPictures = widget.title == '酷图';
+    final waterfall =
+        coolPictures || widget.title == '二手' || widget.title == '商家';
+    final lanes = List.generate(
+      coolPictures ? 3 : 2,
+      (_) => <({Map<String, dynamic> row, int imageIndex})>[],
+    );
+    final heights = List.filled(lanes.length, 0.0);
+    if (coolPictures) {
+      for (final row in _items) {
+        final feed = CoolapkFeed.fromJson(row);
+        final imageCount = feed.pictures.isNotEmpty
+            ? feed.pictures.length
+            : (feed.coverUrl.isEmpty ? 0 : 1);
+        for (var imageIndex = 0; imageIndex < imageCount; imageIndex++) {
+          final lane = heights.indexOf(heights.reduce((a, b) => a < b ? a : b));
+          lanes[lane].add((row: row, imageIndex: imageIndex));
+          heights[lane] += 1 / _coolPictureAspectRatioAt(feed, row, imageIndex);
+        }
+      }
+    } else {
+      for (var index = 0; index < _items.length; index++) {
+        final row = _items[index];
+        final lane = index % 2;
+        lanes[lane].add((row: row, imageIndex: 0));
+        heights[lane]++;
+      }
+    }
     final displayItems = _displayItems();
     return Theme(
       data: theme,
@@ -448,7 +479,7 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     sliver: SliverCrossAxisGroup(
                       slivers: [
-                        for (var lane = 0; lane < 2; lane++)
+                        for (var lane = 0; lane < lanes.length; lane++)
                           SliverCrossAxisExpanded(
                             flex: 1,
                             sliver: SliverPadding(
@@ -456,20 +487,29 @@ class _DiscoveryChannelPageState extends State<DiscoveryChannelPage>
                                 horizontal: 4,
                               ),
                               sliver: SliverList.builder(
-                                itemCount: (_items.length + 1 - lane) ~/ 2,
-                                itemBuilder: (context, index) =>
-                                    RepaintBoundary(
-                                      child: DiscoveryWaterfallCard(
-                                        key: ValueKey(
-                                          coolapkEntityKey(
-                                            _items[index * 2 + lane],
+                                itemCount: lanes[lane].length,
+                                itemBuilder: (context, index) {
+                                  final item = lanes[lane][index];
+                                  return RepaintBoundary(
+                                    child: coolPictures
+                                        ? DiscoveryPictureTile(
+                                            key: ValueKey(
+                                              'coolpic-${coolapkEntityKey(item.row)}-${item.imageIndex}',
+                                            ),
+                                            api: widget.api,
+                                            row: item.row,
+                                            imageIndex: item.imageIndex,
+                                          )
+                                        : DiscoveryWaterfallCard(
+                                            key: ValueKey(
+                                              coolapkEntityKey(item.row),
+                                            ),
+                                            api: widget.api,
+                                            row: item.row,
+                                            secondhand: widget.title == '二手',
                                           ),
-                                        ),
-                                        api: widget.api,
-                                        row: _items[index * 2 + lane],
-                                        secondhand: widget.title == '二手',
-                                      ),
-                                    ),
+                                  );
+                                },
                               ),
                             ),
                           ),
@@ -1899,6 +1939,154 @@ class DiscoveryGoodsRanking extends StatelessWidget {
         ],
       ),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+    );
+  }
+}
+
+@visibleForTesting
+double coolPictureAspectRatioAt(Map<String, dynamic> row, int imageIndex) {
+  final feed = CoolapkFeed.fromJson(row);
+  return _coolPictureAspectRatioAt(feed, row, imageIndex);
+}
+
+double _coolPictureAspectRatioAt(
+  CoolapkFeed feed,
+  Map<String, dynamic> row,
+  int imageIndex,
+) {
+  final url = imageIndex >= 0 && imageIndex < feed.pictures.length
+      ? feed.pictures[imageIndex]
+      : feed.coverUrl;
+  final metadata = feed.pictureMetadata[url] ?? const <String, dynamic>{};
+  final geo = _map(metadata['geo']);
+  final size = RegExp(r'@(\d+)x(\d+)').firstMatch(url);
+  final width = double.tryParse(
+    '${metadata['width'] ?? metadata['w'] ?? geo['width'] ?? size?.group(1)}',
+  );
+  final height = double.tryParse(
+    '${metadata['height'] ?? metadata['h'] ?? geo['height'] ?? size?.group(2)}',
+  );
+  return width != null && height != null && width > 0 && height > 0
+      ? (width / height).clamp(0.35, 2.0)
+      : 0.5;
+}
+
+class DiscoveryPictureTile extends StatefulWidget {
+  const DiscoveryPictureTile({
+    required this.api,
+    required this.row,
+    this.imageIndex = 0,
+    super.key,
+  });
+  final CoolapkApi api;
+  final Map<String, dynamic> row;
+  final int imageIndex;
+
+  @override
+  State<DiscoveryPictureTile> createState() => _DiscoveryPictureTileState();
+}
+
+class _DiscoveryPictureTileState extends State<DiscoveryPictureTile> {
+  double? _decodedRatio;
+  String _decodedUrl = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final api = widget.api;
+    final row = widget.row;
+    final feed = CoolapkFeed.fromJson(row);
+    final imageIndex = widget.imageIndex;
+    final urls = feed.pictures.isNotEmpty
+        ? feed.pictures
+        : [if (feed.coverUrl.isNotEmpty) feed.coverUrl];
+    final pics = urls
+        .map((url) => GalleryImage(url, raw: feed.pictureMetadata[url]))
+        .toList();
+    final currentPic = imageIndex < pics.length ? pics[imageIndex] : null;
+    final imageUrl = currentPic?.previewUrl ?? '';
+    if (_decodedUrl != imageUrl) {
+      _decodedUrl = imageUrl;
+      _decodedRatio = null;
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Semantics(
+        button: true,
+        label: '查看${feed.username}的酷图',
+        child: GestureDetector(
+          onTap: pics.isEmpty
+              ? null
+              : () {
+                  HapticFeedbackUtil.light();
+                  Navigator.of(context).push(
+                    PhysicsSpringGalleryRoute(
+                      child: ImageGalleryPage(
+                        api: api,
+                        pics: pics,
+                        initialIndex: imageIndex,
+                        statusId: feed.id,
+                        authorName: feed.username,
+                        feed: feed,
+                        heroScope: row,
+                      ),
+                    ),
+                  );
+                },
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: AspectRatio(
+              aspectRatio:
+                  _decodedRatio ?? coolPictureAspectRatioAt(row, imageIndex),
+              child: pics.isEmpty
+                  ? const Icon(Icons.broken_image_outlined)
+                  : ImageGalleryHeroThumbnail(
+                      scope: row,
+                      index: imageIndex,
+                      pic: currentPic!,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) =>
+                            ExtendedImage.network(
+                              imageUrl,
+                              cache: true,
+                              headers: coolapkImageHeaders(imageUrl, api: api),
+                              cacheWidth:
+                                  (constraints.maxWidth *
+                                          MediaQuery.devicePixelRatioOf(
+                                            context,
+                                          ))
+                                      .round()
+                                      .clamp(1, 720),
+                              fit: BoxFit.cover,
+                              loadStateChanged: (state) {
+                                final info = state.extendedImageInfo;
+                                if (state.extendedImageLoadState ==
+                                        LoadState.completed &&
+                                    info != null) {
+                                  final ratio =
+                                      (info.image.width / info.image.height)
+                                          .clamp(0.35, 2.0);
+                                  if (_decodedRatio != ratio) {
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (mounted &&
+                                              _decodedUrl == imageUrl &&
+                                              _decodedRatio != ratio) {
+                                            setState(
+                                              () => _decodedRatio = ratio,
+                                            );
+                                          }
+                                        });
+                                  }
+                                }
+                                return null;
+                              },
+                            ),
+                      ),
+                    ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

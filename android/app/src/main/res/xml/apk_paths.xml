@@ -1,3 +1,4 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-files-path name="downloads" path="Download/" />
+    <cache-path name="gallery_images" path="gallery_images/" />
 </paths>

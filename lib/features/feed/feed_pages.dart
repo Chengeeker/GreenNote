@@ -5063,7 +5063,9 @@ class _FeedCardState extends State<FeedCard>
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    fontSize: productPrice != null ? 15.5 : 14.5,
+                                    fontSize: productPrice != null
+                                        ? 15.5
+                                        : 14.5,
                                     fontWeight: context.adjustWeight(
                                       FontWeight.w600,
                                     ),
@@ -5466,6 +5468,7 @@ class _FeedCardState extends State<FeedCard>
                 padding: const EdgeInsets.only(top: 8, bottom: 10),
                 child: _PictureGrid(
                   api: widget.api,
+                  feed: feed,
                   urls: feed.pictures,
                   metadata: feed.pictureMetadata,
                   isDetail: isDetail,
@@ -5643,6 +5646,7 @@ class _FeedCardState extends State<FeedCard>
                     padding: const EdgeInsets.only(top: 8),
                     child: _PictureGrid(
                       api: widget.api,
+                      feed: feed,
                       urls: effectivePictures,
                       metadata: feed.pictureMetadata,
                       isDetail: widget.isDetail,
@@ -7245,12 +7249,13 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   String _commentMode = 'hot';
   int _replyPage = 0;
 
-  String get _authorUid => (_detail?['uid'] ??
-          _detail?['userInfo']?['uid'] ??
-          _detail?['user_info']?['uid'] ??
-          widget.feed.uid)
-      .toString()
-      .trim();
+  String get _authorUid =>
+      (_detail?['uid'] ??
+              _detail?['userInfo']?['uid'] ??
+              _detail?['user_info']?['uid'] ??
+              widget.feed.uid)
+          .toString()
+          .trim();
 
   @override
   void initState() {
@@ -7576,11 +7581,12 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
         final authorId = _authorUid;
         if (authorId.isNotEmpty) {
           final authorItems = result.items.where((item) {
-            final uid = (item['uid'] ??
-                    item['userInfo']?['uid'] ??
-                    item['user_info']?['uid'])
-                ?.toString()
-                .trim();
+            final uid =
+                (item['uid'] ??
+                        item['userInfo']?['uid'] ??
+                        item['user_info']?['uid'])
+                    ?.toString()
+                    .trim();
             return uid == authorId;
           }).toList();
           result = ApiPage(
@@ -7661,12 +7667,13 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
           final authorId = _authorUid;
           final ids = <String>{};
           final items = result.items.map(CoolapkFeed.fromJson).where((reply) {
-            final type = (reply.raw['entityType'] ??
-                    reply.raw['entity_type'] ??
-                    reply.raw['type'] ??
-                    '')
-                .toString()
-                .toLowerCase();
+            final type =
+                (reply.raw['entityType'] ??
+                        reply.raw['entity_type'] ??
+                        reply.raw['type'] ??
+                        '')
+                    .toString()
+                    .toLowerCase();
             if (type == 'feed_detail_reply_sponsor_card' ||
                 reply.message.trim().toUpperCase() ==
                     'FEED_DETAIL_REPLY_SPONSOR_CARD') {
@@ -7699,10 +7706,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
       _replyError = null;
       if (targetMode != 'hot' && targetMode != 'author') {
         try {
-          final fallback = await widget.api.getHotReplyPage(
-            widget.feed.id,
-            1,
-          );
+          final fallback = await widget.api.getHotReplyPage(widget.feed.id, 1);
           if (mounted &&
               fallback.items.isNotEmpty &&
               requestId == _replyLoadRequestId &&
@@ -8645,8 +8649,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                   )
                 else
                   Opacity(
-                    opacity:
-                        _loadingReplies && _replies.isNotEmpty ? 0.65 : 1.0,
+                    opacity: _loadingReplies && _replies.isNotEmpty
+                        ? 0.65
+                        : 1.0,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -8657,7 +8662,8 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                               reply: _replies[index],
                               authorUid: authorUid,
                               showDivider: index + 1 < _replies.length,
-                              onFilterAuthor: () => _switchCommentMode('author'),
+                              onFilterAuthor: () =>
+                                  _switchCommentMode('author'),
                               onReply: () {
                                 setState(() {
                                   _replyTo = _replies[index].id;
@@ -8670,10 +8676,10 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                               onLike: () => _toggleReplyLike(_replies[index]),
                               onDelete:
                                   widget.api.currentUid.isNotEmpty &&
-                                          widget.api.currentUid ==
-                                              _replies[index].uid
-                                      ? () => _deleteReply(_replies[index])
-                                      : null,
+                                      widget.api.currentUid ==
+                                          _replies[index].uid
+                                  ? () => _deleteReply(_replies[index])
+                                  : null,
                               onDetails: () => Navigator.of(context).push<void>(
                                 MaterialPageRoute<void>(
                                   builder: (_) => ApiDetailPage(
@@ -8790,7 +8796,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              if (useLiquidGlass) _detailActionGlass(),
+                              if (useLiquidGlass) _detailActionGlass(context),
                               Padding(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 14,
@@ -8843,7 +8849,7 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            if (useLiquidGlass) _detailActionGlass(),
+                            if (useLiquidGlass) _detailActionGlass(context),
                             Padding(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 4,
@@ -8913,10 +8919,10 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     return useLiquidGlass ? GlassPage(child: scaffold) : scaffold;
   }
 
-  Widget _detailActionGlass() => AdaptiveGlass(
+  Widget _detailActionGlass(BuildContext context) => AdaptiveGlass(
     key: const ValueKey('feed-detail-action-glass'),
     shape: const LiquidRoundedSuperellipse(borderRadius: 9999),
-    settings: ReviewNavigationBar.liquidGlassSettings,
+    settings: ReviewNavigationBar.liquidGlassSettingsFor(context),
     quality: ReviewNavigationBar.liquidGlassQuality,
     child: const SizedBox.expand(),
   );
@@ -9686,12 +9692,14 @@ class _PictureGrid extends StatelessWidget {
     required this.metadata,
     required this.isDetail,
     this.joinedImages = false,
+    this.feed,
   });
   final CoolapkApi api;
   final List<String> urls;
   final Map<String, Map<String, dynamic>> metadata;
   final bool isDetail;
   final bool joinedImages;
+  final CoolapkFeed? feed;
 
   @override
   Widget build(BuildContext context) {
@@ -9728,7 +9736,8 @@ class _PictureGrid extends StatelessWidget {
     return NineGridView(
       api: api,
       pics: pics,
-      statusId: '',
+      statusId: feed?.id ?? '',
+      authorName: feed?.username,
       isDetail: isDetail,
       joinedImages: joinedImages,
     );

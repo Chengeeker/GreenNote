@@ -5267,7 +5267,7 @@ class _ProductPageState extends State<ProductPage>
                 child: GlassContainer(
                   height: actionBarHeight,
                   shape: const LiquidRoundedSuperellipse(borderRadius: 9999),
-                  settings: ReviewNavigationBar.liquidGlassSettings,
+                  settings: ReviewNavigationBar.liquidGlassSettingsFor(context),
                   quality: ReviewNavigationBar.liquidGlassQuality,
                   useOwnLayer: true,
                   clipBehavior: Clip.antiAlias,
@@ -5279,7 +5279,7 @@ class _ProductPageState extends State<ProductPage>
                           child: _buildBottomAction(
                             '对比',
                             Icons.compare_arrows_rounded,
-                            Colors.white,
+                            isDark ? Colors.white : scheme.onSurfaceVariant,
                             _openComparison,
                           ),
                         ),
@@ -5289,7 +5289,11 @@ class _ProductPageState extends State<ProductPage>
                             _following
                                 ? Icons.favorite_rounded
                                 : Icons.favorite_border_rounded,
-                            _following ? primaryGreen : Colors.white,
+                            _following
+                                ? primaryGreen
+                                : (isDark
+                                      ? Colors.white
+                                      : scheme.onSurfaceVariant),
                             _toggleFollow,
                           ),
                         ),
@@ -5307,7 +5311,7 @@ class _ProductPageState extends State<ProductPage>
                             child: _buildBottomAction(
                               '打分',
                               Icons.star_border_rounded,
-                              Colors.white,
+                              isDark ? Colors.white : scheme.onSurfaceVariant,
                               () => AppToast.show(
                                 context,
                                 widget.api.loginRequiredMessage,
@@ -5318,7 +5322,7 @@ class _ProductPageState extends State<ProductPage>
                             child: _buildBottomAction(
                               '购买',
                               Icons.shopping_bag_outlined,
-                              Colors.white,
+                              isDark ? Colors.white : scheme.onSurfaceVariant,
                               _handleBuy,
                             ),
                           ),

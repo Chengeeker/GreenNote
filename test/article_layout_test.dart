@@ -181,6 +181,9 @@ void main() {
         find.byType(ImageGalleryPage),
       );
       expect(gallery.initialIndex, 1);
+      expect(gallery.feed, isNull);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.byIcon(Icons.download_rounded), findsOneWidget);
       expect(gallery.pics.map((p) => p.url), [image1, image2, image1]);
       await tester.pumpWidget(const SizedBox());
     },
@@ -228,6 +231,10 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
     expect(find.byType(ImageGalleryPage), findsOneWidget);
+    expect(
+      tester.widget<ImageGalleryPage>(find.byType(ImageGalleryPage)).feed,
+      isNull,
+    );
     expect(feedback, hasLength(1));
     expect(feedback.single.arguments, 'HapticFeedbackType.lightImpact');
     await tester.pumpWidget(const SizedBox());

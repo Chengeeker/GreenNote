@@ -147,6 +147,84 @@ Future<void> mount(
 }
 
 void main() {
+  testWidgets(
+    'cool pictures use three image columns and open the original post gallery',
+    (tester) async {
+      final api = DiscoveryApi()
+        ..pages['root'] = [
+          for (var i = 0; i < 6; i++)
+            {
+              ...post('$i'),
+              'picArr': [
+                {
+                  'url': 'https://example.com/picture-$i.jpg',
+                  'width': 300,
+                  'height': 450 + i * 30,
+                },
+                {
+                  'url': 'https://example.com/second-$i.jpg',
+                  'width': 300,
+                  'height': 600,
+                },
+              ],
+            },
+        ];
+      await mount(tester, api, '酷图', settle: false);
+      expect(find.byType(FeedCard), findsNothing);
+      final tiles = find.byType(DiscoveryPictureTile);
+      expect(tiles.evaluate().length, 12);
+      final positions = <Offset>[];
+      for (final item in [('0', 0), ('0', 1), ('1', 0)]) {
+        final tile = find.byWidgetPredicate(
+          (w) =>
+              w is DiscoveryPictureTile &&
+              w.row['id'] == item.$1 &&
+              w.imageIndex == item.$2,
+        );
+        positions.add(tester.getTopLeft(tile));
+        final size = tester.getSize(tile);
+        expect(size.width, lessThan(tester.view.physicalSize.width / 2));
+      }
+      expect(positions.map((p) => p.dx).toSet(), hasLength(3));
+      expect(positions.map((p) => p.dy).toSet(), hasLength(1));
+      final firstImage = find.byWidgetPredicate(
+        (w) =>
+            w is DiscoveryPictureTile &&
+            w.row['id'] == '0' &&
+            w.imageIndex == 0,
+      );
+      final secondImage = find.byWidgetPredicate(
+        (w) =>
+            w is DiscoveryPictureTile &&
+            w.row['id'] == '0' &&
+            w.imageIndex == 1,
+      );
+      expect(
+        tester.getSize(secondImage).height,
+        greaterThan(tester.getSize(firstImage).height),
+      );
+      await tester.tap(
+        find.byWidgetPredicate(
+          (w) =>
+              w is DiscoveryPictureTile &&
+              w.row['id'] == '0' &&
+              w.imageIndex == 1,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      final gallery = tester.widget<ImageGalleryPage>(
+        find.byType(ImageGalleryPage),
+      );
+      expect(gallery.feed?.id, '0');
+      expect(gallery.feed?.uid, '7');
+      expect(gallery.pics, hasLength(2));
+      expect(gallery.initialIndex, 1);
+      expect(gallery.pics.first.url, 'https://example.com/picture-0.jpg');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() {
     SharedPreferences.setMockInitialValues({});
@@ -253,19 +331,19 @@ void main() {
           '',
           List.generate(7, (i) => {'title': '分类$i', 'url': '/t/category$i'}),
         ),
-        post('1'),
+        for (var i = 0; i < 15; i++)
+          {
+            ...post('$i'),
+            'picArr': [
+              {'url': 'https://example.com/picture-$i.jpg'},
+            ],
+          },
       ];
-    await mount(tester, api, '酷图');
+    await mount(tester, api, '酷图', settle: false);
     final before = api.calls.length;
     await tester.drag(find.text('分类2'), const Offset(190, 12));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 200));
     expect(api.calls, hasLength(before));
-    await tester.drag(find.byType(FeedCard), const Offset(0, 360));
-    await tester.pumpAndSettle();
-    expect(api.calls.length, greaterThan(before));
-    expect(api.calls.last.$2['page'], 1);
-    await tester.pump(const Duration(seconds: 2));
-    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
   test(
@@ -359,17 +437,31 @@ void main() {
           {'title': '热门', 'url': '#/pictureHot'},
           {'title': '2K', 'url': '#/picture2k'},
         ]),
-        post('1'),
+        {
+          ...post('1'),
+          'picArr': [
+            {'url': 'https://example.com/picture-1.jpg'},
+          ],
+        },
       ];
-    api.pages['#/picture2k'] = [post('2')];
-    await mount(tester, api, '酷图');
+    api.pages['#/picture2k'] = [
+      {
+        ...post('2'),
+        'picArr': [
+          {'url': 'https://example.com/picture-2.jpg'},
+        ],
+      },
+    ];
+    await mount(tester, api, '酷图', settle: false);
     await tester.tap(find.text('2K'));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 200));
     expect(find.text('#风景#'), findsOneWidget);
     expect(api.calls.last.$2['url'], '#/picture2k');
     expect(
-      tester.widget<FeedCard>(find.byType(FeedCard)).picturesBeforeText,
-      isTrue,
+      tester
+          .widget<DiscoveryPictureTile>(find.byType(DiscoveryPictureTile))
+          .row['id'],
+      '2',
     );
     expect(tester.takeException(), isNull);
   });

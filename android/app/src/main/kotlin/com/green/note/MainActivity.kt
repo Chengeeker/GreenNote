@@ -482,6 +482,54 @@ class MainActivity : FlutterActivity() {
                     setImageGalleryStatusBarVisible(call.argument<Boolean>("visible") ?: true)
                     result.success(null)
                 }
+                "shareGalleryLink" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    if (!Regex("https://www\\.coolapk\\.com/feed/[0-9]+").matches(text)) {
+                        result.error("INVALID_ARGS", "Invalid feed link", null)
+                    } else {
+                        try {
+                            startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, text)
+                            }, "分享"))
+                            result.success(null)
+                        } catch (e: Exception) { result.error("SHARE_FAILED", e.message, null) }
+                    }
+                }
+                "shareGalleryImage", "setGalleryWallpaper" -> {
+                    val bytes = call.argument<ByteArray>("bytes")
+                    val name = call.argument<String>("fileName") ?: ""
+                    val mime = call.argument<String>("mimeType") ?: ""
+                    if (bytes == null || bytes.isEmpty() || !Regex("gn_[0-9]+\\.(jpg|png|gif|webp|avif)").matches(name) || !mime.startsWith("image/")) {
+                        result.error("INVALID_ARGS", "Invalid image parameters", null)
+                        return@setMethodCallHandler
+                    }
+                    mediaExecutor.execute {
+                        try {
+                            val directory = java.io.File(cacheDir, "gallery_images").apply { mkdirs() }
+                            directory.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 86400000L }?.forEach { it.delete() }
+                            val file = java.io.File(directory, name)
+                            file.outputStream().use { it.write(bytes) }
+                            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.apk_files", file)
+                            runOnUiThread {
+                                try {
+                                    val intent = if (call.method == "setGalleryWallpaper") {
+                                        android.app.WallpaperManager.getInstance(this).getCropAndSetWallpaperIntent(uri)
+                                    } else {
+                                        android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                            type = mime
+                                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                                        }
+                                    }
+                                    intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    intent.clipData = android.content.ClipData.newRawUri("图片", uri)
+                                    startActivity(android.content.Intent.createChooser(intent, if (call.method == "setGalleryWallpaper") "设为壁纸" else "分享图片"))
+                                    result.success(null)
+                                } catch (e: Exception) { result.error("IMAGE_ACTION_FAILED", e.message, null) }
+                            }
+                        } catch (e: Exception) { runOnUiThread { result.error("IMAGE_ACTION_FAILED", e.message, null) } }
+                    }
+                }
                 "saveMediaToGallery" -> {
                     val bytes = call.argument<ByteArray>("bytes")
                     val name = call.argument<String>("fileName") ?: ""

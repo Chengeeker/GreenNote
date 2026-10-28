@@ -608,36 +608,38 @@ class _GoodsRankingBodyState extends ConsumerState<GoodsRankingBody> {
     );
   }
 
-  Widget _capsule(Widget child, double height, bool glass) => ClipRRect(
-    borderRadius: BorderRadius.circular(28),
-    child: Container(
-      height: height,
-      decoration: BoxDecoration(
-        color: glass ? Colors.transparent : _card,
-        borderRadius: BorderRadius.circular(28),
-        border: glass
-            ? null
-            : Border.all(
-                color: Theme.of(context).colorScheme.outlineVariant
-                    .withValues(alpha: .4),
-                width: .7,
+  Widget _capsule(Widget child, double height, bool glass) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: Container(
+        height: height,
+        decoration: BoxDecoration(
+          color: glass ? Colors.transparent : _card,
+          borderRadius: BorderRadius.circular(28),
+          border: glass
+              ? null
+              : Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant
+                      .withValues(alpha: .4),
+                  width: .7,
+                ),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (glass)
+              AdaptiveGlass(
+                shape: const LiquidRoundedSuperellipse(borderRadius: 9999),
+                settings: ReviewNavigationBar.liquidGlassSettingsFor(context),
+                quality: ReviewNavigationBar.liquidGlassQuality,
+                child: const SizedBox.expand(),
               ),
+            child,
+          ],
+        ),
       ),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (glass)
-            AdaptiveGlass(
-              shape: const LiquidRoundedSuperellipse(borderRadius: 9999),
-              settings: ReviewNavigationBar.liquidGlassSettings,
-              quality: ReviewNavigationBar.liquidGlassQuality,
-              child: const SizedBox.expand(),
-            ),
-          child,
-        ],
-      ),
-    ),
-  );
+    );
+  }
 
   @override
   Widget build(BuildContext context) {

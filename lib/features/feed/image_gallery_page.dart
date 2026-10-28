@@ -22,6 +22,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:html/parser.dart' as html;
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
@@ -29,6 +30,9 @@ import '../../core/settings/app_settings.dart';
 import '../../core/storage/storage_path_resolver.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/utils/haptic_feedback_util.dart';
+import '../../core/widgets/app_avatar.dart';
+import '../shared/api_list_page.dart' show UserSpacePage;
+import 'feed_pages.dart' show FeedDetailPage;
 
 @visibleForTesting
 Matrix4 hdrImageViewTransform(Rect viewport, Rect? imageRect) {
@@ -316,16 +320,19 @@ class _HeroImageFlightMorphState extends State<_HeroImageFlightMorph> {
   }
 
   @override
-  Widget build(BuildContext context) => CustomPaint(
-    key: const ValueKey('gallery-image-flight-plane'),
-    painter: _HeroImageFlightPainter(
-      widget.image,
-      widget.animation,
-      widget.source,
-      widget.target,
-      widget.reverse,
+  Widget build(BuildContext context) => RepaintBoundary(
+    // Hero's overlay has no boundary; isolate its per-frame image repaint.
+    child: CustomPaint(
+      key: const ValueKey('gallery-image-flight-plane'),
+      painter: _HeroImageFlightPainter(
+        widget.image,
+        widget.animation,
+        widget.source,
+        widget.target,
+        widget.reverse,
+      ),
+      child: const SizedBox.expand(),
     ),
-    child: const SizedBox.expand(),
   );
 }
 
@@ -400,6 +407,7 @@ class ImageGalleryPage extends StatefulWidget {
   final String statusId;
   final bool isDetail;
   final String? authorName;
+  final CoolapkFeed? feed;
   final Object? heroScope;
   final bool? useLiquidGlass;
 
@@ -411,6 +419,7 @@ class ImageGalleryPage extends StatefulWidget {
     required this.statusId,
     this.isDetail = false,
     this.authorName,
+    this.feed,
     this.heroScope,
     this.useLiquidGlass,
   });
@@ -429,8 +438,29 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   late final ExtendedPageController _pageController;
   late final PageController _thumbnailController;
   bool _isSaving = false;
+  bool _working = false;
+  int _actionRevision = 0;
+  late bool _liked = widget.feed?.liked ?? false;
+  late bool _favorited = widget.feed?.favorited ?? false;
+  late bool _following = _followed(widget.feed?.raw);
+  late String _likeCount = widget.feed?.likeCount ?? '0';
+  late String _favoriteCount = '${widget.feed?.raw['favnum'] ?? 0}';
+
+  bool _followed(Map<String, dynamic>? row) {
+    final user = row?['userInfo'] ?? row?['user_info'] ?? row?['user'];
+    final action = row?['userAction'];
+    final value =
+        row?['isFollow'] ??
+        row?['is_follow'] ??
+        (user is Map ? user['isFollow'] ?? user['is_follow'] : null) ??
+        (action is Map ? action['follow'] : null);
+    return value == 1 || value == '1' || value == true;
+  }
+
   bool _showChrome = true;
   bool _chromeRouteVisible = false;
+  bool _isReturning = false;
+  bool _liquidGlassEnabled = false;
   bool _hdrDisplaySupported = false;
   bool _hdrHybridSupported = false;
   bool? _windowHdrEnabled;
@@ -488,6 +518,42 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     HdrImageDetector.notifier.addListener(_onHdrDetected);
     _updateWindowHdr();
     _precacheNearbyPreviews();
+    unawaited(_loadFeedActions());
+  }
+
+  Future<void> _loadFeedActions() async {
+    final feed = widget.feed;
+    if (feed == null || !widget.api.hasCookie) return;
+    final revision = _actionRevision;
+    final session = widget.api.notificationSessionKey;
+    try {
+      final data = await widget.api.getFeedDetail(feed.id);
+      if (!mounted ||
+          revision != _actionRevision ||
+          session != widget.api.notificationSessionKey) {
+        return;
+      }
+      final parsed = CoolapkFeed.fromJson(data);
+      final action = data['userAction'];
+      final actions = action is Map ? action : const {};
+      setState(() {
+        if (actions.containsKey('like') ||
+            data.containsKey('isLike') ||
+            data.containsKey('is_like')) {
+          _liked = parsed.liked;
+        }
+        if (actions.containsKey('favorite') ||
+            actions.containsKey('collect') ||
+            data.containsKey('isFavorite') ||
+            data.containsKey('is_favorite')) {
+          _favorited = parsed.favorited;
+        }
+        if (parsed.likeCount.isNotEmpty) _likeCount = parsed.likeCount;
+        if (data['favnum'] != null) _favoriteCount = '${data['favnum']}';
+      });
+    } catch (_) {
+      // Keep the known state if this optional read fails.
+    }
   }
 
   ExtendedImage _previewImage(int index, {BoxFit fit = BoxFit.contain}) =>
@@ -590,12 +656,27 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
 
   void _handleRouteAnimationStatus(AnimationStatus status) {
     final visible = status == AnimationStatus.completed;
-    if (!mounted || visible == _chromeRouteVisible) return;
-    setState(() => _chromeRouteVisible = visible);
+    final returning =
+        status == AnimationStatus.reverse ||
+        (_isReturning && status != AnimationStatus.completed);
+    if (!mounted ||
+        (visible == _chromeRouteVisible && returning == _isReturning)) {
+      return;
+    }
+    setState(() {
+      _chromeRouteVisible = visible;
+      _isReturning = returning;
+    });
     if (visible) {
       _chromeOpacityController.forward();
-    } else {
-      _chromeOpacityController.reverse();
+    } else if (status == AnimationStatus.reverse) {
+      if (_liquidGlassEnabled) {
+        _chromeOpacityController
+          ..stop()
+          ..value = 0;
+      } else {
+        _chromeOpacityController.reverse();
+      }
     }
   }
 
@@ -675,7 +756,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     );
   }
 
-  Future<void> _saveCurrentImage() async {
+  Future<void> _runImageAction(String action) async {
     if (_isSaving) return;
     HapticFeedbackUtil.light();
     setState(() => _isSaving = true);
@@ -686,61 +767,292 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
       ),
     );
     try {
-      final pic = widget.pics[_currentIndex];
-      final response = await dio.get<List<int>>(
-        pic.originalUrl,
-        options: Options(
-          responseType: ResponseType.bytes,
-          followRedirects: false,
-          headers: coolapkImageHeaders(pic.originalUrl, api: widget.api),
-        ),
-      );
-      final bytes = response.data;
-      if (bytes == null || bytes.isEmpty) throw Exception('下载图片数据为空');
-      final type = response.headers
-          .value('content-type')
-          ?.split(';')
-          .first
-          .trim()
-          .toLowerCase();
-      final mime = type != null && type.startsWith('image/')
-          ? type
-          : (pic.isGif ? 'image/gif' : 'image/jpeg');
-      final ext = switch (mime) {
-        'image/png' => 'png',
-        'image/webp' => 'webp',
-        'image/gif' => 'gif',
-        'image/avif' => 'avif',
-        _ => 'jpg',
-      };
-      final prefs = await SharedPreferences.getInstance();
-      final pathType = prefs.getInt('greennote.image_save_path_type') ?? 0;
-      final subDir = StoragePathResolver.resolveSubDir(
-        pathType: pathType,
-        myNickname: widget.api.currentUserNickname,
-        authorName: widget.authorName,
-        isVideo: false,
-      );
-      final savedPath = await _mediaChannel.invokeMethod<String>(
-        'saveMediaToGallery',
-        {
-          'bytes': Uint8List.fromList(bytes),
-          'fileName': 'gn_${DateTime.now().microsecondsSinceEpoch}.$ext',
-          'relativeSubDir': subDir,
-          'isVideo': false,
-          'mimeType': mime,
-        },
-      );
+      final pictures = action == 'saveAll'
+          ? widget.pics
+          : [widget.pics[_currentIndex]];
+      var completed = 0;
+      for (final pic in pictures) {
+        final response = await dio.get<List<int>>(
+          pic.originalUrl,
+          options: Options(
+            responseType: ResponseType.bytes,
+            followRedirects: false,
+            headers: coolapkImageHeaders(pic.originalUrl, api: widget.api),
+          ),
+        );
+        final bytes = response.data;
+        if (bytes == null || bytes.isEmpty) throw Exception('下载图片数据为空');
+        final type = response.headers
+            .value('content-type')
+            ?.split(';')
+            .first
+            .trim()
+            .toLowerCase();
+        final mime = type != null && type.startsWith('image/')
+            ? type
+            : (pic.isGif ? 'image/gif' : 'image/jpeg');
+        final ext = switch (mime) {
+          'image/png' => 'png',
+          'image/webp' => 'webp',
+          'image/gif' => 'gif',
+          'image/avif' => 'avif',
+          _ => 'jpg',
+        };
+        final prefs = await SharedPreferences.getInstance();
+        final pathType = prefs.getInt('greennote.image_save_path_type') ?? 0;
+        final subDir = StoragePathResolver.resolveSubDir(
+          pathType: pathType,
+          myNickname: widget.api.currentUserNickname,
+          authorName: widget.authorName,
+          isVideo: false,
+        );
+        await _mediaChannel.invokeMethod<String>(
+          switch (action) {
+            'share' => 'shareGalleryImage',
+            'wallpaper' => 'setGalleryWallpaper',
+            _ => 'saveMediaToGallery',
+          },
+          {
+            'bytes': Uint8List.fromList(bytes),
+            'fileName': 'gn_${DateTime.now().microsecondsSinceEpoch}.$ext',
+            'relativeSubDir': subDir,
+            'isVideo': false,
+            'mimeType': mime,
+          },
+        );
+        completed++;
+        if (!mounted) break;
+      }
       HapticFeedbackUtil.medium();
       if (mounted) {
-        AppToast.show(context, '图片已保存至相册：${savedPath ?? "Picture/$subDir"}');
+        if (action == 'save' || action == 'saveAll') {
+          AppToast.show(context, '已保存 $completed 张原图到相册');
+        }
       }
     } catch (_) {
-      if (mounted) AppToast.show(context, '保存失败，请检查网络和相册权限后重试');
+      if (mounted) AppToast.show(context, '图片操作失败，请检查网络、权限或系统支持后重试');
     } finally {
       dio.close();
       if (mounted) setState(() => _isSaving = false);
     }
+  }
+
+  void _showMore() {
+    HapticFeedbackUtil.light();
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final item in const [
+              ('share', Icons.share_outlined, '分享图片'),
+              ('save', Icons.download_outlined, '保存原图'),
+              ('saveAll', Icons.download_for_offline_outlined, '保存全部原图'),
+              ('wallpaper', Icons.wallpaper_outlined, '设为壁纸'),
+            ])
+              ListTile(
+                leading: Icon(item.$2),
+                title: Text(item.$3),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  unawaited(_runImageAction(item.$1));
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _feedAction(String action) async {
+    final feed = widget.feed;
+    if (feed == null || _working) return;
+    if (!widget.api.hasCookie && !widget.api.isAnonymous ||
+        action == 'like' && !widget.api.hasCookie) {
+      AppToast.show(context, widget.api.loginRequiredMessage);
+      return;
+    }
+    HapticFeedbackUtil.light();
+    _actionRevision++;
+    setState(() => _working = true);
+    try {
+      switch (action) {
+        case 'like':
+          await widget.api.likeFeed(feed.id, liked: _liked);
+          if (!mounted) return;
+          final count = int.tryParse(_likeCount);
+          setState(() {
+            if (count != null) {
+              _likeCount = '${(count + (_liked ? -1 : 1)).clamp(0, 1 << 31)}';
+            }
+            _liked = !_liked;
+          });
+        case 'favorite':
+          await widget.api.favoriteFeed(
+            feed.id,
+            favorited: _favorited,
+            feed: feed,
+          );
+          if (mounted) {
+            setState(() {
+              final count = int.tryParse(_favoriteCount);
+              if (count != null) {
+                _favoriteCount =
+                    '${(count + (_favorited ? -1 : 1)).clamp(0, 1 << 31)}';
+              }
+              _favorited = !_favorited;
+            });
+          }
+        case 'follow':
+          await widget.api.followUser(feed.uid, following: _following);
+          if (mounted) setState(() => _following = !_following);
+      }
+    } catch (error) {
+      if (action == 'like') unawaited(_loadFeedActions());
+      if (mounted) AppToast.show(context, '$error');
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  void _openFeed() {
+    final feed = widget.feed;
+    if (feed == null) return;
+    HapticFeedbackUtil.light();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FeedDetailPage(api: widget.api, feed: feed),
+      ),
+    );
+  }
+
+  Widget _feedControls(bool useLiquidGlass) {
+    final feed = widget.feed!;
+    Widget action(
+      IconData icon,
+      String label,
+      VoidCallback? onTap, {
+      bool active = false,
+      String? tooltip,
+    }) => Expanded(
+      child: useLiquidGlass
+          ? Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _GalleryGlassIconButton(
+                    tooltip: tooltip ?? '',
+                    opacity: _chromeOpacityController.value,
+                    opacityKey: ValueKey('gallery-${tooltip ?? ''}-opacity'),
+                    icon: Icon(
+                      icon,
+                      color: active
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.white,
+                    ),
+                    useLiquidGlass: useLiquidGlass,
+                    onPressed: onTap,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: active
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : Tooltip(
+              message: tooltip ?? '',
+              child: TextButton(
+                onPressed: onTap,
+                style: TextButton.styleFrom(
+                  foregroundColor: active
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 29, semanticLabel: tooltip),
+                    const SizedBox(height: 8),
+                    Text(label, maxLines: 1),
+                  ],
+                ),
+              ),
+            ),
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (feed.message.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: InkWell(
+              onTap: _openFeed,
+              child: Text(
+                html.parseFragment(feed.message).text ?? '',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontSize: 15,
+                ),
+              ),
+            ),
+          ),
+        Row(
+          children: [
+            action(
+              _liked ? Icons.thumb_up : Icons.thumb_up_outlined,
+              _likeCount,
+              _working ? null : () => _feedAction('like'),
+              active: _liked,
+              tooltip: '点赞',
+            ),
+            action(
+              Icons.chat_bubble_outline_rounded,
+              useLiquidGlass
+                  ? (feed.replyCount.isEmpty ? '0' : feed.replyCount)
+                  : '回复',
+              _openFeed,
+              tooltip: '回复',
+            ),
+            action(
+              _favorited ? Icons.star : Icons.star_border,
+              _favoriteCount,
+              _working ? null : () => _feedAction('favorite'),
+              active: _favorited,
+              tooltip: '收藏',
+            ),
+            action(
+              Icons.ios_share_rounded,
+              useLiquidGlass
+                  ? '${feed.raw['forwardnum'] ?? feed.raw['sharenum'] ?? 0}'
+                  : '分享',
+              () async {
+                try {
+                  await _mediaChannel.invokeMethod<void>('shareGalleryLink', {
+                    'text': 'https://www.coolapk.com/feed/${feed.id}',
+                  });
+                } catch (_) {
+                  if (mounted) AppToast.show(context, '暂时无法分享');
+                }
+              },
+              tooltip: '分享',
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   void _toggleChrome() {
@@ -753,8 +1065,16 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     _setSystemStatusBarVisible(visible);
   }
 
+  double get _feedChromeExtent => widget.feed == null
+      ? 0
+      : 90 +
+            MediaQuery.textScalerOf(context).scale(15) *
+                (widget.feed!.message.trim().isEmpty ? 1 : 4);
+
   double get _thumbnailBottom =>
-      _thumbnailScrollBottom ?? MediaQuery.paddingOf(context).bottom + 32;
+      _thumbnailScrollBottom ??
+      MediaQuery.paddingOf(context).bottom +
+          (widget.feed == null ? 32 : _feedChromeExtent + 16);
 
   void _handleGalleryTap(Offset position) {
     final screenWidth = MediaQuery.sizeOf(context).width;
@@ -1067,6 +1387,8 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   }
 
   Widget _buildGallery(BuildContext context, bool useLiquidGlass) {
+    _liquidGlassEnabled = useLiquidGlass;
+    final hideChromeForReturn = useLiquidGlass && _isReturning;
     final galleryPage = Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -1482,7 +1804,10 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
 
                     final bottomOffset = widget.pics.length > 1
                         ? (_thumbnailBottom + 64 + 14)
-                        : (MediaQuery.paddingOf(context).bottom + 24);
+                        : (MediaQuery.paddingOf(context).bottom +
+                              (widget.feed == null
+                                  ? 24
+                                  : _feedChromeExtent + 18));
                     return Stack(
                       children: [
                         image,
@@ -1501,7 +1826,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
             ),
           ),
 
-          if (widget.pics.length > 1)
+          if (widget.pics.length > 1 && _showChrome && !hideChromeForReturn)
             Positioned(
               left: 12,
               right: 12,
@@ -1522,8 +1847,41 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
               ),
             ),
 
-          // Top Bar: Back, Counter, Live Pill, Save
-          if (_showChrome)
+          if (widget.feed != null && _showChrome && !hideChromeForReturn)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                ignoring: !_chromeRouteVisible,
+                child: AnimatedBuilder(
+                  animation: _chromeOpacityController,
+                  builder: (context, _) => FadeTransition(
+                    opacity: _chromeOpacityController,
+                    child: DecoratedBox(
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, Colors.black54],
+                        ),
+                      ),
+                      child: SafeArea(
+                        top: false,
+                        child: GlassBackdropGroup(
+                          key: const ValueKey('gallery-footer-backdrop-group'),
+                          enabled: useLiquidGlass,
+                          child: _feedControls(useLiquidGlass),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+          // Chrome uses the existing route opacity and pointer gate.
+          if (_showChrome && !hideChromeForReturn)
             IgnorePointer(
               key: const ValueKey('gallery-top-controls-pointer-gate'),
               ignoring: !_chromeRouteVisible,
@@ -1537,71 +1895,178 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                         horizontal: 16,
                         vertical: 10,
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          _GalleryGlassIconButton(
-                            tooltip: '返回',
-                            opacity: controlsOpacity,
-                            opacityKey: const ValueKey(
-                              'gallery-back-button-opacity',
+                      child: GlassBackdropGroup(
+                        key: const ValueKey('gallery-top-backdrop-group'),
+                        enabled: useLiquidGlass,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            _GalleryGlassIconButton(
+                              tooltip: '返回',
+                              opacity: controlsOpacity,
+                              opacityKey: const ValueKey(
+                                'gallery-back-button-opacity',
+                              ),
+                              icon: const Icon(
+                                Icons.arrow_back_rounded,
+                                color: Colors.white,
+                              ),
+                              useLiquidGlass: useLiquidGlass,
+                              // 返回动作不再依赖水波纹触感。
+                              onPressed: () => Navigator.of(context).pop(),
                             ),
-                            icon: const Icon(
-                              Icons.arrow_back_rounded,
-                              color: Colors.white,
-                            ),
-                            useLiquidGlass: useLiquidGlass,
-                            // 返回动作不再依赖水波纹触感。
-                            onPressed: () => Navigator.of(context).pop(),
-                          ),
 
-                          // Counter or Live Photo Switcher Pill
-                          Opacity(
-                            key: const ValueKey('gallery-counter-opacity'),
-                            opacity: controlsOpacity,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black45,
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Text(
-                                '${_currentIndex + 1} / ${widget.pics.length}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
+                            if (widget.feed != null) ...[
+                              Expanded(
+                                child: Opacity(
+                                  opacity: controlsOpacity,
+                                  child: InkWell(
+                                    onTap: widget.feed!.uid.isEmpty
+                                        ? null
+                                        : () {
+                                            HapticFeedbackUtil.light();
+                                            Navigator.of(context).push(
+                                              MaterialPageRoute<void>(
+                                                builder: (_) => UserSpacePage(
+                                                  api: widget.api,
+                                                  uid: widget.feed!.uid,
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                    child: Row(
+                                      children: [
+                                        const SizedBox(width: 10),
+                                        AppAvatar(
+                                          api: widget.api,
+                                          url: widget.feed!.avatar,
+                                          size: 48,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                widget.feed!.username,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                              Text(
+                                                widget.feed!.date,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: Colors.white70,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
-
-                          _GalleryGlassIconButton(
-                            tooltip: '保存高清大图到相册',
-                            opacity: controlsOpacity,
-                            opacityKey: const ValueKey(
-                              'gallery-download-button-opacity',
-                            ),
-                            icon: _isSaving
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
+                              if (widget.feed!.uid.isNotEmpty) ...[
+                                if (useLiquidGlass)
+                                  _GalleryGlassIconButton(
+                                    width:
+                                        (24 +
+                                                MediaQuery.textScalerOf(context)
+                                                        .scale(14) *
+                                                    3)
+                                            .clamp(80, 120),
+                                    tooltip: _following ? '已关注' : '关注',
+                                    opacity: controlsOpacity,
+                                    opacityKey: const ValueKey(
+                                      'gallery-follow-opacity',
+                                    ),
+                                    useLiquidGlass: useLiquidGlass,
+                                    onPressed: _working
+                                        ? null
+                                        : () => _feedAction('follow'),
+                                    icon: Text(
+                                      _following ? '已关注' : '关注',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                      ),
                                     ),
                                   )
-                                : const Icon(
-                                    Icons.download_rounded,
-                                    color: Colors.white,
+                                else
+                                  Opacity(
+                                    opacity: controlsOpacity,
+                                    child: FilledButton(
+                                      onPressed: _working
+                                          ? null
+                                          : () => _feedAction('follow'),
+                                      child: Text(_following ? '已关注' : '关注'),
+                                    ),
                                   ),
-                            useLiquidGlass: useLiquidGlass,
-                            onPressed: _isSaving ? null : _saveCurrentImage,
-                          ),
-                        ],
+                                const SizedBox(width: 12),
+                              ],
+                            ] else
+                              Opacity(
+                                key: const ValueKey('gallery-counter-opacity'),
+                                opacity: controlsOpacity,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black45,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Text(
+                                    '${_currentIndex + 1} / ${widget.pics.length}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                            _GalleryGlassIconButton(
+                              tooltip: widget.feed == null ? '保存高清大图到相册' : '更多',
+                              opacity: controlsOpacity,
+                              opacityKey: const ValueKey(
+                                'gallery-download-button-opacity',
+                              ),
+                              icon: _isSaving
+                                  ? SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : Icon(
+                                      widget.feed == null
+                                          ? Icons.download_rounded
+                                          : Icons.more_vert,
+                                      color: Colors.white,
+                                    ),
+                              useLiquidGlass: useLiquidGlass,
+                              onPressed: _isSaving
+                                  ? null
+                                  : widget.feed == null
+                                  ? () => _runImageAction('save')
+                                  : _showMore,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -1615,10 +2080,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     return useLiquidGlass
         ? GlassAdaptiveScope(
             minQuality: GlassQuality.standard,
-            child: GlassPage(
-              enableBackgroundSampling: true,
-              child: galleryPage,
-            ),
+            child: LiquidGlassScope(child: galleryPage),
           )
         : galleryPage;
   }
@@ -1632,6 +2094,7 @@ class _GalleryGlassIconButton extends StatefulWidget {
     required this.opacity,
     required this.opacityKey,
     required this.useLiquidGlass,
+    this.width = 48,
   });
 
   final Widget icon;
@@ -1640,6 +2103,7 @@ class _GalleryGlassIconButton extends StatefulWidget {
   final double opacity;
   final Key opacityKey;
   final bool useLiquidGlass;
+  final double width;
 
   @override
   State<_GalleryGlassIconButton> createState() =>
@@ -1702,8 +2166,11 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
         onLongPress: () {},
         child: GlassButton(
           label: widget.tooltip,
-          width: 48,
+          width: widget.width,
           height: 48,
+          shape: widget.width > 48
+              ? const LiquidRoundedRectangle(borderRadius: 24)
+              : const LiquidOval(),
           icon: widget.icon,
           iconSize: 22,
           iconColor: Colors.white,
@@ -1747,17 +2214,17 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
             inner: blur,
           );
     return SizedBox(
-      width: 48,
+      width: widget.width,
       height: 48,
       child: Stack(
         alignment: Alignment.center,
         children: [
           SizedBox(
-            width: 44,
+            width: widget.width - 4,
             height: 44,
             child: Container(
               decoration: BoxDecoration(
-                shape: BoxShape.circle,
+                borderRadius: BorderRadius.circular(24),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.20 * opacity),
@@ -1771,13 +2238,14 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
                   ),
                 ],
               ),
-              child: ClipOval(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24),
                 clipBehavior: Clip.antiAlias,
                 child: BackdropFilter(
                   filter: filter,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
+                      borderRadius: BorderRadius.circular(24),
                       gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -1806,11 +2274,11 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
           IconButton(
             tooltip: widget.tooltip,
             style: IconButton.styleFrom(
-              fixedSize: const Size.square(48),
+              fixedSize: Size(widget.width, 48),
               padding: EdgeInsets.zero,
               foregroundColor: Colors.white,
               backgroundColor: Colors.transparent,
-              shape: const CircleBorder(),
+              shape: const StadiumBorder(),
             ),
             onPressed: widget.onPressed,
             icon: Opacity(

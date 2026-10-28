@@ -15,8 +15,11 @@ import 'package:greennote/core/network/coolapk_api.dart';
 import 'package:greennote/core/network/coolapk_image.dart';
 import 'package:greennote/core/utils/haptic_feedback_util.dart';
 import 'package:greennote/core/settings/app_settings.dart';
+import 'package:greennote/core/widgets/app_avatar.dart';
 import 'package:greennote/features/feed/image_gallery_page.dart';
 import 'package:greennote/features/feed/nine_grid_view.dart';
+import 'package:greennote/features/shared/api_list_page.dart'
+    show UserSpacePage;
 
 class GalleryApi implements CoolapkApi {
   @override
@@ -45,6 +48,55 @@ class RecordingNavigatorObserver extends NavigatorObserver {
   }
 }
 
+class InterruptibleGalleryRoute extends PhysicsSpringGalleryRoute<void> {
+  InterruptibleGalleryRoute({required super.child});
+
+  void beginReturn() => controller!.reverse();
+  void cancelReturn() => controller!.forward();
+}
+
+class GalleryFeedApi extends GalleryApi {
+  final actions = <String>[];
+  Map<String, dynamic> detail = {};
+  Future<Map<String, dynamic>>? pendingDetail;
+  bool rejectNextLike = false;
+  String session = 'gallery-account';
+  @override
+  String get notificationSessionKey => session;
+  @override
+  Future<Map<String, dynamic>> getFeedDetail(String id) =>
+      pendingDetail ?? Future.value(detail);
+  @override
+  String get currentUid => '99';
+  @override
+  bool get hasCookie => true;
+  @override
+  Map<String, String> imageHeadersFor() => {};
+  @override
+  Future<Map<String, dynamic>> getUserSpace(String uid) async =>
+      throw const CoolapkApiException('离线测试');
+  @override
+  Future<Map<String, dynamic>> getUserProfile(String uid) async => {};
+  @override
+  Future<void> followUser(String uid, {required bool following}) async =>
+      actions.add('follow:$uid:$following');
+  @override
+  Future<void> likeFeed(String id, {required bool liked}) async {
+    actions.add('like:$id:$liked');
+    if (rejectNextLike) {
+      rejectNextLike = false;
+      throw const CoolapkApiException('不要重复点赞');
+    }
+  }
+
+  @override
+  Future<void> favoriteFeed(
+    String id, {
+    required bool favorited,
+    CoolapkFeed? feed,
+  }) async => actions.add('favorite:$id:$favorited');
+}
+
 class _DoubleTapState extends Fake implements ExtendedImageGestureState {
   @override
   String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) =>
@@ -61,6 +113,250 @@ class _DoubleTapState extends Fake implements ExtendedImageGestureState {
 }
 
 void main() {
+  test(
+    'official userAction flags take priority and legacy flags remain supported',
+    () {
+      for (final value in [1, '1', true]) {
+        final feed = CoolapkFeed.fromJson({
+          'isLike': 0,
+          'userAction': {'like': value, 'collect': value},
+        });
+        expect(feed.liked, isTrue);
+        expect(feed.favorited, isTrue);
+      }
+      expect(
+        CoolapkFeed.fromJson({
+          'isLike': 1,
+          'userAction': {'like': 0},
+        }).liked,
+        isFalse,
+      );
+      expect(
+        CoolapkFeed.fromJson({'is_like': 1, 'is_favorite': true}).liked,
+        isTrue,
+      );
+      expect(
+        CoolapkFeed.fromJson({'is_like': 1, 'is_favorite': true}).favorited,
+        isTrue,
+      );
+    },
+  );
+  Future<void> mountFeedGallery(
+    WidgetTester tester,
+    GalleryFeedApi api, {
+    bool glass = false,
+  }) async {
+    SharedPreferences.setMockInitialValues({});
+    final feed = CoolapkFeed.fromJson({
+      'id': '42',
+      'uid': '7',
+      'username': '图片作者',
+      'message': '#艺术#',
+      'likenum': 16,
+      'replynum': 23,
+      'favnum': 7,
+      'forwardnum': 9,
+    });
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: ImageGalleryPage(
+            api: api,
+            pics: const [galleryTestPic],
+            initialIndex: 0,
+            statusId: '42',
+            feed: feed,
+            useLiquidGlass: glass,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  testWidgets(
+    'duplicate-like response resyncs to liked and next tap cancels it',
+    (tester) async {
+      final api = GalleryFeedApi();
+      await mountFeedGallery(tester, api);
+      api.detail = {
+        'userAction': {'like': 1},
+        'likenum': 66,
+      };
+      api.rejectNextLike = true;
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pump();
+      expect(find.byIcon(Icons.thumb_up), findsOneWidget);
+      expect(find.text('66'), findsOneWidget);
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pump();
+      expect(find.byIcon(Icons.thumb_up_outlined), findsOneWidget);
+      expect(api.actions, ['like:42:false', 'like:42:true']);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 3));
+    },
+  );
+  testWidgets(
+    'server liked state is shown and taps alternate unlike then like',
+    (tester) async {
+      final api = GalleryFeedApi()
+        ..detail = {
+          'userAction': {'like': 1},
+          'likenum': 66,
+        };
+      await mountFeedGallery(tester, api);
+      expect(find.byIcon(Icons.thumb_up), findsOneWidget);
+      expect(find.text('66'), findsOneWidget);
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pump();
+      expect(find.byIcon(Icons.thumb_up_outlined), findsOneWidget);
+      expect(find.text('65'), findsOneWidget);
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pump();
+      expect(find.byIcon(Icons.thumb_up), findsOneWidget);
+      expect(find.text('66'), findsOneWidget);
+      expect(api.actions, ['like:42:true', 'like:42:false']);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets('late status read cannot undo a new like or cross accounts', (
+    tester,
+  ) async {
+    for (final accountChange in [false, true]) {
+      final pending = Completer<Map<String, dynamic>>();
+      final api = GalleryFeedApi()..pendingDetail = pending.future;
+      await mountFeedGallery(tester, api);
+      if (accountChange) {
+        api.session = 'another-account';
+      } else {
+        await tester.tap(find.byTooltip('点赞'));
+        await tester.pump();
+      }
+      pending.complete({
+        'userAction': {'like': accountChange ? 1 : 0},
+        'likenum': 99,
+      });
+      await tester.pump();
+      expect(find.text('99'), findsNothing);
+      expect(
+        find.byIcon(accountChange ? Icons.thumb_up_outlined : Icons.thumb_up),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
+  testWidgets(
+    'gallery uses six independent 48px round glass buttons and a spaced glass follow pill',
+    (tester) async {
+      await mountFeedGallery(tester, GalleryFeedApi(), glass: true);
+      final buttons = tester
+          .widgetList<GlassButton>(find.byType(GlassButton))
+          .toList();
+      expect(buttons, hasLength(7));
+      for (final button in buttons.where((b) => b.label != '关注')) {
+        expect(button.width, 48);
+        expect(button.height, 48);
+        expect(button.shape, const LiquidOval());
+        expect(button.useOwnLayer, isTrue);
+      }
+      final follow = find.byWidgetPredicate(
+        (w) => w is GlassButton && w.label == '关注',
+      );
+      final more = find.byWidgetPredicate(
+        (w) => w is GlassButton && w.label == '更多',
+      );
+      expect(
+        tester.widget<GlassButton>(follow).shape,
+        const LiquidRoundedRectangle(borderRadius: 24),
+      );
+      expect(
+        tester.getTopLeft(more).dx - tester.getTopRight(follow).dx,
+        greaterThanOrEqualTo(12),
+      );
+      expect(tester.widget<AppAvatar>(find.byType(AppAvatar)).size, 48);
+      for (final count in ['16', '23', '7', '9']) {
+        expect(find.text(count), findsOneWidget);
+      }
+      expect(find.byType(GlassButtonGroup), findsNothing);
+      final topKey = GlassBackdropGroup.keyOf(tester.element(follow));
+      expect(topKey, isNotNull);
+      expect(GlassBackdropGroup.keyOf(tester.element(more)), same(topKey));
+      final footerKeys = ['点赞', '回复', '收藏', '分享'].map((label) {
+        final button = find.byWidgetPredicate(
+          (w) => w is GlassButton && w.label == label,
+        );
+        return GlassBackdropGroup.keyOf(tester.element(button));
+      }).toList();
+      expect(footerKeys.first, isNotNull);
+      expect(footerKeys, everyElement(same(footerKeys.first)));
+      expect(footerKeys.first, isNot(same(topKey)));
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
+    'feed gallery has author, real actions and four image menu entries without a single-image strip',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final api = GalleryFeedApi();
+      final feed = CoolapkFeed.fromJson({
+        'id': '42',
+        'uid': '7',
+        'username': '图片作者',
+        'message': '#艺术#',
+        'likenum': 16,
+        'favnum': 7,
+        'picArr': [galleryTestPic.url],
+      });
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: ImageGalleryPage(
+              api: api,
+              pics: const [galleryTestPic],
+              initialIndex: 0,
+              statusId: '42',
+              feed: feed,
+              useLiquidGlass: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('图片作者'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('gallery-thumbnail-strip')),
+        findsNothing,
+      );
+      await tester.tap(find.text('关注'));
+      await tester.pump();
+      expect(find.text('已关注'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.thumb_up_outlined));
+      await tester.pump();
+      expect(find.text('17'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.star_border));
+      await tester.pump();
+      expect(api.actions, [
+        'follow:7:false',
+        'like:42:false',
+        'favorite:42:false',
+      ]);
+      await tester.tap(find.byTooltip('更多'));
+      await tester.pump(const Duration(milliseconds: 400));
+      for (final label in ['分享图片', '保存原图', '保存全部原图', '设为壁纸']) {
+        expect(find.text(label), findsOneWidget);
+      }
+      Navigator.of(tester.element(find.text('分享图片'))).pop();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.text('图片作者'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(tester.widget<UserSpacePage>(find.byType(UserSpacePage)).uid, '7');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   testWidgets(
     'second page keeps its own preview while original decode is pending',
     (tester) async {
@@ -421,10 +717,110 @@ void main() {
     expect(tester.widget<Opacity>(counterFade).opacity, 0);
     expect(tester.widget<Opacity>(downloadButtonFade).opacity, 0);
     expect(tester.getSize(pageView), pageSize);
+    expect(tester.getSize(pageView), pageSize);
 
     await tester.pump(const Duration(milliseconds: 220));
     await tester.pump();
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('gallery removes all glass buttons during the return', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final nav = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          navigatorKey: nav,
+          home: const Scaffold(body: Text('host')),
+        ),
+      ),
+    );
+    final route = InterruptibleGalleryRoute(
+      child: ImageGalleryPage(
+        api: GalleryFeedApi(),
+        pics: const [galleryTestPic],
+        initialIndex: 0,
+        statusId: '42',
+        feed: CoolapkFeed.fromJson({'id': '42', 'uid': '7', 'username': '作者'}),
+        useLiquidGlass: true,
+      ),
+    );
+    nav.currentState!.push(route);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 140));
+    final follow = find.byWidgetPredicate(
+      (w) => w is GlassButton && w.label == '关注',
+    );
+    final like = find.byWidgetPredicate(
+      (w) => w is GlassButton && w.label == '点赞',
+    );
+    expect(tester.widget<GlassButton>(like).quality, GlassQuality.premium);
+    expect(tester.widget<GlassButton>(follow).quality, GlassQuality.premium);
+    route.beginReturn();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 70));
+    expect(find.byType(GlassButton), findsNothing);
+    expect(
+      find.byKey(const ValueKey('gallery-top-controls-pointer-gate')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('gallery-footer-backdrop-group')),
+      findsNothing,
+    );
+    route.cancelReturn();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 140));
+    expect(tester.widget<GlassButton>(like).quality, GlassQuality.premium);
+    expect(tester.widget<GlassButton>(follow).quality, GlassQuality.premium);
+    nav.currentState!.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    expect(find.byType(ImageGalleryPage), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ordinary gallery removes glass controls as return begins', (
+    tester,
+  ) async {
+    final nav = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      MaterialApp(navigatorKey: nav, home: const Scaffold()),
+    );
+    nav.currentState!.push(
+      PhysicsSpringGalleryRoute(
+        child: const ImageGalleryPage(
+          api: GalleryApi(),
+          pics: [galleryTestPic],
+          initialIndex: 0,
+          statusId: 'ordinary',
+          useLiquidGlass: true,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump(const Duration(milliseconds: 140));
+    expect(
+      tester
+          .widgetList<GlassButton>(find.byType(GlassButton))
+          .map((b) => b.quality),
+      everyElement(GlassQuality.premium),
+    );
+    nav.currentState!.pop();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 70));
+    expect(find.byType(GlassButton), findsNothing);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    expect(find.byType(ImageGalleryPage), findsNothing);
   });
 
   testWidgets('only the selected gallery image pairs with its source Hero', (
@@ -661,6 +1057,14 @@ void main() {
           expect(
             find.byKey(const ValueKey('gallery-image-flight-plane')),
             findsOneWidget,
+          );
+          expect(
+            tester
+                .renderObject(
+                  find.byKey(const ValueKey('gallery-image-flight-plane')),
+                )
+                .parent,
+            isA<RenderRepaintBoundary>(),
           );
           await tester.pumpAndSettle();
           await tester.pumpWidget(
@@ -1199,6 +1603,17 @@ void main() {
       await tester.pump();
 
       expect(find.text('HDR'), findsOneWidget);
+      await tester.tap(find.byType(ImageGalleryHeroThumbnail));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        tester.widget<ImageGalleryPage>(find.byType(ImageGalleryPage)).feed,
+        isNull,
+      );
+      expect(find.byTooltip('保存高清大图到相册'), findsOneWidget);
+      expect(find.byTooltip('更多'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
     });
 
     testWidgets(
@@ -1421,7 +1836,7 @@ void main() {
     );
 
     testWidgets(
-      'ImageGalleryPage renders GlassAdaptiveScope, GlassPage, and GlassButton controls when useLiquidGlass=true',
+      'ImageGalleryPage renders a sampling scope and GlassButton controls when useLiquidGlass=true',
       (tester) async {
         await tester.pumpWidget(
           const MaterialApp(
@@ -1438,7 +1853,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
 
         expect(find.byType(GlassAdaptiveScope), findsOneWidget);
-        expect(find.byType(GlassPage), findsOneWidget);
+        expect(find.byType(LiquidGlassScope), findsOneWidget);
         expect(find.byType(GlassBackgroundSource), findsOneWidget);
 
         final glassButtons = tester
@@ -1451,6 +1866,9 @@ void main() {
         expect(backButton.height, 48);
         expect(backButton.stretch, 0.8);
         expect(backButton.quality, GlassQuality.premium);
+        expect(backButton.iconColor, Colors.white);
+        expect((backButton.icon as Icon).color, Colors.white);
+        expect(backButton.settings!.glassColor, const Color(0x66000000));
         expect(backButton.settings!.thickness, 32);
         expect(backButton.settings!.refractiveIndex, 1.24);
 
@@ -1461,6 +1879,9 @@ void main() {
         expect(saveButton.height, 48);
         expect(saveButton.stretch, 0.8);
         expect(saveButton.quality, GlassQuality.premium);
+        expect(saveButton.iconColor, Colors.white);
+        expect((saveButton.icon as Icon).color, Colors.white);
+        expect(saveButton.settings!.glassColor, const Color(0x66000000));
         expect(saveButton.settings!.thickness, 32);
         expect(saveButton.settings!.refractiveIndex, 1.24);
       },
@@ -1478,12 +1899,18 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(
+            child: MaterialApp(
               home: ImageGalleryPage(
-                api: GalleryApi(),
-                pics: [galleryTestPic],
+                api: GalleryFeedApi(),
+                pics: const [galleryTestPic],
                 initialIndex: 0,
                 statusId: 'scope-liquid-glass',
+                feed: CoolapkFeed.fromJson({
+                  'id': '42',
+                  'uid': '7',
+                  'username': '图片作者',
+                  'replynum': 23,
+                }),
               ),
             ),
           ),
@@ -1491,7 +1918,22 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
 
-        expect(find.byType(GlassButton), findsNWidgets(2));
+        final glassButtons = tester
+            .widgetList<GlassButton>(find.byType(GlassButton))
+            .toList();
+        expect(glassButtons, hasLength(7));
+        final backButton = glassButtons.firstWhere((b) => b.label == '返回');
+        final followButton = glassButtons.firstWhere((b) => b.label == '关注');
+        final moreButton = glassButtons.firstWhere((b) => b.label == '更多');
+        expect(backButton.iconColor, Colors.white);
+        expect((backButton.icon as Icon).color, Colors.white);
+        expect(followButton.iconColor, Colors.white);
+        expect((followButton.icon as Text).style?.color, Colors.white);
+        expect(moreButton.iconColor, Colors.white);
+        expect((moreButton.icon as Icon).color, Colors.white);
+        for (final button in glassButtons) {
+          expect(button.settings!.glassColor, const Color(0x66000000));
+        }
 
         // Switch setting to false
         await tester.runAsync(() async {
@@ -1502,6 +1944,18 @@ void main() {
         await tester.pump();
 
         expect(find.byType(GlassButton), findsNothing);
+        expect(find.byType(FilledButton), findsOneWidget);
+        expect(find.text('回复'), findsOneWidget);
+        expect(find.text('分享'), findsOneWidget);
+        await tester.runAsync(
+          () => container
+              .read(appSettingsProvider.notifier)
+              .setLiquidGlassNavBar(true),
+        );
+        await tester.pump();
+        expect(find.byType(GlassButton), findsNWidgets(7));
+        expect(find.text('23'), findsOneWidget);
+        expect(find.byType(FilledButton), findsNothing);
       },
     );
   });

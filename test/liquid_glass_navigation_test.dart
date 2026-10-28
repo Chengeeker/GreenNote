@@ -83,6 +83,12 @@ void main() {
         ),
       );
       final glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      expect(glassBar.indicatorSettings?.rimLight, 0);
+      expect(glassBar.indicatorSettings?.rimShade, 0);
+      expect(
+        find.byKey(const ValueKey('liquid-glass-light-rim')),
+        findsNothing,
+      );
       expect(glassBar.enableBlend, isTrue);
       expect(glassBar.maskingQuality, MaskingQuality.high);
       expect(glassBar.showIndicator, isTrue);
@@ -153,6 +159,74 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('light glass rail uses a white shell and theme colors', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    await tester.runAsync(() async {
+      await container
+          .read(appSettingsProvider.notifier)
+          .setFloatingNavBar(true);
+      await container
+          .read(appSettingsProvider.notifier)
+          .setLiquidGlassNavBar(true);
+    });
+    const colorIndex = 3;
+    final colorScheme = AppTheme.lightTheme(colorIndex: colorIndex).colorScheme;
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: AppTheme.lightTheme(colorIndex: colorIndex),
+          home: Scaffold(
+            extendBody: true,
+            body: const ColoredBox(color: Colors.white),
+            bottomNavigationBar: ReviewNavigationBar(
+              selectedIndex: 0,
+              hasBottomInset: false,
+              onSelected: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+    expect(glassBar.settings?.glassColor, const Color(0xF0FFFFFF));
+    expect(glassBar.settings?.rimLight, 1);
+    expect(glassBar.indicatorSettings?.glassColor, const Color(0x18000000));
+    expect(glassBar.indicatorSettings?.bodyMode, GlassBodyMode.clear);
+    expect(glassBar.indicatorSettings?.rimShade, 0.12);
+    expect(glassBar.indicatorSettings?.rimLight, 0.35);
+    expect(glassBar.indicatorSettings?.refractiveIndex, 1.18);
+    expect(glassBar.indicatorSettings?.chromaticAberration, 0.025);
+    expect(glassBar.indicatorColor, const Color(0x26000000));
+    expect(glassBar.selectedIconColor, colorScheme.primary);
+    expect(glassBar.selectedLabelColor, colorScheme.primary);
+    expect(glassBar.unselectedIconColor, colorScheme.onSurfaceVariant);
+    expect(glassBar.unselectedLabelColor, colorScheme.onSurfaceVariant);
+    expect(
+      find.byKey(const ValueKey('liquid-glass-light-rim')),
+      findsOneWidget,
+    );
+    final customSettings = ReviewNavigationBar.liquidGlassSettingsFor(
+      tester.element(find.byType(ReviewNavigationBar)),
+      const LiquidGlassSettings(
+        visibility: 0.5,
+        glassColor: Color(0x66000000),
+        thickness: 32,
+      ),
+    );
+    expect(customSettings.glassColor, const Color(0xF0FFFFFF));
+    expect(customSettings.rimLight, 1);
+    expect(customSettings.visibility, 0.5);
+    expect(customSettings.thickness, 32);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'continuous deliberate drag from home to profile selects profile without being truncated to digital',

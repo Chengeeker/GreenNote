@@ -146,7 +146,7 @@ void main() {
       final route = ModalRoute.of(tester.element(gallery));
       expect(route, isA<PhysicsSpringGalleryRoute<void>>());
       expect(route, isNot(isA<MaterialPageRoute<void>>()));
-      expect(route!.transitionDuration, const Duration(milliseconds: 220));
+      expect(route!.transitionDuration, const Duration(milliseconds: 330));
       expect(tester.widget<ImageGalleryPage>(gallery).initialIndex, 1);
       expect(tester.widget<ImageGalleryPage>(gallery).heroScope, same(scope));
       await tester.pump(const Duration(milliseconds: 250));

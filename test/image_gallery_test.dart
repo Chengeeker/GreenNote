@@ -513,6 +513,7 @@ void main() {
       Canvas(recorder).drawColor(Colors.blue, BlendMode.src);
       final picture = recorder.endRecording();
       final pixels = (await tester.runAsync(() => picture.toImage(40, 80)))!;
+      final highRes = (await tester.runAsync(() => picture.toImage(80, 160)))!;
       picture.dispose();
       final original = Completer<ImageInfo>();
       final provider = ExtendedImage.network(
@@ -560,19 +561,30 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
+      if (finishDecode) {
+        original.complete(ImageInfo(image: highRes.clone()));
+        await tester.pump();
+        await tester.pump();
+        final flight = tester.widget<CustomPaint>(
+          find.byKey(const ValueKey('gallery-image-flight-plane')),
+        );
+        expect((flight.painter as dynamic).image.isCloneOf(highRes), isTrue);
+      }
       await tester.pump(const Duration(milliseconds: 250));
       await tester.pump();
       final preview = find.byKey(const ValueKey('gallery-opening-preview'));
-      expect(preview, findsOneWidget);
-      expect(tester.widget<RawImage>(preview).image!.isCloneOf(pixels), isTrue);
+      if (!finishDecode) {
+        expect(preview, findsOneWidget);
+        expect(
+          tester.widget<RawImage>(preview).image!.isCloneOf(pixels),
+          isTrue,
+        );
+      }
       expect(
         find.byKey(const ValueKey('gallery-image-flight-plane')),
         findsNothing,
       );
       if (finishDecode) {
-        original.complete(ImageInfo(image: pixels.clone()));
-        await tester.pump();
-        await tester.pump();
         expect(preview, findsNothing);
         expect(find.byType(ExtendedImageGesture), findsOneWidget);
       }
@@ -581,6 +593,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       tester.binding.imageCache.evict(key);
       pixels.dispose();
+      highRes.dispose();
       expect(tester.takeException(), isNull);
     });
   }
@@ -647,6 +660,15 @@ void main() {
     // the 220 ms route transition with bounded pumps instead of settling all.
     await tester.pump(const Duration(milliseconds: 250));
     expect(matchingHero(), findsNWidgets(2));
+    for (final hero in tester.widgetList<Hero>(matchingHero())) {
+      final tween = hero.createRectTween!(
+        const Rect.fromLTWH(350, 250, 100, 100),
+        const Rect.fromLTWH(0, 0, 800, 600),
+      );
+      for (final t in [0.0, 0.1, 0.25, 0.5, 0.75, 1.0]) {
+        expect(tween.transform(t)!.center, const Offset(400, 300));
+      }
+    }
     expect(tester.takeException(), isNull);
   });
 

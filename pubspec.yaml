@@ -1,7 +1,7 @@
 name: greennote
 description: "GreenNote is an independent Coolapk client."
 publish_to: 'none'
-version: 1.9.14+164
+version: 1.9.16+166
 
 environment:
   sdk: ^3.13.1

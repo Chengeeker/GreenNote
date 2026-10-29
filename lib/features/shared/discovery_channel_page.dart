@@ -2040,6 +2040,7 @@ class _DiscoveryPictureTileState extends State<DiscoveryPictureTile> {
               child: pics.isEmpty
                   ? const Icon(Icons.broken_image_outlined)
                   : ImageGalleryHeroThumbnail(
+                      api: api,
                       scope: row,
                       index: imageIndex,
                       pic: currentPic!,

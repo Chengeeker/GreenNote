@@ -139,6 +139,7 @@ class _NineGridViewState extends State<NineGridView> {
       return GestureDetector(
         onTap: () => _openMedia(context, index),
         child: ImageGalleryHeroThumbnail(
+          api: widget.api,
           scope: _heroScope,
           index: index,
           pic: pic,

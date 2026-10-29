@@ -198,6 +198,11 @@ Widget imageGalleryHeroFlightShuttleBuilder(
     source: source,
     target: target,
     reverse: isPop,
+    originalProvider: isPop
+        ? null
+        : toHeroContext
+              .findAncestorStateOfType<_ImageGalleryPageState>()
+              ?._originalProvider(),
   );
 }
 
@@ -291,7 +296,7 @@ class _HeroImageGeometry {
   }
 }
 
-/// Freeze the decoded image, then move its edges and the clipping viewport
+/// Freeze image geometry, then move its edges and the clipping viewport
 /// independently. Re-layout of a gesture image during flight changes its crop.
 class _HeroImageFlightMorph extends StatefulWidget {
   const _HeroImageFlightMorph({
@@ -300,6 +305,7 @@ class _HeroImageFlightMorph extends StatefulWidget {
     required this.source,
     required this.target,
     required this.reverse,
+    this.originalProvider,
   });
 
   final Animation<double> animation;
@@ -307,14 +313,44 @@ class _HeroImageFlightMorph extends StatefulWidget {
   final _HeroImageGeometry source;
   final _HeroImageGeometry target;
   final bool reverse;
+  final ImageProvider? originalProvider;
 
   @override
   State<_HeroImageFlightMorph> createState() => _HeroImageFlightMorphState();
 }
 
 class _HeroImageFlightMorphState extends State<_HeroImageFlightMorph> {
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+  ui.Image? _original;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_stream != null || widget.originalProvider == null) return;
+    _stream = widget.originalProvider!.resolve(
+      createLocalImageConfiguration(context),
+    );
+    _listener = ImageStreamListener((info, synchronousCall) {
+      _stream!.removeListener(_listener!);
+      final image = info.image.clone();
+      info.dispose();
+      _original?.dispose();
+      if (synchronousCall) {
+        _original = image;
+      } else if (mounted) {
+        setState(() => _original = image);
+      } else {
+        image.dispose();
+      }
+    }, onError: (_, _) {});
+    _stream!.addListener(_listener!);
+  }
+
   @override
   void dispose() {
+    if (_listener != null) _stream?.removeListener(_listener!);
+    _original?.dispose();
     widget.image.dispose();
     super.dispose();
   }
@@ -325,7 +361,7 @@ class _HeroImageFlightMorphState extends State<_HeroImageFlightMorph> {
     child: CustomPaint(
       key: const ValueKey('gallery-image-flight-plane'),
       painter: _HeroImageFlightPainter(
-        widget.image,
+        _original ?? widget.image,
         widget.animation,
         widget.source,
         widget.target,
@@ -384,18 +420,25 @@ class ImageGalleryHeroThumbnail extends StatelessWidget {
     required this.index,
     required this.pic,
     required this.child,
+    this.api,
   });
 
   final Object scope;
   final int index;
   final GalleryImage pic;
   final Widget child;
+  final CoolapkApi? api;
 
   @override
   Widget build(BuildContext context) => Hero(
     tag: ImageGalleryHeroTag.forPic(scope: scope, index: index, pic: pic),
+    createRectTween: (begin, end) => RectTween(begin: begin, end: end),
     flightShuttleBuilder: imageGalleryHeroFlightShuttleBuilder,
-    child: child,
+    child: Listener(
+      onPointerDown: (_) =>
+          precacheCoolapkImage(pic.originalUrl, context, api: api),
+      child: child,
+    ),
   );
 }
 
@@ -723,6 +766,15 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
       if (mounted) setState(() {});
     });
   }
+
+  ImageProvider _originalProvider() => ExtendedImage.network(
+    widget.pics[widget.initialIndex].originalUrl,
+    headers: coolapkImageHeaders(
+      widget.pics[widget.initialIndex].originalUrl,
+      api: widget.api,
+    ),
+    cache: true,
+  ).image;
 
   void _updateWindowHdr() {
     // Keep the window mode stable across HDR/SDR pages; the bitmap gain map
@@ -1233,6 +1285,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
       enabled: index == _currentIndex,
       child: Hero(
         tag: ImageGalleryHeroTag.forPic(scope: scope, index: index, pic: pic),
+        createRectTween: (begin, end) => RectTween(begin: begin, end: end),
         flightShuttleBuilder: imageGalleryHeroFlightShuttleBuilder,
         child: child,
       ),

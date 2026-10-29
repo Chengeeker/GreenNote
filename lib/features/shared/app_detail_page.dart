@@ -1,4 +1,5 @@
 import 'download_center_page.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -805,6 +806,7 @@ class _AppDetailPageState extends State<AppDetailPage> {
                     ),
                   ),
                   child: ImageGalleryHeroThumbnail(
+                    api: widget.api,
                     scope: _galleryScope,
                     index: index,
                     pic: pic,
@@ -1391,7 +1393,11 @@ class AppDownloadButton extends StatelessWidget {
           throw const CoolapkApiException('酷安没有返回有效的下载地址');
         }
         if (!context.mounted) return;
-        await enqueueAppDownload(context, resolved, _field(['title', 'apkname', 'packageName']));
+        await enqueueAppDownload(
+          context,
+          resolved,
+          _field(['title', 'apkname', 'packageName']),
+        );
       } catch (error) {
         if (context.mounted) {
           ScaffoldMessenger.of(context)

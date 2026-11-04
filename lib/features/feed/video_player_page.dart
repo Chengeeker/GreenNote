@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../core/network/coolapk_api.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/storage/storage_path_resolver.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/utils/haptic_feedback_util.dart';
@@ -900,6 +901,7 @@ class _CoolapkVideoPlayerPageState extends State<CoolapkVideoPlayerPage> {
                 thumbColor: Colors.white,
               ),
               child: Slider(
+                overlayColor: AppTheme.noTouchOverlay,
                 value: duration.inMilliseconds > 0
                     ? position.inMilliseconds
                           .clamp(0, duration.inMilliseconds)

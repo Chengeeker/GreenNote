@@ -5,6 +5,7 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html;
 
 import '../../core/network/coolapk_api.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/network/coolapk_image.dart';
 import '../../core/utils/coolapk_url_handler.dart';
 import '../../core/utils/haptic_feedback_util.dart';
@@ -34,6 +35,10 @@ List<ArticlePart> parseArticleParts(Map<String, dynamic> data) {
   }
 
   void rich(String source) {
+    if (!source.contains('<') && !source.contains('&')) {
+      text(source);
+      return;
+    }
     final pending = StringBuffer();
     void flush() {
       text(pending.toString());
@@ -134,10 +139,12 @@ class ArticleBody extends StatelessWidget {
     required this.api,
     required this.feed,
     required this.parts,
+    this.sliver = false,
   });
   final CoolapkApi api;
   final CoolapkFeed feed;
   final List<ArticlePart> parts;
+  final bool sliver;
 
   @override
   Widget build(BuildContext context) {
@@ -147,38 +154,48 @@ class ArticleBody extends StatelessWidget {
           GalleryImage(part.url, raw: feed.pictureMetadata[part.url]),
     ];
     var imageIndex = 0;
+    final imageIndices = [
+      for (final part in parts) part.type == 'image' ? imageIndex++ : -1,
+    ];
+    Widget block(BuildContext context, int index) {
+      final part = parts[index];
+      return Padding(
+        key: ValueKey('article-part-$index'),
+        padding: const EdgeInsets.only(bottom: 12),
+        child: switch (part.type) {
+          'image' => _image(context, part, images, imageIndices[index]),
+          'link' => ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            tileColor: Theme.of(context).colorScheme.surfaceContainer,
+            leading: const Icon(Icons.link),
+            title: Text(part.text),
+            onTap: () => CoolapkUrlHandler.handleUrl(context, api, part.url),
+          ),
+          _ => CoolapkRichText(
+            api: api,
+            text: part.text,
+            style: TextStyle(
+              fontSize: AppTheme.contentFontSize,
+              height: 1.65,
+              letterSpacing: .15,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+        },
+      );
+    }
+
+    if (sliver) {
+      return SliverList.builder(itemCount: parts.length, itemBuilder: block);
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final entry in parts.indexed)
-          Padding(
-            key: ValueKey('article-part-${entry.$1}'),
-            padding: const EdgeInsets.only(bottom: 12),
-            child: switch (entry.$2.type) {
-              'image' => _image(context, entry.$2, images, imageIndex++),
-              'link' => ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                tileColor: Theme.of(context).colorScheme.surfaceContainer,
-                leading: const Icon(Icons.link),
-                title: Text(entry.$2.text),
-                onTap: () =>
-                    CoolapkUrlHandler.handleUrl(context, api, entry.$2.url),
-              ),
-              _ => CoolapkRichText(
-                api: api,
-                text: entry.$2.text,
-                style: TextStyle(
-                  fontSize: 15.5,
-                  height: 1.65,
-                  letterSpacing: .15,
-                  color: Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-            },
-          ),
+        for (var index = 0; index < parts.length; index++)
+          block(context, index),
       ],
     );
   }

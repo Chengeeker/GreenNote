@@ -368,7 +368,7 @@ void main() {
       expect(find.textContaining('原帖加载失败'), findsOneWidget);
       expect(find.text('重新加载原帖').hitTestable(), findsOneWidget);
       final scroll = tester
-          .widget<ListView>(find.byType(ListView).first)
+          .widget<CustomScrollView>(find.byType(CustomScrollView).first)
           .controller!;
       expect(scroll.offset, 0);
       api.failDetail = false;

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/network/coolapk_api.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/utils/app_toast.dart';
 
 class FeedVote extends StatefulWidget {
@@ -151,7 +152,10 @@ class _FeedVoteState extends State<FeedVote> {
                 child: Text(
                   '${row['title'] ?? ''}',
                   textAlign: versus ? TextAlign.center : TextAlign.start,
-                  style: TextStyle(fontSize: 14, color: versus ? color : null),
+                  style: TextStyle(
+                    fontSize: AppTheme.contentFontSize,
+                    color: versus ? color : null,
+                  ),
                 ),
               ),
               if ((_voted || _expired) && count != null)

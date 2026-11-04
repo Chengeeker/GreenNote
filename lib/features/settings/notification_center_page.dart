@@ -127,7 +127,6 @@ class _ReplyNotificationSettingsPageState
                       ? null
                       : (value) => _save(settings.copyWith(enabled: value)),
                 ),
-                const Divider(height: 1),
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(

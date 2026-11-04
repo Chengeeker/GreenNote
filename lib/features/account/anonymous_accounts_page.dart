@@ -401,12 +401,15 @@ class _AnonymousAccountsPageState extends State<AnonymousAccountsPage> {
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
-                '已有账户 (${profiles.length})',
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.bold,
-                    ),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 14),
+                child: Text(
+                  '已有账户 (${profiles.length})',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               const SizedBox(height: 8),
               for (final p in profiles) ...[

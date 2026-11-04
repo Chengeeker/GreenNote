@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +8,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
+import '../../core/services/cache_service.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_avatar.dart';
 import '../../core/widgets/cached_network_image.dart';
@@ -22,7 +25,234 @@ List<Map<String, dynamic>> _rows(dynamic value) => value is List
     : [];
 
 bool isActivityTopic(Map<String, dynamic> detail) =>
-    _rows(detail['tabList']).any((tab) => _field(tab, 'title') == '活动详情');
+    _rows(detail['tabList'])
+        .any((tab) => ['活动详情', '有奖活动'].contains(_field(tab, 'title')));
+
+final _openingTopics = Expando<({BuildContext context, Object token})>();
+
+typedef PreparedTopic = ({Map<String, dynamic> detail, ApiPage? firstPage});
+
+final _preparedTopics =
+    Expando<
+      ({
+        (String, bool) session,
+        int revision,
+        Map<String, Future<PreparedTopic>> topics,
+      })
+    >();
+
+Future<PreparedTopic> prepareTopic(
+  BuildContext context,
+  CoolapkApi api,
+  String tag, {
+  bool Function()? shouldContinue,
+}) {
+  final session = (api.notificationSessionKey, api.isAnonymous);
+  var cache = _preparedTopics[api];
+  if (cache == null ||
+      cache.session != session ||
+      cache.revision != CacheService.revision.value) {
+    cache = (
+      session: session,
+      revision: CacheService.revision.value,
+      topics: <String, Future<PreparedTopic>>{},
+    );
+    _preparedTopics[api] = cache;
+  }
+  final topics = cache.topics;
+  // Opening a topic must not consume the session snapshot or expire it mid-use.
+  // shortcut: keep 12 snapshots per session; add background renewal if live metadata is required.
+  final existing = topics.remove(tag);
+  final future =
+      existing ?? _loadPreparedTopic(context, api, tag, shouldContinue);
+  topics[tag] = future;
+  while (topics.length > 12) {
+    topics.remove(topics.keys.first);
+  }
+  if (existing == null) {
+    unawaited(
+      future.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stack) {
+          if (identical(topics[tag], future)) topics.remove(tag);
+        },
+      ),
+    );
+  }
+  return future;
+}
+
+void setPreparedTopicFollowing(CoolapkApi api, String tag, bool following) {
+  final cache = _preparedTopics[api];
+  if (cache == null ||
+      cache.session != (api.notificationSessionKey, api.isAnonymous) ||
+      cache.revision != CacheService.revision.value) {
+    return;
+  }
+  unawaited(
+    cache.topics[tag]?.then<void>((ready) {
+      final action = ready.detail['userAction'];
+      ready.detail['userAction'] = {
+        if (action is Map) ...Map<String, dynamic>.from(action),
+        'follow': following ? 1 : 0,
+      };
+    }, onError: (Object error, StackTrace stack) {}),
+  );
+}
+
+void _rememberPreparedTopicPage(CoolapkApi api, String tag, ApiPage page) {
+  final cache = _preparedTopics[api];
+  if (cache == null ||
+      cache.session != (api.notificationSessionKey, api.isAnonymous) ||
+      cache.revision != CacheService.revision.value) {
+    return;
+  }
+  final future = cache.topics[tag];
+  unawaited(
+    future?.then<void>((ready) {
+      if (identical(cache.topics[tag], future)) {
+        cache.topics[tag] = Future.value((
+          detail: ready.detail,
+          firstPage: page,
+        ));
+      }
+    }, onError: (Object error, StackTrace stack) {}),
+  );
+}
+
+Future<PreparedTopic> _loadPreparedTopic(
+  BuildContext context,
+  CoolapkApi api,
+  String tag,
+  bool Function()? shouldContinue,
+) async {
+  final session = (api.notificationSessionKey, api.isAnonymous);
+  final revision = CacheService.revision.value;
+  void checkSession() {
+    if (session != (api.notificationSessionKey, api.isAnonymous)) {
+      throw const CoolapkApiException('账号已变化，请重新打开话题');
+    }
+    if (revision != CacheService.revision.value ||
+        shouldContinue?.call() == false) {
+      throw const CoolapkApiException('已取消打开话题');
+    }
+  }
+
+  final response = await api.getTopicDetail(tag);
+  checkSession();
+  final data = response['data'];
+  final detail = data is Map ? Map<String, dynamic>.from(data) : response;
+  if (detail.isEmpty) throw const CoolapkApiException('话题数据为空');
+  final imageReady = context.mounted
+      ? precacheCoolapkImage(
+          _field(detail, 'logo'),
+          context,
+          api: api,
+        ).timeout(const Duration(milliseconds: 900), onTimeout: () {})
+      : Future<void>.value();
+  ApiPage? firstPage;
+  if (isActivityTopic(detail) || tag == '人像摄影') {
+    final tabs = _rows(detail['tabList']);
+    final selected = tabs.indexWhere(
+      (tab) => tab['page_name'] == detail['selectedTab'],
+    );
+    if (tabs.isNotEmpty) {
+      final route = _field(tabs[selected < 0 ? 0 : selected], 'url');
+      final uri = Uri.tryParse(route);
+      if (route.isNotEmpty &&
+          (uri == null || !isOfficialActivityDocument(uri))) {
+        final request = homePageRequest(route);
+        firstPage = await api.getList(
+          request.path,
+          query: {...request.query, 'page': 1},
+        );
+      }
+    }
+  }
+  await imageReady;
+  checkSession();
+  return (detail: detail, firstPage: firstPage);
+}
+
+Future<void> openPreparedTopic(
+  BuildContext context,
+  CoolapkApi api,
+  String tag, {
+  String? initialTitle,
+  String? initialLogo,
+  String? initialCover,
+  Future<PreparedTopic>? prepared,
+}) async {
+  final navigator = Navigator.of(context);
+  final pending = _openingTopics[navigator];
+  if (pending != null &&
+      pending.context.mounted &&
+      (ModalRoute.of(pending.context)?.isCurrent ?? true) &&
+      TickerMode.valuesOf(pending.context).enabled) {
+    return;
+  }
+  final source = ModalRoute.of(context);
+  final session = (api.notificationSessionKey, api.isAnonymous);
+  final revision = CacheService.revision.value;
+  final token = Object();
+  bool canOpen() =>
+      context.mounted &&
+      navigator.mounted &&
+      identical(_openingTopics[navigator]?.token, token) &&
+      (source?.isCurrent ?? true) &&
+      TickerMode.valuesOf(context).enabled &&
+      revision == CacheService.revision.value &&
+      session == (api.notificationSessionKey, api.isAnonymous);
+  _openingTopics[navigator] = (context: context, token: token);
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  OverlayEntry? progress;
+  final progressTimer = Timer(const Duration(milliseconds: 180), () {
+    if (!canOpen() || overlay?.mounted != true) return;
+    progress = OverlayEntry(
+      builder: (ctx) => Positioned(
+        top: MediaQuery.paddingOf(ctx).top,
+        left: 0,
+        right: 0,
+        child: const IgnorePointer(
+          child: LinearProgressIndicator(
+            minHeight: 2,
+            semanticsLabel: '正在打开话题',
+          ),
+        ),
+      ),
+    );
+    overlay!.insert(progress!);
+  });
+  try {
+    final ready =
+        await (prepared ??
+            prepareTopic(context, api, tag, shouldContinue: canOpen));
+    if (!canOpen()) return;
+    navigator.push<void>(
+      MaterialPageRoute(
+        builder: (_) => TopicPage(
+          api: api,
+          tag: tag,
+          initialTitle: initialTitle,
+          initialLogo: initialLogo,
+          initialCover: initialCover,
+          initialDetail: ready.detail,
+          initialTabPage: ready.firstPage,
+        ),
+      ),
+    );
+  } catch (error) {
+    if (context.mounted && canOpen()) {
+      AppToast.show(context, '打开话题失败，请点击重试：$error');
+    }
+  } finally {
+    progressTimer.cancel();
+    progress?.remove();
+    if (identical(_openingTopics[navigator]?.token, token)) {
+      _openingTopics[navigator] = null;
+    }
+  }
+}
 
 int? _eventTime(Map<String, dynamic> event, List<String> keys) {
   for (final key in keys) {
@@ -448,12 +678,14 @@ class ActivityTopicView extends StatefulWidget {
     required this.tag,
     required this.detail,
     this.headerColor,
+    this.initialPage,
     super.key,
   });
   final CoolapkApi api;
   final String tag;
   final Map<String, dynamic> detail;
   final Color? headerColor;
+  final ApiPage? initialPage;
   @override
   State<ActivityTopicView> createState() => _ActivityTopicViewState();
 }
@@ -462,6 +694,7 @@ class _ActivityTopicViewState extends State<ActivityTopicView>
     with SingleTickerProviderStateMixin {
   late final List<Map<String, dynamic>> _tabs = _rows(widget.detail['tabList']);
   late final TabController _tabsController;
+  late final int _initialTabIndex;
   late bool _following = (widget.detail['userAction'] as Map?)?['follow'] == 1;
   bool _busy = false;
   @override
@@ -470,10 +703,11 @@ class _ActivityTopicViewState extends State<ActivityTopicView>
     final selected = _tabs.indexWhere(
       (tab) => tab['page_name'] == widget.detail['selectedTab'],
     );
+    _initialTabIndex = selected < 0 ? 0 : selected;
     _tabsController = TabController(
       length: _tabs.length,
       vsync: this,
-      initialIndex: selected < 0 ? 0 : selected,
+      initialIndex: _initialTabIndex,
     );
   }
 
@@ -492,6 +726,7 @@ class _ActivityTopicViewState extends State<ActivityTopicView>
     setState(() => _busy = true);
     try {
       await widget.api.followTopic(widget.tag, following: _following);
+      setPreparedTopicFollowing(widget.api, widget.tag, !_following);
       if (mounted) setState(() => _following = !_following);
     } catch (error) {
       if (mounted) AppToast.show(context, '$error');
@@ -739,8 +974,17 @@ class _ActivityTopicViewState extends State<ActivityTopicView>
                 : TabBarView(
                     controller: _tabsController,
                     children: [
-                      for (final tab in _tabs)
-                        _ActivityTab(api: widget.api, tab: tab),
+                      for (final (index, tab) in _tabs.indexed)
+                        _ActivityTab(
+                          api: widget.api,
+                          tab: tab,
+                          cacheTag: index == _initialTabIndex
+                              ? widget.tag
+                              : null,
+                          initialPage: index == _initialTabIndex
+                              ? widget.initialPage
+                              : null,
+                        ),
                     ],
                   ),
           ),
@@ -799,9 +1043,16 @@ class _ShortTopicPainter extends BoxPainter {
 }
 
 class _ActivityTab extends StatefulWidget {
-  const _ActivityTab({required this.api, required this.tab});
+  const _ActivityTab({
+    required this.api,
+    required this.tab,
+    this.initialPage,
+    this.cacheTag,
+  });
   final CoolapkApi api;
   final Map<String, dynamic> tab;
+  final ApiPage? initialPage;
+  final String? cacheTag;
   @override
   State<_ActivityTab> createState() => _ActivityTabState();
 }
@@ -810,6 +1061,15 @@ class _ActivityTabState extends State<_ActivityTab> {
   late String _route = _field(widget.tab, 'url');
   String _selectedSort = '默认';
   Map<String, dynamic>? _sortCard;
+  late ApiPage? _initialPage = widget.initialPage;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_initialPage != null) {
+      _rememberSortCard(_initialPage!.items);
+    }
+  }
 
   void _rememberSortCard(List<Map<String, dynamic>> items) {
     if (_sortCard != null) return;
@@ -857,6 +1117,7 @@ class _ActivityTabState extends State<_ActivityTab> {
                               final title = _field(sort, 'title');
                               if (url.isNotEmpty && _selectedSort != title) {
                                 setState(() {
+                                  _initialPage = null;
                                   _sortCard = item;
                                   _route = url;
                                   _selectedSort = title;
@@ -910,9 +1171,18 @@ class _ActivityTabState extends State<_ActivityTab> {
       showAppBar: false,
       path: request.path,
       query: request.query,
+      initialPage: _initialPage,
       header: _sortCard == null ? null : _buildSortCard(context, _sortCard!),
       itemFilter: _visibleActivityItem,
       onPageItemsLoaded: _rememberSortCard,
+      onPageLoaded: (page) {
+        final tag = widget.cacheTag;
+        if (tag != null &&
+            page.page == 1 &&
+            _route == _field(widget.tab, 'url')) {
+          _rememberPreparedTopicPage(widget.api, tag, page);
+        }
+      },
       itemBuilder: (_, item) {
         if (item['entityType'] == 'feed') {
           return FeedCard(

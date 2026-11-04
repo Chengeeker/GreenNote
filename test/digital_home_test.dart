@@ -22,6 +22,10 @@ List<Map<String, dynamic>> fixture() => (jsonDecode(
 class HomeApi extends Fake implements CoolapkApi {
   @override
   String get notificationSessionKey => 'synthetic-home-session';
+  @override
+  Future<Map<String, dynamic>> getTopicDetail(String tag) async => {
+    'data': {'title': tag},
+  };
   HomeApi({this.loggedIn = false});
   bool loggedIn;
   bool anonymous = false;

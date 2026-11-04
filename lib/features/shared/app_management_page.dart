@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/network/coolapk_api.dart';
+import 'app_detail_page.dart';
 import 'download_center_page.dart';
 
 import 'package:flutter/services.dart';
@@ -28,6 +29,7 @@ class _AppManagementPageState extends State<AppManagementPage>
   List<Map<String, dynamic>> _apps = const [];
   bool _showSystemApps = false;
   bool _loading = true;
+  bool _requesting = false;
   String? _error;
   String _sort = 'recent';
 
@@ -46,34 +48,42 @@ class _AppManagementPageState extends State<AppManagementPage>
     super.dispose();
   }
 
-  void _tabChanged() { if (mounted) setState(() {}); }
+  void _tabChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _loadApps();
+    if (state == AppLifecycleState.resumed) _loadApps(quiet: true);
   }
 
-  Future<void> _loadApps() async {
+  Future<void> _loadApps({bool quiet = false}) async {
+    if (_requesting) return;
+    _requesting = true;
     if (mounted) {
       setState(() {
-        _loading = true;
+        _loading = _apps.isEmpty;
         _error = null;
       });
     }
     try {
       final values = await _channel.invokeListMethod<Object?>(
-        'getInstalledApps',
+        quiet ? 'getInstalledAppsIfChanged' : 'getInstalledApps',
       );
+      if (quiet && values == null) return;
       final apps = [
         for (final value in values ?? const <Object?>[])
           if (value is Map) Map<String, dynamic>.from(value),
       ];
       if (mounted) setState(() => _apps = apps);
     } on PlatformException catch (error) {
-      if (mounted) setState(() => _error = error.message ?? '读取本机应用失败');
+      if (mounted && _apps.isEmpty) {
+        setState(() => _error = error.message ?? '读取本机应用失败');
+      }
     } on MissingPluginException {
-      if (mounted) setState(() => _error = '当前平台不支持读取本机应用');
+      if (mounted && _apps.isEmpty) setState(() => _error = '当前平台不支持读取本机应用');
     } finally {
+      _requesting = false;
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -151,15 +161,24 @@ class _AppManagementPageState extends State<AppManagementPage>
         children: [
           TabBar(
             controller: _tabsController,
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
+            isScrollable: false,
+            tabAlignment: TabAlignment.fill,
+            labelPadding: const EdgeInsets.symmetric(horizontal: 4),
             labelColor: const Color(0xFF00A993),
             unselectedLabelColor: scheme.onSurfaceVariant,
             indicatorColor: const Color(0xFF00A993),
             indicatorWeight: 3,
             tabs: [
-              Tab(text: '应用(${apps.length})'),
-              for (final title in _tabs) Tab(text: title),
+              for (final title in ['应用(${apps.length})', ..._tabs])
+                Tab(
+                  height:
+                      48 *
+                      (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(
+                        1.0,
+                        double.infinity,
+                      ),
+                  child: Text(title, maxLines: 2, textAlign: TextAlign.center),
+                ),
             ],
           ),
           Expanded(
@@ -169,9 +188,20 @@ class _AppManagementPageState extends State<AppManagementPage>
                 _buildAppsTab(apps),
                 widget.api == null
                     ? const Center(child: Text('请从应用入口打开更新检查'))
-                    : InstalledUpdatesPage(api: widget.api!, apps: _apps, active: _tabsController.index == 1),
-                DownloadCenterPage(showAppBar: false, active: _tabsController.index == 2),
-                DownloadCenterPage(showAppBar: false, packages: true, active: _tabsController.index == 3),
+                    : InstalledUpdatesPage(
+                        api: widget.api!,
+                        apps: _apps,
+                        active: _tabsController.index == 1,
+                      ),
+                DownloadCenterPage(
+                  showAppBar: false,
+                  active: _tabsController.index == 2,
+                ),
+                DownloadCenterPage(
+                  showAppBar: false,
+                  packages: true,
+                  active: _tabsController.index == 3,
+                ),
               ],
             ),
           ),
@@ -195,11 +225,23 @@ class _AppManagementPageState extends State<AppManagementPage>
     children: [
       ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-        title: const Text('显示系统预装应用'),
-        trailing: Switch.adaptive(
-          value: _showSystemApps,
-          activeTrackColor: const Color(0xFF00A993),
-          onChanged: (value) => setState(() => _showSystemApps = value),
+        title: const Text(
+          '显示系统预装应用',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.normal),
+        ),
+        trailing: Theme(
+          data: ThemeData(
+            useMaterial3: false,
+            colorScheme: Theme.of(context).colorScheme,
+            splashFactory: NoSplash.splashFactory,
+            highlightColor: Colors.transparent,
+          ),
+          child: Switch.adaptive(
+            value: _showSystemApps,
+            overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+            activeTrackColor: const Color(0xFF00A993),
+            onChanged: (value) => setState(() => _showSystemApps = value),
+          ),
         ),
       ),
       Expanded(
@@ -239,9 +281,21 @@ class _AppManagementPageState extends State<AppManagementPage>
     final icon = app['icon'];
     final bytes = icon is Uint8List ? icon : null;
     final launchable = app['canLaunch'] == true;
-    return SizedBox(
-      height: 76,
-      child: Padding(
+    final api = widget.api;
+    final packageName = '${app['packageName'] ?? ''}'.trim();
+    return InkWell(
+      onTap: api == null || packageName.isEmpty
+          ? null
+          : () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => AppDetailPage(api: api, id: packageName),
+              ),
+            ),
+      child: Container(
+        height:
+            68 *
+            (MediaQuery.textScalerOf(context).scale(16) / 16).clamp(1.0, 2.0),
         padding: const EdgeInsets.symmetric(horizontal: 18),
         child: Row(
           children: [
@@ -251,8 +305,8 @@ class _AppManagementPageState extends State<AppManagementPage>
                   ? _iconFallback()
                   : Image.memory(
                       bytes,
-                      width: 52,
-                      height: 52,
+                      width: 40,
+                      height: 40,
                       fit: BoxFit.contain,
                       errorBuilder: (_, _, _) => _iconFallback(),
                     ),
@@ -267,7 +321,7 @@ class _AppManagementPageState extends State<AppManagementPage>
                     '${app['label'] ?? app['packageName'] ?? '未知应用'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 18),
+                    style: const TextStyle(fontSize: 16),
                   ),
                   const SizedBox(height: 3),
                   Text(
@@ -275,7 +329,7 @@ class _AppManagementPageState extends State<AppManagementPage>
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 14,
+                      fontSize: 13,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
@@ -295,8 +349,8 @@ class _AppManagementPageState extends State<AppManagementPage>
             ),
             const SizedBox(width: 4),
             SizedBox(
-              width: 78,
-              height: 38,
+              width: 56,
+              height: 28,
               child: FilledButton(
                 onPressed: launchable ? () => _openApp(app) : null,
                 style: FilledButton.styleFrom(
@@ -304,6 +358,11 @@ class _AppManagementPageState extends State<AppManagementPage>
                   disabledBackgroundColor: const Color(0xFF454545),
                   foregroundColor: Colors.white,
                   padding: EdgeInsets.zero,
+                  textStyle: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.normal,
+                  ),
+                  minimumSize: Size.zero,
                   shape: const StadiumBorder(),
                 ),
                 child: const Text('打开'),
@@ -316,8 +375,8 @@ class _AppManagementPageState extends State<AppManagementPage>
   }
 
   Widget _iconFallback() => Container(
-    width: 52,
-    height: 52,
+    width: 40,
+    height: 40,
     color: Theme.of(context).colorScheme.surfaceContainerHighest,
     alignment: Alignment.center,
     child: const Icon(Icons.android_rounded),

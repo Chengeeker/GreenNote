@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
+import 'package:greennote/core/widgets/cached_network_image.dart';
 import 'package:greennote/features/shared/api_list_page.dart';
 
 class _MockCoolapkApi extends Fake implements CoolapkApi {
@@ -272,9 +273,51 @@ void main() {
     );
 
     testWidgets(
+      'server topic icon replaces the carousel image without adding a duplicate banner',
+      (tester) async {
+        final api = _MockCoolapkApi()
+          ..followDetail = {
+            'logo': 'https://image.coolapk.com/topic_square.jpg',
+          };
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TopicPage(
+              api: api,
+              tag: '开箱日常',
+              initialLogo: 'https://image.coolapk.com/home_banner.jpg',
+              initialCover: 'https://image.coolapk.com/home_banner.jpg',
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        final images = tester.widgetList<CachedNetworkImage>(
+          find.byType(CachedNetworkImage),
+        );
+        expect(
+          images.map((image) => image.url),
+          contains('https://image.coolapk.com/topic_square.jpg'),
+        );
+        expect(
+          images.map((image) => image.url),
+          isNot(contains('https://image.coolapk.com/home_banner.jpg')),
+        );
+        expect(
+          find.byWidgetPredicate(
+            (widget) => widget is SizedBox && widget.height == 120,
+          ),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
       'retains initialLogo as topic theme logo without fallback letter and without duplicating as 120px top banner',
       (tester) async {
-        final mockApi = _MockCoolapkApi();
+        final mockApi = _MockCoolapkApi()
+          ..followDetail = {
+            'logo': 'https://image.coolapk.com/default_tag.png',
+          };
         await tester.pumpWidget(
           MaterialApp(
             home: TopicPage(
@@ -335,9 +378,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
 
         expect(
-          mockApi.requestedQueries.any(
-            (q) => q['listType'] == 'dateline_desc',
-          ),
+          mockApi.requestedQueries.any((q) => q['listType'] == 'dateline_desc'),
           isTrue,
         );
 
@@ -349,9 +390,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 300));
 
         expect(
-          mockApi.requestedQueries.any(
-            (q) => q['listType'] == 'hot',
-          ),
+          mockApi.requestedQueries.any((q) => q['listType'] == 'hot'),
           isTrue,
         );
 
@@ -377,11 +416,7 @@ void main() {
         final mockApi = _MockCoolapkApi();
         await tester.pumpWidget(
           MaterialApp(
-            home: TopicPage(
-              api: mockApi,
-              tag: '普通摄影',
-              initialTitle: '普通摄影',
-            ),
+            home: TopicPage(api: mockApi, tag: '普通摄影', initialTitle: '普通摄影'),
           ),
         );
         await tester.pump();
@@ -389,9 +424,7 @@ void main() {
 
         // Initial tab is 热门 -> listType 'hot'
         expect(
-          mockApi.requestedQueries.any(
-            (q) => q['listType'] == 'hot',
-          ),
+          mockApi.requestedQueries.any((q) => q['listType'] == 'hot'),
           isTrue,
         );
 
@@ -402,9 +435,7 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(
-          mockApi.requestedQueries.any(
-            (q) => q['listType'] == 'dateline_desc',
-          ),
+          mockApi.requestedQueries.any((q) => q['listType'] == 'dateline_desc'),
           isTrue,
         );
 
@@ -423,33 +454,32 @@ void main() {
       },
     );
 
-    test('getFeedHeatScore calculates engagement and parses various count formats', () {
-      final normalFeed = {
-        'likenum': 100,
-        'replynum': 30,
-        'favnum': 10,
-        'forwardnum': 5,
-        'dateline': 1700000000,
-      };
-      // 100*2 + 30*3 + 10*2 + 5*3 = 200 + 90 + 20 + 15 = 325
-      expect(getFeedHeatScore(normalFeed), 325);
+    test(
+      'getFeedHeatScore calculates engagement and parses various count formats',
+      () {
+        final normalFeed = {
+          'likenum': 100,
+          'replynum': 30,
+          'favnum': 10,
+          'forwardnum': 5,
+          'dateline': 1700000000,
+        };
+        // 100*2 + 30*3 + 10*2 + 5*3 = 200 + 90 + 20 + 15 = 325
+        expect(getFeedHeatScore(normalFeed), 325);
 
-      final wanFeed = {
-        'likenum': '1.5万',
-        'replynum': '200',
-        'favnum': '0',
-        'forwardnum': '0',
-      };
-      // 15000*2 + 200*3 = 30000 + 600 = 30600
-      expect(getFeedHeatScore(wanFeed), 30600);
+        final wanFeed = {
+          'likenum': '1.5万',
+          'replynum': '200',
+          'favnum': '0',
+          'forwardnum': '0',
+        };
+        // 15000*2 + 200*3 = 30000 + 600 = 30600
+        expect(getFeedHeatScore(wanFeed), 30600);
 
-      final pinnedFeed = {
-        'is_top': 1,
-        'likenum': 0,
-        'replynum': 0,
-      };
-      expect(getFeedHeatScore(pinnedFeed), 1000000000);
-    });
+        final pinnedFeed = {'is_top': 1, 'likenum': 0, 'replynum': 0};
+        expect(getFeedHeatScore(pinnedFeed), 1000000000);
+      },
+    );
 
     test('compareTopicFeedsByHeat places highest interaction feed first and preserves pinned priority', () {
       final feedLow = {
@@ -540,11 +570,7 @@ void main() {
 
         await tester.pumpWidget(
           MaterialApp(
-            home: TopicPage(
-              api: mockApi,
-              tag: '普通摄影',
-              initialTitle: '普通摄影',
-            ),
+            home: TopicPage(api: mockApi, tag: '普通摄影', initialTitle: '普通摄影'),
           ),
         );
         await tester.pump();

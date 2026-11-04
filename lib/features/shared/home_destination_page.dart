@@ -562,11 +562,7 @@ class HomeChannelCard extends StatelessWidget {
         if (destination == HomeDestination.activities &&
             _text(row['url']).contains('/t/')) {
           final tag = ApiEntityCard.extractTopicTag(row);
-          Navigator.of(context).push<void>(
-            MaterialPageRoute(
-              builder: (_) => ActivityTopicPage(api: api, tag: tag),
-            ),
-          );
+          openPreparedTopic(context, api, tag);
         } else {
           openHeadlineTarget(context, api, row);
         }

@@ -56,6 +56,8 @@ class HomeApi implements CoolapkApi {
   @override
   String get currentUid => '99';
   @override
+  String get notificationSessionKey => 'home-test-session';
+  @override
   String get currentUserAvatar => '';
   @override
   String get loginRequiredMessage => '请先登录';

@@ -15,6 +15,7 @@ import 'notification_center_page.dart';
 import '../shared/community_library_page.dart';
 import 'storage_settings_page.dart';
 import 'webdav_backup_page.dart';
+import 'about_app_dialog.dart';
 
 class AppSettingsPage extends StatefulWidget {
   const AppSettingsPage({
@@ -106,11 +107,9 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                 subtitle: '当前登录方式：$_loginLabel',
                 onTap: _openCookieManager,
               ),
-              const Divider(height: 1, indent: 56),
               ReviewPreferenceTile(
                 title: '屏蔽与黑名单',
                 leading: const Icon(Icons.block),
-                subtitle: widget.api.hasCookie ? null : '需要酷安官方账号登录',
                 onTap: !widget.api.hasCookie
                     ? null
                     : () => Navigator.push<void>(
@@ -124,16 +123,12 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                       ),
               ),
               if (widget.api.hasAccount) ...[
-                const Divider(height: 1, indent: 56),
                 ReviewPreferenceTile(
                   leading: Icon(
                     Icons.logout_rounded,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                   title: '退出登录',
-                  subtitle: widget.api.isAnonymous
-                      ? '退出后保留本地资料、关注和收藏'
-                      : '清除本机保存的登录凭据',
                   trailing: _working
                       ? const SizedBox.square(
                           dimension: 20,
@@ -167,22 +162,18 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                   );
                 },
               ),
-              const Divider(height: 1),
               ReviewPreferenceTile(
                 leading: const Icon(Icons.notifications_outlined),
                 title: '通知中心',
-                subtitle: '评论回复、点赞、关注与私信',
                 onTap: () => Navigator.of(context).push<void>(
                   MaterialPageRoute(
                     builder: (_) => MessageCenterPage(api: widget.api),
                   ),
                 ),
               ),
-              const Divider(height: 1),
               ReviewPreferenceTile(
                 leading: const Icon(Icons.notifications_active_outlined),
                 title: '回复提醒设置',
-                subtitle: '自动检查、后台方式与通知权限',
                 onTap: () => Navigator.of(context).push<void>(
                   MaterialPageRoute(
                     builder: (_) =>
@@ -205,7 +196,6 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
                 title: '存储设置',
-                subtitle: '设置图片与视频的存储保存路径',
                 onTap: () {
                   HapticFeedbackUtil.light();
                   Navigator.of(context).push<void>(
@@ -215,14 +205,12 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                   );
                 },
               ),
-              const Divider(height: 1),
               ReviewPreferenceTile(
                 leading: Icon(
                   Icons.cleaning_services_outlined,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
                 title: '缓存管理',
-                subtitle: '一键物理深度清理，支持设置自动清理阈值',
                 onTap: () {
                   HapticFeedbackUtil.light();
                   Navigator.of(context).push<void>(
@@ -232,14 +220,12 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
                   );
                 },
               ),
-              const Divider(height: 1),
               ReviewPreferenceTile(
                 leading: Icon(
                   Icons.cloud_sync_outlined,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
                 title: 'WebDAV备份',
-                subtitle: '仅备份应用设置，不包含酷安登录凭据或 WebDAV 密码',
                 onTap: () {
                   HapticFeedbackUtil.light();
                   Navigator.of(context).push<void>(
@@ -252,12 +238,32 @@ class _AppSettingsPageState extends State<AppSettingsPage> {
             ],
           ),
         ),
+        const SizedBox(height: 32),
+        _sectionTitle(context, '关于与支持'),
+        const SizedBox(height: 12),
+        AppSectionCard(
+          child: Column(
+            children: [
+              ReviewPreferenceTile(
+                leading: Icon(
+                  Icons.info_outline_rounded,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                title: '关于 GreenNote',
+                onTap: () => showAboutAppDialog(context),
+              ),
+            ],
+          ),
+        ),
       ],
     ),
   );
-  Widget _sectionTitle(BuildContext context, String title) => Text(
-    title,
-    style: Theme.of(context).textTheme.titleSmall
-        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+  Widget _sectionTitle(BuildContext context, String title) => Padding(
+    padding: const EdgeInsetsDirectional.only(start: 16),
+    child: Text(
+      title,
+      style: Theme.of(context).textTheme.titleSmall
+          ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+    ),
   );
 }

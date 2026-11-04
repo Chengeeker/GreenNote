@@ -55,21 +55,22 @@ Map<String, String> coolapkImageHeaders(String url, {CoolapkApi? api}) {
 }
 
 /// Pre-caches a single Coolapk image into memory & disk cache.
-void precacheCoolapkImage(
+Future<void> precacheCoolapkImage(
   String rawUrl,
   BuildContext context, {
   CoolapkApi? api,
-}) {
+}) async {
   final url = normalizeCoolapkImageUrl(rawUrl);
   if (url.isEmpty) return;
   try {
-    precacheImage(
+    await precacheImage(
       ExtendedNetworkImageProvider(
         url,
         headers: coolapkImageHeaders(url, api: api),
         cache: true,
       ),
       context,
+      onError: (_, _) {},
     );
   } catch (_) {}
 }

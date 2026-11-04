@@ -371,7 +371,8 @@ class CoolapkApi {
           result['userName'] ??
           (user is Map ? user['username'] ?? user['userName'] : null),
     );
-    final changed = _currentUid != newUid ||
+    final changed =
+        _currentUid != newUid ||
         _currentUserAvatar != newAvatar ||
         _currentUserNickname != newNickname;
     _currentUid = newUid;
@@ -380,7 +381,10 @@ class CoolapkApi {
     if (hasCookie) {
       await _preferences.setString('cached_user_uid', _currentUid);
       await _preferences.setString('cached_user_avatar', _currentUserAvatar);
-      await _preferences.setString('cached_user_nickname', _currentUserNickname);
+      await _preferences.setString(
+        'cached_user_nickname',
+        _currentUserNickname,
+      );
     }
     if (changed) {
       accountProfileRevision.value++;
@@ -837,10 +841,132 @@ class CoolapkApi {
       });
       return;
     }
-    await request(
-      favorited ? '/v6/feed/unFavorite' : '/v6/feed/favorite',
-      query: {'id': id},
+    final scope = notificationSessionKey;
+    final collections = await getFeedCollections(id, scope: scope);
+    final selected = collections
+        .where((item) => item.selected)
+        .map((item) => item.id)
+        .toList();
+    final defaultCollection =
+        collections.where((item) => item.isDefault).firstOrNull ??
+        collections
+            .where(
+              (item) => const [
+                '默认收藏夹',
+                '默认收藏单',
+                'default',
+              ].contains(item.title.toLowerCase()),
+            )
+            .firstOrNull;
+    if (!favorited && defaultCollection == null) {
+      throw const CoolapkApiException('未找到默认收藏夹，请长按选择收藏夹');
+    }
+    if (favorited && selected.isEmpty) {
+      throw const CoolapkApiException('未找到动态所在的收藏夹，请长按刷新');
+    }
+    await updateFeedCollections(
+      id,
+      selected: favorited ? const [] : [defaultCollection!.id],
+      cancelled: favorited ? selected : const [],
+      scope: scope,
+      feed: feed,
     );
+  }
+
+  Future<void> _checkCollectionSession(String scope) async {
+    if (!hasCookie ||
+        scope.isEmpty ||
+        scope != notificationSessionKey ||
+        !await notificationSessionMatches(scope) ||
+        scope != notificationSessionKey) {
+      throw CoolapkApiException(
+        hasCookie ? '账号已变更，请重新打开收藏夹' : loginRequiredMessage,
+      );
+    }
+  }
+
+  Future<List<FeedCollection>> getFeedCollections(
+    String id, {
+    required String scope,
+  }) async {
+    if (id.trim().isEmpty) throw const CoolapkApiException('缺少动态 ID');
+    final collections = <String, FeedCollection>{};
+    var first = '', last = '';
+    for (var page = 1; ; page++) {
+      await _checkCollectionSession(scope);
+      final root = await _get('/v6/collection/list', {
+        'uid': '',
+        'id': id,
+        'type': 'feed',
+        'showDefault': 1,
+        'page': page,
+        'firstItem': first,
+        'lastItem': last,
+      });
+      await _checkCollectionSession(scope);
+      dynamic data = root['data'];
+      if (data is Map) {
+        data = [
+          for (final key in ['entities', 'list', 'rows', 'data']) data[key],
+        ].whereType<List>().firstOrNull;
+      }
+      if (data is! List) throw const CoolapkApiException('收藏夹数据格式异常');
+      final rows = data
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
+      final previousLength = collections.length;
+      for (final row in rows) {
+        final type = row['entityType'] ?? row['entity_type'];
+        if (type != null && type != 'collection') continue;
+        final item = FeedCollection.fromJson(row);
+        if (item.id.isNotEmpty) collections.putIfAbsent(item.id, () => item);
+      }
+      if (!_hasMore(root, rows.length) ||
+          collections.length == previousLength) {
+        break;
+      }
+      first = first.isEmpty
+          ? _string(
+              root['firstItem'] ?? rows.first['entityId'] ?? rows.first['id'],
+            )
+          : first;
+      last = _string(
+        root['lastItem'] ??
+            rows.last['entityId'] ??
+            rows.last['id'] ??
+            rows.last['collectionId'],
+      );
+    }
+    return collections.values.toList();
+  }
+
+  Future<void> updateFeedCollections(
+    String id, {
+    required List<String> selected,
+    required List<String> cancelled,
+    required String scope,
+    CoolapkFeed? feed,
+  }) async {
+    if (id.trim().isEmpty ||
+        selected
+            .followedBy(cancelled)
+            .any((id) => id.trim().isEmpty || id.contains(','))) {
+      throw const CoolapkApiException('收藏参数无效');
+    }
+    await _checkCollectionSession(scope);
+    await request(
+      '/v6/collection/addItem',
+      method: 'POST',
+      body: {
+        'id': selected.toSet().join(','),
+        'cancelId': cancelled.toSet().join(','),
+        'targetId': id,
+        'type': '${feed?.raw['entityType'] ?? feed?.raw['feedType'] ?? 'feed'}',
+        'trace': '${feed?.raw['trace'] ?? feed?.raw['extra_key'] ?? ''}',
+      },
+    );
+    await _checkCollectionSession(scope);
   }
 
   Future<void> forwardFeed(String id, String message) =>
@@ -1034,7 +1160,8 @@ class CoolapkApi {
     String firstItem = '',
     String lastItem = '',
   }) async {
-    final headline = route == '/v6/main/headline' ||
+    final headline =
+        route == '/v6/main/headline' ||
         route == '/main/headline' ||
         route == '/v6/main/indexV8' ||
         route == '/main/indexV8';
@@ -1147,8 +1274,9 @@ class CoolapkApi {
 
     final root = await _get(path, query);
     final items = _extractFeeds(root);
-    final channelCards =
-        page == 1 ? _extractCards(root) : const <Map<String, dynamic>>[];
+    final channelCards = page == 1
+        ? _extractCards(root)
+        : const <Map<String, dynamic>>[];
     return FeedPage(
       items: items,
       cards: channelCards,
@@ -1960,6 +2088,26 @@ class ApiPage {
   final String lastItem;
 }
 
+class FeedCollection {
+  FeedCollection.fromJson(Map<String, dynamic> json)
+    : id = '${json['id'] ?? json['collectionId'] ?? json['entityId'] ?? ''}',
+      title = '${json['title'] ?? json['name'] ?? '未命名收藏夹'}',
+      selected = _flag(json['isBeCollected'] ?? json['is_be_collected']),
+      isDefault = _flag(
+        json['defaultCollected'] ??
+            json['default_collected'] ??
+            json['isDefault'] ??
+            json['is_default'] ??
+            json['isDefaultCollection'],
+      );
+
+  final String id, title;
+  final bool selected, isDefault;
+
+  static bool _flag(dynamic value) =>
+      value == true || value == 1 || value == '1' || value == 'true';
+}
+
 class CoolapkFeed {
   const CoolapkFeed({
     required this.id,
@@ -2081,8 +2229,11 @@ class CoolapkFeed {
     final action = json['userAction'];
     final userAction = action is Map ? action : const {};
     final like = userAction['like'] ?? json['isLike'] ?? json['is_like'];
-    final favorite = userAction['favorite'] ?? userAction['collect'] ??
-        json['isFavorite'] ?? json['is_favorite'];
+    final favorite =
+        userAction['favorite'] ??
+        userAction['collect'] ??
+        json['isFavorite'] ??
+        json['is_favorite'];
     final user = json['userInfo'] ?? json['user_info'] ?? json['user'];
     final userInfo = user is Map ? Map<String, dynamic>.from(user) : const {};
     final isFeedHdr =

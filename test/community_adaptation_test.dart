@@ -22,6 +22,7 @@ import 'package:greennote/features/shared/community_routes.dart';
 import 'package:greennote/features/shared/community_ui.dart';
 import 'package:greennote/features/shared/following_page.dart';
 import 'package:greennote/features/shared/goods_ranking_body.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:greennote/features/shared/download_center_page.dart';
 import 'package:greennote/features/shared/reply_notifications_page.dart';
 import 'package:greennote/features/shared/in_app_browser_page.dart';
@@ -592,6 +593,151 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final glass in [true, false]) {
+    testWidgets(
+      'ranking toolbar matches white icons and left-aligned comment: glass=$glass',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({
+          'greennote.liquid_glass_nav': glass,
+        });
+        final data = <String, dynamic>{
+          'id': '38916622',
+          'title': '300元以下推荐购买的鼠标',
+          'message': '欢迎酷友推荐好用的鼠标，也欢迎大家投票。',
+          'username': '酷安数码',
+          'likenum': 201,
+          'replynum': 370,
+          'forwardnum': 45,
+          'goodsListInfo': {'fav_num': 344},
+          'goodsListItem': [],
+        };
+        final capture = GlobalKey();
+        await mount(
+          tester,
+          Scaffold(
+            body: GoodsRankingBody(
+              api: api,
+              data: data,
+              session: api.notificationSessionKey,
+              complete: true,
+              error: null,
+              reload: () async {},
+            ),
+          ),
+          dark: true,
+          capture: capture,
+        );
+        final writer = find
+            .ancestor(of: find.text('写评论'), matching: find.byType(TextButton))
+            .first;
+        final writerRect = tester.getRect(writer);
+        final borderInset = glass ? 0.0 : 0.7;
+        expect(writerRect.left, closeTo(20 + borderInset, 0.1));
+        expect(writerRect.height, closeTo(44 - borderInset * 2, 0.1));
+        expect(
+          tester.getTopLeft(find.text('写评论')).dx,
+          closeTo(60 + borderInset, 0.1),
+        );
+        expect(
+          tester
+              .widget<Icon>(find.byIcon(Icons.drive_file_rename_outline))
+              .color,
+          Colors.white,
+        );
+        final like = find.bySemanticsLabel('点赞，201');
+        final likeIcon = find.descendant(
+          of: like,
+          matching: find.byIcon(Icons.thumb_up_outlined),
+        );
+        expect(tester.widget<Icon>(likeIcon).color, Colors.white);
+        expect(
+          tester.getCenter(like).dx,
+          closeTo(194 + borderInset * .75, 0.1),
+        );
+        final comments = find.bySemanticsLabel('评论，370');
+        expect(
+          find.descendant(
+            of: comments,
+            matching: find.byKey(
+              const ValueKey('ranking-toolbar-comment-glyph'),
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byType(AdaptiveGlass),
+          glass ? findsNWidgets(2) : findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+        if (glass &&
+            const bool.fromEnvironment('GENERATE_GOODS_TOOLBAR_PREVIEW')) {
+          await tester.runAsync(() async {
+            final image =
+                await (capture.currentContext!.findRenderObject()
+                        as RenderRepaintBoundary)
+                    .toImage(pixelRatio: 3.5);
+            final png = await image.toByteData(format: ui.ImageByteFormat.png);
+            await File('tmp/verification/1.9.34/goods-toolbar-dark.png')
+                .writeAsBytes(png!.buffer.asUint8List());
+            image.dispose();
+          });
+        }
+        await tester.tap(writer);
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsOneWidget);
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+        await tester.tap(like);
+        await tester.pumpAndSettle();
+        expect(api.calls.last.path, '/v6/feed/like');
+        expect(find.bySemanticsLabel('点赞，202'), findsOneWidget);
+        final selected = find.descendant(
+          of: find.bySemanticsLabel('点赞，202'),
+          matching: find.byIcon(Icons.thumb_up),
+        );
+        expect(
+          tester.widget<Icon>(selected).color,
+          Theme.of(tester.element(selected)).colorScheme.primary,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  for (final dark in [true, false]) {
+    testWidgets('ranking toolbar keeps large text readable in dark=$dark', (
+      tester,
+    ) async {
+      await mount(
+        tester,
+        Scaffold(
+          body: GoodsRankingBody(
+            api: api,
+            data: {'id': '100', 'title': '好物榜单', 'goodsListItem': []},
+            session: api.notificationSessionKey,
+            complete: true,
+            error: null,
+            reload: () async {},
+          ),
+        ),
+        dark: dark,
+        scale: 1.6,
+      );
+      final writer = find
+          .ancestor(of: find.text('写评论'), matching: find.byType(TextButton))
+          .first;
+      expect(tester.getSize(writer).height, closeTo(51.2, 0.1));
+      final icon = find.byIcon(Icons.drive_file_rename_outline);
+      expect(
+        tester.widget<Icon>(icon).color,
+        dark
+            ? Colors.white
+            : Theme.of(tester.element(icon)).colorScheme.onSurface,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets(
     'cool friend tabs show nested profile and request real categories',

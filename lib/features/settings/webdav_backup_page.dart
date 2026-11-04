@@ -28,7 +28,8 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
     text: defaultWebDavDirectory,
   );
   final _secureStorage = const FlutterSecureStorage();
-  final _service = WebDavService();
+  WebDavService get _service => ref.read(webDavServiceProvider);
+  bool _includeCredentials = false;
   String? _status;
   bool _busy = false;
   String _operation = '';
@@ -143,6 +144,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
             webDavUrl: _urlController.text.trim(),
             webDavUsername: _usernameController.text.trim(),
             webDavDirectory: _directoryController.text.trim(),
+            includeCredentials: _includeCredentials,
           );
       final success = await _service.uploadBackup(
         serverUrl: _urlController.text,
@@ -154,7 +156,9 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       if (mounted) {
         setState(
           () => _status = success
-              ? '匿名账户与设置已备份到 WebDAV。'
+              ? (_includeCredentials
+                    ? '全量备份已上传，包含账号凭据与 WebDAV 密码。'
+                    : '全量安全备份已上传，未包含 Cookie、Token 与 WebDAV 密码。')
               : '备份失败，请检查连接、目录权限和服务器空间。',
         );
       }
@@ -178,7 +182,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       builder: (context) => AlertDialog(
         title: const Text('恢复 WebDAV 备份？'),
         content: const Text(
-          '云端快照将替换本地匿名账户及应用设置；恢复前的匿名数据会保留，可在匿名账户页找回。旧版设置备份不会改动匿名账户。酷安 Cookie 与 WebDAV 密码不会备份或恢复。',
+          '云端快照将替换本地匿名账户及应用设置，恢复前的匿名数据会保留。若是全量备份，还会恢复 WebDAV 密码，并验证酷安 Cookie 后切换登录账号；凭据失效时保留当前登录态。安全备份不恢复账号凭据。',
         ),
         actions: [
           TextButton(
@@ -231,18 +235,43 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
       final credentialsChanged =
           comparableUrl(previousUrl) != comparableUrl(restoredUrl) ||
           previousUsername != restoredUsername;
-      if (credentialsChanged) {
+      final includesCredentials = backup['version'] == 3;
+      if (includesCredentials) {
+        final password = config['webDavPassword']!;
+        if (password.isEmpty) {
+          await _secureStorage.delete(key: 'greennote.webdav.password');
+        } else {
+          await _secureStorage.write(
+            key: 'greennote.webdav.password',
+            value: password,
+          );
+        }
+      } else if (credentialsChanged) {
         await _secureStorage.delete(key: 'greennote.webdav.password');
+      }
+      String? accountStatus;
+      if (includesCredentials && config['cookie']!.isNotEmpty) {
+        try {
+          await api.validateAndSaveCookie(config['cookie']!);
+          ref.invalidate(coolapkApiProvider);
+          accountStatus = '酷安登录凭据已验证并恢复。';
+        } catch (_) {
+          accountStatus = '酷安登录凭据验证失败，当前登录态未替换；可稍后重新恢复。';
+        }
       }
       if (!mounted) return;
       _urlController.text = restoredUrl;
       _usernameController.text = restoredUsername;
       _directoryController.text = config['directory'] ?? defaultWebDavDirectory;
-      if (credentialsChanged) {
+      if (includesCredentials) {
+        _passwordController.text = config['webDavPassword']!;
+      } else if (credentialsChanged) {
         _passwordController.clear();
       }
       setState(
-        () => _status = credentialsChanged
+        () => _status = includesCredentials
+            ? '全量备份已恢复。${accountStatus ?? '备份未包含酷安登录凭据。'}'
+            : credentialsChanged
             ? '设置已恢复；服务器或用户名已更改，请重新输入 WebDAV 密码。'
             : '备份已恢复；匿名数据副本可在匿名账户页找回。',
       );
@@ -305,7 +334,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '安全备份 (Greennote)',
+                          'WebDAV 备份 (GreenNote)',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             color: colorScheme.primary,
@@ -314,7 +343,7 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '备份匿名账户头像、用户名、本地关注、收藏文字及图片地址，以及应用设置。酷安 Cookie、Token 与 WebDAV 密码不会上传。图片文件不包含在内；这是手动快照，多设备请先恢复再修改及备份。',
+                          '两种备份均包含匿名账户、头像、本地关注、收藏文字及图片地址和应用设置，不包含图片、视频文件。新备份会替换云端最新快照；多设备请先恢复再修改及备份。',
                           style: TextStyle(
                             fontSize: 14,
                             color: colorScheme.onSurfaceVariant,
@@ -446,6 +475,37 @@ class _WebDavBackupPageState extends ConsumerState<WebDavBackupPage> {
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    RadioGroup<bool>(
+                      groupValue: _includeCredentials,
+                      onChanged: (value) {
+                        if (!_busy && value != null) {
+                          setState(() => _includeCredentials = value);
+                        }
+                      },
+                      child: Column(
+                        children: [
+                          RadioListTile<bool>(
+                            value: false,
+                            enabled: !_busy && !_loadingConfig,
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('全量安全备份'),
+                            subtitle: const Text(
+                              '不上传 Cookie、Token 和 WebDAV 密码',
+                            ),
+                          ),
+                          RadioListTile<bool>(
+                            value: true,
+                            enabled: !_busy && !_loadingConfig,
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('全量备份'),
+                            subtitle: const Text(
+                              '包含酷安 Cookie（含登录 Token）和 WebDAV 密码；备份文件含明文凭据，仅用于你信任的服务器',
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 16),

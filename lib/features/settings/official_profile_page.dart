@@ -120,7 +120,6 @@ class _OfficialProfilePageState extends State<OfficialProfilePage> {
                 title: const Text('UID'),
                 subtitle: Text(widget.api.currentUid),
               ),
-              const Divider(),
               ListTile(
                 title: const Text('个性签名'),
                 subtitle: Text(communityText(_data!, ['bio', 'intro'])),

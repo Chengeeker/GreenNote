@@ -1,3 +1,4 @@
+import '../../core/utils/shopping_links.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -28,6 +29,7 @@ import '../../core/theme/app_theme.dart';
 import '../digital/utils/digital_system_helper.dart';
 import 'app_detail_page.dart';
 import 'activity_pages.dart';
+import 'user_qr_card_page.dart';
 import '../../core/widgets/coolapk_rich_text.dart';
 import '../shell/main_pages.dart' show ComposeFeedPage, MessageChatPage;
 import '../settings/official_profile_page.dart';
@@ -225,6 +227,8 @@ class ApiListPage extends StatefulWidget {
     this.header,
     this.overlapHandle,
     this.itemBuilder,
+    this.gridColumns = 1,
+    this.padding,
     this.showAccessErrors = true,
     this.itemBuilderWithIndex,
     this.itemFilter,
@@ -233,6 +237,7 @@ class ApiListPage extends StatefulWidget {
     this.onPageItemsLoaded,
     this.onPageLoaded,
     this.initialItems = const [],
+    this.initialPage,
     super.key,
   });
 
@@ -246,6 +251,8 @@ class ApiListPage extends StatefulWidget {
   final Widget? header;
   final SliverOverlapAbsorberHandle? overlapHandle;
   final Widget Function(BuildContext, Map<String, dynamic>)? itemBuilder;
+  final int gridColumns;
+  final EdgeInsetsGeometry? padding;
   final Widget Function(BuildContext, Map<String, dynamic>, int)?
   itemBuilderWithIndex;
   final bool Function(Map<String, dynamic>)? itemFilter;
@@ -254,6 +261,7 @@ class ApiListPage extends StatefulWidget {
   final void Function(List<Map<String, dynamic>>)? onPageItemsLoaded;
   final void Function(ApiPage)? onPageLoaded;
   final List<Map<String, dynamic>> initialItems;
+  final ApiPage? initialPage;
 
   @override
   State<ApiListPage> createState() => _ApiListPageState();
@@ -299,7 +307,19 @@ class _ApiListPageState extends State<ApiListPage>
       _items.addAll(widget.initialItems);
     }
     _scroll.addListener(_onScroll);
-    _load(refresh: true);
+    final initial = widget.initialPage;
+    if (initial == null) {
+      _load(refresh: true);
+    } else {
+      final known = _items.map(_entityKey).toSet();
+      _items.addAll(initial.items.where((item) =>
+          (widget.itemFilter?.call(item) ?? true) && known.add(_entityKey(item))));
+      if (widget.itemComparator != null) _items.sort(widget.itemComparator);
+      _page = initial.page;
+      _first = initial.firstItem;
+      _last = initial.lastItem;
+      _more = initial.hasMore;
+    }
   }
 
   @override
@@ -453,7 +473,7 @@ class _ApiListPageState extends State<ApiListPage>
           newItems.sort(widget.itemComparator);
         }
 
-        if (newItems.length <= 4) {
+        if (newItems.length <= 4 || widget.gridColumns > 1) {
           _items.addAll(newItems);
         } else {
           final stage1Count = (newItems.length * 0.6).round().clamp(
@@ -600,17 +620,19 @@ class _ApiListPageState extends State<ApiListPage>
     final pageTitle = isTodayHeadline
         ? '今日酷安:${now.year}年${now.month}月${now.day}日'
         : widget.title;
-    final listPadding = _items.isEmpty
-        ? MediaQuery.paddingOf(context)
-        : EdgeInsets.fromLTRB(
-            0,
-            widget.header != null || isTodayHeadline || isCollectionList
-                ? 0
-                : 10,
-            0,
-            24 + MediaQuery.paddingOf(context).bottom,
-          );
-    final delegate = _items.isEmpty
+    final listPadding =
+        widget.padding ??
+        (_items.isEmpty
+            ? MediaQuery.paddingOf(context)
+            : EdgeInsets.fromLTRB(
+                0,
+                widget.header != null || isTodayHeadline || isCollectionList
+                    ? 0
+                    : 10,
+                0,
+                24 + MediaQuery.paddingOf(context).bottom,
+              ));
+    SliverChildDelegate delegate = _items.isEmpty
         ? SliverChildListDelegate([
             if (widget.header != null) widget.header!,
             SizedBox(
@@ -793,6 +815,39 @@ class _ApiListPageState extends State<ApiListPage>
                 (widget.header != null ? 1 : 0) +
                 (_loading || _error != null ? 1 : 0),
           );
+    if (widget.gridColumns > 1 && delegate is SliverChildBuilderDelegate) {
+      final buildItem = delegate.builder;
+      final headerCount = widget.header == null ? 0 : 1;
+      final rowCount = (_items.length / widget.gridColumns).ceil();
+      delegate = SliverChildBuilderDelegate(
+        (context, index) {
+          if (index < headerCount) return buildItem(context, index);
+          final row = index - headerCount;
+          if (row == rowCount) {
+            return buildItem(context, _items.length + headerCount);
+          }
+          // Only the three visible cells share intrinsic layout, not the list.
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var column = 0; column < widget.gridColumns; column++)
+                  Expanded(
+                    child: row * widget.gridColumns + column < _items.length
+                        ? buildItem(
+                            context,
+                            row * widget.gridColumns + column + headerCount,
+                          )!
+                        : const SizedBox.shrink(),
+                  ),
+              ],
+            ),
+          );
+        },
+        childCount:
+            headerCount + rowCount + (_loading || _error != null ? 1 : 0),
+      );
+    }
     final scrollable = widget.overlapHandle == null
         ? ListView.custom(
             controller: widget.nested ? null : _scroll,
@@ -823,7 +878,9 @@ class _ApiListPageState extends State<ApiListPage>
         return false;
       },
       child: EasyRefresh(
-        header: reviewDefaultRefreshHeader,
+        header: widget.gridColumns > 1
+            ? const ClassicHeader(showText: false)
+            : reviewDefaultRefreshHeader,
         triggerAxis: Axis.vertical,
         onRefresh: () => _load(refresh: true),
         child: filterHorizontalScrollNotifications(scrollable),
@@ -1351,7 +1408,8 @@ class ApiEntityCard extends StatelessWidget {
     }
     return RepaintBoundary(
       child: InkWell(
-        onTap: id.isEmpty ? null : () => _open(context, type, id, entity),
+        onTap: id.isEmpty && goodsTarget(entity).isEmpty
+            ? null : () => _open(context, type, id, entity),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
@@ -1736,6 +1794,17 @@ class ApiEntityCard extends StatelessWidget {
         activity,
         title: _first(data, ['goods_title', 'title', 'name']),
       );
+      return;
+    }
+    if (type == 'pear_goods' ||
+        data.containsKey('goods_buy_url') ||
+        data.containsKey('goods_url')) {
+      final target = goodsTarget(data);
+      if (target.isNotEmpty) {
+        openHeadlineTarget(context, api, {...data, 'url': target});
+      } else {
+        AppToast.show(context, '暂无商品链接');
+      }
       return;
     }
     if (type.contains('dyh')) {
@@ -3298,8 +3367,8 @@ class _UserSpacePageState extends State<UserSpacePage> {
 
   String _genderText(Map<String, dynamic> data) {
     final raw = data['gender'] ?? data['sex'];
-    if (raw == 1 || raw == '1' || raw == '男') return '♂';
-    if (raw == 2 || raw == '2' || raw == '女') return '♀';
+    if (raw == 1 || raw == '1' || raw == '男' || raw == '男生') return '♂';
+    if (raw == 0 || raw == '0' || raw == '女' || raw == '女生') return '♀';
     return '';
   }
 
@@ -3353,10 +3422,10 @@ class _UserSpacePageState extends State<UserSpacePage> {
     return '$str活跃';
   }
 
-  Widget _buildChip(String text) => Container(
+  Widget _buildChip(String text, {Color? background}) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
     decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.16),
+      color: background ?? Colors.white.withValues(alpha: 0.16),
       borderRadius: BorderRadius.circular(12),
     ),
     child: Text(
@@ -3531,7 +3600,14 @@ class _UserSpacePageState extends State<UserSpacePage> {
         if (genderText.isNotEmpty) genderText,
         if (eraText.isNotEmpty) eraText,
       ].join(' ');
-      chips.add(_buildChip(label));
+      chips.add(_buildChip(
+        label,
+        background: switch (genderText) {
+          '♂' => const Color(0xFF1976D2),
+          '♀' => const Color(0xFFC2185B),
+          _ => null,
+        },
+      ));
     }
     final province = _first(data, ['province', 'user_province']).trim();
     final city = _first(data, ['city', 'user_city']).trim();
@@ -3760,29 +3836,28 @@ class _UserSpacePageState extends State<UserSpacePage> {
                                               ),
                                             ),
                                             const SizedBox(width: 8),
-                                            InkWell(
-                                              onTap: _showProfileActionsSheet,
-                                              borderRadius:
-                                                  BorderRadius.circular(18),
-                                              child: Container(
-                                                width: 32,
-                                                height: 32,
-                                                alignment: Alignment.center,
-                                                decoration: BoxDecoration(
+                                            IconButton(
+                                              tooltip: '我的二维码名片',
+                                              onPressed: () => openUserQrCard(
+                                                context,
+                                                widget.api,
+                                                uid: widget.uid,
+                                                name: name,
+                                                avatar: avatar,
+                                              ),
+                                              style: IconButton.styleFrom(
+                                                backgroundColor: Colors.white
+                                                    .withValues(alpha: 0.16),
+                                                foregroundColor: Colors.white,
+                                                side: BorderSide(
                                                   color: Colors.white
-                                                      .withValues(alpha: 0.16),
-                                                  shape: BoxShape.circle,
-                                                  border: Border.all(
-                                                    color: Colors.white
-                                                        .withValues(alpha: 0.38),
-                                                    width: 0.8,
-                                                  ),
+                                                      .withValues(alpha: 0.38),
+                                                  width: 0.8,
                                                 ),
-                                                child: const Icon(
-                                                  Icons.grid_view_rounded,
-                                                  size: 16,
-                                                  color: Colors.white,
-                                                ),
+                                              ),
+                                              icon: const Icon(
+                                                Icons.qr_code_2_rounded,
+                                                size: 20,
                                               ),
                                             ),
                                           ] else ...[
@@ -4276,6 +4351,8 @@ class TopicPage extends StatefulWidget {
     this.initialTitle,
     this.initialLogo,
     this.initialCover,
+    this.initialDetail,
+    this.initialTabPage,
     super.key,
   });
 
@@ -4284,6 +4361,8 @@ class TopicPage extends StatefulWidget {
   final String? initialTitle;
   final String? initialLogo;
   final String? initialCover;
+  final Map<String, dynamic>? initialDetail;
+  final ApiPage? initialTabPage;
 
   @override
   State<TopicPage> createState() => _TopicPageState();
@@ -6699,7 +6778,7 @@ class _TopicPageState extends State<TopicPage>
     super.initState();
     _profile = resolveSystemProfile(_cleanTag, widget.initialTitle ?? '');
     _initTabController();
-    _load();
+    _load(initial: widget.initialDetail);
   }
 
   void _initTabController() {
@@ -6742,10 +6821,12 @@ class _TopicPageState extends State<TopicPage>
     );
   }
 
-  Future<void> _load() async {
+  Future<void> _load({Map<String, dynamic>? initial}) async {
     try {
       final tagToQuery = _cleanTag;
-      final response = await widget.api.getTopicDetail(tagToQuery);
+      final response = initial == null
+          ? await widget.api.getTopicDetail(tagToQuery)
+          : {'data': initial};
       final data = response['data'];
       if (!mounted) return;
 
@@ -6904,6 +6985,7 @@ class _TopicPageState extends State<TopicPage>
   Future<void> _follow() async {
     try {
       await widget.api.followTopic(_cleanTag, following: _following);
+      setPreparedTopicFollowing(widget.api, _cleanTag, !_following);
       if (mounted) setState(() => _following = !_following);
     } catch (error) {
       if (mounted) _snack(context, error.toString());
@@ -7692,6 +7774,7 @@ class _TopicPageState extends State<TopicPage>
         api: widget.api,
         tag: _cleanTag,
         detail: _detail!,
+        initialPage: widget.initialTabPage,
         headerColor: _cleanTag == '人像摄影' ? const Color(0xFF63643C) : null,
       );
     }
@@ -7712,10 +7795,10 @@ class _TopicPageState extends State<TopicPage>
       serverLogo = '';
     }
 
-    var logo = initialImage.isNotEmpty
-        ? initialImage
-        : (serverLogo.isNotEmpty
-              ? serverLogo
+    final logo = serverLogo.isNotEmpty
+        ? serverLogo
+        : (initialImage.isNotEmpty
+              ? initialImage
               : _first(_detail, ['pic', 'avatar']));
 
     var serverCover = _first(_detail, [
@@ -7738,6 +7821,7 @@ class _TopicPageState extends State<TopicPage>
     if (cover.isEmpty &&
         widget.initialCover != null &&
         widget.initialCover!.isNotEmpty &&
+        widget.initialCover != widget.initialLogo &&
         widget.initialCover != logo) {
       cover = widget.initialCover!;
     }

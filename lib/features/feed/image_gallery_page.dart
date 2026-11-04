@@ -27,12 +27,14 @@ import 'package:html/parser.dart' as html;
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
 import '../../core/settings/app_settings.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/storage/storage_path_resolver.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/utils/haptic_feedback_util.dart';
 import '../../core/widgets/app_avatar.dart';
 import '../shared/api_list_page.dart' show UserSpacePage;
 import 'feed_pages.dart' show FeedDetailPage;
+import 'feed_collection_picker.dart';
 
 @visibleForTesting
 Matrix4 hdrImageViewTransform(Rect viewport, Rect? imageRect) {
@@ -209,10 +211,11 @@ Widget imageGalleryHeroFlightShuttleBuilder(
 /// Snapshot the complete image plane, not just the fitted/cropped viewport.
 /// ExtendedImage has its own RenderBox (it is NOT a Flutter RenderImage).
 class _HeroImageGeometry {
-  const _HeroImageGeometry(this.image, this.rect, this.radius);
+  const _HeroImageGeometry(this.image, this.rect, this.radius, this.viewport);
   final ui.Image image;
   final Rect rect;
   final BorderRadius radius;
+  final Size viewport;
 
   static _HeroImageGeometry? capture(BuildContext context) {
     final root = context.findRenderObject();
@@ -274,6 +277,7 @@ class _HeroImageGeometry {
           image,
           MatrixUtils.transformRect(transform, full),
           radius,
+          root.size,
         );
         return;
       }
@@ -292,6 +296,7 @@ class _HeroImageGeometry {
       image,
       Alignment.center.inscribe(fitted, Offset.zero & target.size),
       BorderRadius.zero,
+      target.size,
     );
   }
 }
@@ -388,7 +393,17 @@ class _HeroImageFlightPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final progress = reverse ? 1 - animation.value : animation.value;
+    // Flutter reuses the shuttle on pop→push; its original animation can be stale.
+    final delta = Offset(
+      target.viewport.width - source.viewport.width,
+      target.viewport.height - source.viewport.height,
+    );
+    final distanceSquared = delta.distanceSquared;
+    final progress = distanceSquared > 0.001
+        ? ((size.width - source.viewport.width) * delta.dx +
+                  (size.height - source.viewport.height) * delta.dy) /
+              distanceSquared
+        : (reverse ? 1 - animation.value : animation.value);
     final t = progress.clamp(0.0, 1.0);
     final rect = Rect.lerp(source.rect, target.rect, t)!;
     final radius = BorderRadius.lerp(source.radius, target.radius, t)!;
@@ -430,13 +445,15 @@ class ImageGalleryHeroThumbnail extends StatelessWidget {
   final CoolapkApi? api;
 
   @override
-  Widget build(BuildContext context) => Hero(
-    tag: ImageGalleryHeroTag.forPic(scope: scope, index: index, pic: pic),
-    createRectTween: (begin, end) => RectTween(begin: begin, end: end),
-    flightShuttleBuilder: imageGalleryHeroFlightShuttleBuilder,
-    child: Listener(
-      onPointerDown: (_) =>
-          precacheCoolapkImage(pic.originalUrl, context, api: api),
+  Widget build(BuildContext context) => Listener(
+    // Hero's in-flight placeholder must retain the thumbnail's hit area.
+    behavior: HitTestBehavior.opaque,
+    onPointerDown: (_) =>
+        precacheCoolapkImage(pic.originalUrl, context, api: api),
+    child: Hero(
+      tag: ImageGalleryHeroTag.forPic(scope: scope, index: index, pic: pic),
+      createRectTween: (begin, end) => RectTween(begin: begin, end: end),
+      flightShuttleBuilder: imageGalleryHeroFlightShuttleBuilder,
       child: child,
     ),
   );
@@ -476,6 +493,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   static const MethodChannel _mediaChannel = MethodChannel(
     'com.green.note/media',
   );
+  static final _nativeOwners = <_ImageGalleryPageState>[];
   late int _currentIndex;
   late final ValueNotifier<int> _activeMediaIndex;
   late final ExtendedPageController _pageController;
@@ -556,6 +574,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
       duration: const Duration(milliseconds: 260),
       vsync: this,
     );
+    _nativeOwners.add(this);
     _mediaChannel.setMethodCallHandler(_handleNativeMediaCall);
     unawaited(_checkHdrDisplaySupport());
     HdrImageDetector.notifier.addListener(_onHdrDetected);
@@ -698,6 +717,10 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   }
 
   void _handleRouteAnimationStatus(AnimationStatus status) {
+    if (status == AnimationStatus.reverse) {
+      _galleryTapTimer?.cancel();
+      _pendingGalleryTapPosition = null;
+    }
     final visible = status == AnimationStatus.completed;
     final returning =
         status == AnimationStatus.reverse ||
@@ -728,20 +751,32 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     _previewWarmupTimer?.cancel();
     _openingPreview?.dispose();
     HdrImageDetector.notifier.removeListener(_onHdrDetected);
-    _mediaChannel.setMethodCallHandler(null);
+    // A returning page can finish disposal after another gallery has opened.
+    final ownedNativeUi = identical(_nativeOwners.lastOrNull, this);
+    _nativeOwners.remove(this);
+    if (ownedNativeUi) {
+      final previous = _nativeOwners.lastOrNull;
+      _mediaChannel.setMethodCallHandler(previous?._handleNativeMediaCall);
+      if (previous != null) {
+        previous._windowHdrEnabled = null;
+        previous._updateWindowHdr();
+        previous._setSystemStatusBarVisible(previous._showChrome);
+      } else {
+        unawaited(
+          _mediaChannel
+              .invokeMethod<void>('setWindowHdr', {'enabled': false})
+              .catchError((_) {}),
+        );
+        _restoreSystemUi();
+      }
+    }
     _galleryTapTimer?.cancel();
     _mainPageScrollEndTimer?.cancel();
     for (final rect in _nativeHdrRects.values) {
       rect.dispose();
     }
     _nativeHdrRects.clear();
-    unawaited(
-      _mediaChannel
-          .invokeMethod<void>('setWindowHdr', {'enabled': false})
-          .catchError((_) {}),
-    );
     _routeAnimation?.removeStatusListener(_handleRouteAnimationStatus);
-    _restoreSystemUi();
     _chromeOpacityController.dispose();
     _doubleTapAnimationController.dispose();
     _pageController.dispose();
@@ -777,6 +812,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   ).image;
 
   void _updateWindowHdr() {
+    if (!identical(_nativeOwners.lastOrNull, this)) return;
     // Keep the window mode stable across HDR/SDR pages; the bitmap gain map
     // determines HDR output, not the window flag alone.
     final isHdr = _hdrDisplaySupported && widget.pics.any((pic) => pic.isHdr);
@@ -941,19 +977,27 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
             _liked = !_liked;
           });
         case 'favorite':
-          await widget.api.favoriteFeed(
-            feed.id,
-            favorited: _favorited,
-            feed: feed,
-          );
+        case 'collections':
+          bool? next;
+          if (action == 'collections') {
+            next = await showFeedCollectionPicker(context, widget.api, feed);
+            if (next == null) return;
+          } else {
+            await widget.api.favoriteFeed(
+              feed.id,
+              favorited: _favorited,
+              feed: feed,
+            );
+            next = !_favorited;
+          }
           if (mounted) {
             setState(() {
               final count = int.tryParse(_favoriteCount);
-              if (count != null) {
+              if (count != null && !widget.api.isAnonymous) {
                 _favoriteCount =
-                    '${(count + (_favorited ? -1 : 1)).clamp(0, 1 << 31)}';
+                    '${(count + (next! ? 1 : 0) - (_favorited ? 1 : 0)).clamp(0, 1 << 31)}';
               }
-              _favorited = !_favorited;
+              _favorited = next!;
             });
           }
         case 'follow':
@@ -987,6 +1031,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
       VoidCallback? onTap, {
       bool active = false,
       String? tooltip,
+      VoidCallback? onLongPress,
     }) => Expanded(
       child: useLiquidGlass
           ? Padding(
@@ -1006,6 +1051,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                     ),
                     useLiquidGlass: useLiquidGlass,
                     onPressed: onTap,
+                    onLongPress: onLongPress,
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -1024,6 +1070,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
               message: tooltip ?? '',
               child: TextButton(
                 onPressed: onTap,
+                onLongPress: onLongPress,
                 style: TextButton.styleFrom(
                   foregroundColor: active
                       ? Theme.of(context).colorScheme.primary
@@ -1056,7 +1103,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.primary,
-                  fontSize: 15,
+                  fontSize: AppTheme.contentFontSize,
                 ),
               ),
             ),
@@ -1084,6 +1131,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
               _working ? null : () => _feedAction('favorite'),
               active: _favorited,
               tooltip: '收藏',
+              onLongPress: _working ? null : () => _feedAction('collections'),
             ),
             action(
               Icons.ios_share_rounded,
@@ -1120,7 +1168,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
   double get _feedChromeExtent => widget.feed == null
       ? 0
       : 90 +
-            MediaQuery.textScalerOf(context).scale(15) *
+            MediaQuery.textScalerOf(context).scale(AppTheme.contentFontSize) *
                 (widget.feed!.message.trim().isEmpty ? 1 : 4);
 
   double get _thumbnailBottom =>
@@ -1129,6 +1177,9 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
           (widget.feed == null ? 32 : _feedChromeExtent + 16);
 
   void _handleGalleryTap(Offset position) {
+    if (!mounted || _isReturning || ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
     final screenWidth = MediaQuery.sizeOf(context).width;
     final x = position.dx;
     final isMiddleThird = x >= screenWidth / 3 && x < screenWidth * 2 / 3;
@@ -1136,8 +1187,15 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
     if (isMiddleThird) {
       _toggleChrome();
     } else {
-      Navigator.of(context).pop();
+      _closeGallery();
     }
+  }
+
+  void _closeGallery() {
+    if (!mounted || _isReturning || ModalRoute.of(context)?.isCurrent != true) {
+      return;
+    }
+    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
 
   void _handleGalleryPointerDown(PointerDownEvent event) {
@@ -1966,7 +2024,7 @@ class _ImageGalleryPageState extends State<ImageGalleryPage>
                               ),
                               useLiquidGlass: useLiquidGlass,
                               // 返回动作不再依赖水波纹触感。
-                              onPressed: () => Navigator.of(context).pop(),
+                              onPressed: _closeGallery,
                             ),
 
                             if (widget.feed != null) ...[
@@ -2148,11 +2206,13 @@ class _GalleryGlassIconButton extends StatefulWidget {
     required this.opacityKey,
     required this.useLiquidGlass,
     this.width = 48,
+    this.onLongPress,
   });
 
   final Widget icon;
   final String tooltip;
   final VoidCallback? onPressed;
+  final VoidCallback? onLongPress;
   final double opacity;
   final Key opacityKey;
   final bool useLiquidGlass;
@@ -2214,9 +2274,10 @@ class _GalleryGlassIconButtonState extends State<_GalleryGlassIconButton> {
     final opacity = widget.opacity;
     if (widget.useLiquidGlass) {
       return GestureDetector(
-        excludeFromSemantics: true,
-        // Long holds are reserved for exploring the liquid effect.
-        onLongPress: () {},
+        excludeFromSemantics: widget.onLongPress == null,
+        onLongPress: widget.onPressed == null
+            ? null
+            : widget.onLongPress ?? () {},
         child: GlassButton(
           label: widget.tooltip,
           width: widget.width,

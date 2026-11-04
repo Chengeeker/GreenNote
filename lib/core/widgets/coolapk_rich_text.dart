@@ -526,9 +526,9 @@ class CoolapkRichText extends StatelessWidget {
   }
 
   static List<_RichToken> _tokenize(String rawText) {
-    final text = _preprocessText(rawText);
-    final cached = _tokenCache[text];
+    final cached = _tokenCache[rawText];
     if (cached != null) return cached;
+    final text = _preprocessText(rawText);
 
     final tokens = <_RichToken>[];
     var lastIndex = 0;
@@ -741,9 +741,9 @@ class CoolapkRichText extends StatelessWidget {
     }
 
     if (_tokenCache.length >= _maxCacheEntries) {
-      _tokenCache.clear();
+      _tokenCache.remove(_tokenCache.keys.first);
     }
-    _tokenCache[text] = tokens;
+    _tokenCache[rawText] = tokens;
     return tokens;
   }
 

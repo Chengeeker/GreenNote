@@ -242,7 +242,7 @@ void main() {
   );
 
   test(
-    'official relation and favorite actions use correct paths and methods',
+    'official relation actions use correct paths and methods',
     () async {
       adapter.respond = (_) => _body({'data': <dynamic>[]});
       final api = await create();
@@ -256,10 +256,6 @@ void main() {
       expect(adapter.calls.last.path, '/v6/user/addToBlackList');
       await api.blockUser('21', blocked: true);
       expect(adapter.calls.last.path, '/v6/user/removeFromBlackList');
-      await api.favoriteFeed('123', favorited: false);
-      expect(adapter.calls.last.path, '/v6/feed/favorite');
-      await api.favoriteFeed('123', favorited: true);
-      expect(adapter.calls.last.path, '/v6/feed/unFavorite');
       await api.followTopic('测试话题', following: false);
       expect(adapter.calls.last.path, '/v6/feed/followTag');
       await api.followTopic('测试话题', following: true);
@@ -279,6 +275,122 @@ void main() {
         throwsA(isA<CoolapkApiException>()),
       );
       expect(adapter.calls.length, previous);
+    },
+  );
+
+  test(
+    'single tap uses the flagged default and removes all known memberships',
+    () async {
+      adapter.respond = (options) => _body(
+        options.path == '/v6/collection/list'
+            ? {
+                'data': [
+                  {'id': '8', 'title': '默认备份', 'isBeCollected': '1'},
+                  {
+                    'id': '9',
+                    'title': '系统收藏夹',
+                    'isDefault': true,
+                    'isBeCollected': true,
+                  },
+                ],
+                'hasMore': false,
+              }
+            : {'data': true},
+      );
+      final api = await create();
+      await api.favoriteFeed('123', favorited: false);
+      expect(adapter.calls.first.queryParameters, {
+        'uid': '',
+        'id': '123',
+        'type': 'feed',
+        'showDefault': 1,
+        'page': 1,
+        'firstItem': '',
+        'lastItem': '',
+      });
+      expect(adapter.calls.last.path, '/v6/collection/addItem');
+      expect(adapter.calls.last.method, 'POST');
+      expect(adapter.calls.last.data, {
+        'id': '9',
+        'cancelId': '',
+        'targetId': '123',
+        'type': 'feed',
+        'trace': '',
+      });
+      await api.favoriteFeed('123', favorited: true);
+      expect(adapter.calls.last.data['id'], '');
+      expect(adapter.calls.last.data['cancelId'], '8,9');
+    },
+  );
+
+  test(
+    'collection options paginate, deduplicate and use entity cursors',
+    () async {
+      adapter.respond = (options) => _body({
+        'data': options.queryParameters['page'] == 1
+            ? [
+                {
+                  'id': '1',
+                  'entityId': 'collection1',
+                  'title': '默认收藏夹',
+                  'isDefault': 1,
+                },
+              ]
+            : [
+                {'id': '1', 'title': '重复'},
+                {
+                  'collectionId': '2',
+                  'entityId': 'collection2',
+                  'name': '数码',
+                  'is_be_collected': 'true',
+                },
+              ],
+        'hasMore': options.queryParameters['page'] == 1,
+      });
+      final api = await create();
+      final items = await api.getFeedCollections(
+        '123',
+        scope: api.notificationSessionKey,
+      );
+      expect(items.map((item) => item.id), ['1', '2']);
+      expect(items.last.selected, isTrue);
+      expect(adapter.calls.last.queryParameters['firstItem'], 'collection1');
+      expect(adapter.calls.last.queryParameters['lastItem'], 'collection1');
+    },
+  );
+
+  test(
+    'missing default and changed accounts never submit collection writes',
+    () async {
+      adapter.respond = (_) => _body({
+        'data': [
+          {'id': '8', 'title': '随便一个收藏夹'},
+        ],
+      });
+      final api = await create();
+      await expectLater(
+        api.favoriteFeed('123', favorited: false),
+        throwsA(isA<CoolapkApiException>()),
+      );
+      expect(adapter.calls, hasLength(1));
+      final scope = api.notificationSessionKey;
+      storedCookie = 'uid=20; token=another-synthetic-account';
+      await expectLater(
+        api.updateFeedCollections(
+          '123',
+          selected: ['8'],
+          cancelled: [],
+          scope: scope,
+        ),
+        throwsA(isA<CoolapkApiException>()),
+      );
+      expect(adapter.calls, hasLength(1));
+      await api.localAccount.setActive(true);
+      await expectLater(
+        api.getFeedCollections('123', scope: scope),
+        throwsA(isA<CoolapkApiException>()),
+      );
+      expect(adapter.calls, hasLength(1));
     },
   );
 

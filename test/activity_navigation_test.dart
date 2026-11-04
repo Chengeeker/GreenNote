@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:greennote/core/network/coolapk_api.dart';
+import 'package:greennote/core/widgets/cached_network_image.dart';
 import 'package:greennote/features/feed/feed_pages.dart';
 import 'package:greennote/features/shared/activity_pages.dart';
 import 'package:greennote/features/shared/api_list_page.dart';
@@ -17,6 +18,7 @@ const _discussion = '#/topic/tagFeedList?id=72606&title=人像摄影&withSortCar
 class ActivityApi extends fixture.HomeApi {
   ActivityApi({super.hasCookie});
   final queriedTags = <String>[];
+  Map<String, dynamic>? topicDetail;
   Map<String, dynamic> event = {};
   @override
   Future<dynamic> request(
@@ -32,6 +34,7 @@ class ActivityApi extends fixture.HomeApi {
   @override
   Future<Map<String, dynamic>> getTopicDetail(String tag) async {
     queriedTags.add(tag);
+    if (topicDetail != null) return {'data': topicDetail!};
     if (tag != 'MagicOS11开放麦' && tag != '人像摄影') {
       throw const CoolapkApiException('话题不存在');
     }
@@ -135,6 +138,100 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
+
+  test('activity and prize tabs use activity layout while discussion and rating do not', () {
+    for (final title in ['活动详情', '有奖活动']) {
+      expect(
+        isActivityTopic({
+          'tabList': [
+            {'title': title},
+          ],
+        }),
+        isTrue,
+      );
+    }
+    expect(
+      isActivityTopic({
+        'tabList': [
+          {'title': '讨论'},
+          {'title': '点评'},
+        ],
+      }),
+      isFalse,
+    );
+    expect(isActivityTopic({}), isFalse);
+  });
+
+  _activityTest(
+    'prize carousel opens the server topic icon and its selected discussion tab',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final api = ActivityApi()
+        ..topicDetail = {
+          'title': '双11开箱',
+          'logo': 'https://image.coolapk.com/prize_topic_square.jpg',
+          'selectedTab': 'lastupdate_desc',
+          'userAction': {'follow': 0},
+          'tabList': [
+            {
+              'title': '有奖活动',
+              'page_name': 'diy163595',
+              'url': 'V8_1111KAIXIANG_20261027',
+            },
+            {
+              'title': '讨论',
+              'page_name': 'lastupdate_desc',
+              'url': '#/topic/tagFeedList?id=129163&sortField=lastupdate_desc',
+            },
+          ],
+        };
+      await tester.pumpWidget(
+        fixture.app(
+          Scaffold(
+            body: HomeChannelCard(
+              api: api,
+              destination: HomeDestination.activities,
+              entity: const {
+                'entityType': 'card',
+                'entityTemplate': 'imageCarouselCard_1',
+                'entities': [
+                  {
+                    'title': '双11开箱',
+                    'pic': 'https://image.coolapk.com/home_banner.jpg',
+                    'url': '/t/双11开箱',
+                  },
+                ],
+              },
+            ),
+          ),
+          scale: 1.3,
+        ),
+      );
+      await tester.tap(find.byType(InkWell).first);
+      await _pump(tester);
+      expect(api.queriedTags, ['双11开箱']);
+      await tester.pump(const Duration(seconds: 1));
+      await _pump(tester);
+      expect(find.byType(ActivityTopicView), findsOneWidget);
+      expect(find.text('有奖活动'), findsOneWidget);
+      expect(tester.widget<TabBar>(find.byType(TabBar)).controller!.index, 1);
+      final headerImage = find.descendant(
+        of: find.byType(ActivityTopicView),
+        matching: find.byType(CachedNetworkImage),
+      );
+      expect(
+        tester
+            .widgetList<CachedNetworkImage>(headerImage)
+            .map((image) => image.url),
+        contains('https://image.coolapk.com/prize_topic_square.jpg'),
+      );
+      expect(find.text('最新发布'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   test(
     'URL topic identity wins over carousel labels, including raw Chinese',

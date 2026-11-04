@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
+import 'package:easy_refresh/easy_refresh.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +23,7 @@ import 'core/utils/coolapk_url_handler.dart';
 import 'core/utils/haptic_feedback_util.dart';
 import 'core/design_system/components/review_frosted_app_bar.dart';
 import 'core/widgets/app_avatar.dart';
+import 'core/widgets/app_scroll_behavior.dart';
 import 'features/feed/feed_pages.dart';
 import 'features/settings/app_settings_page.dart';
 import 'features/shared/app_market_page.dart';
@@ -29,6 +31,7 @@ import 'features/shell/main_pages.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  EasyRefresh.defaultScrollBehaviorBuilder = AppRefreshScrollBehavior.new;
   HttpOverrides.global = AppHttpOverrides();
   PaintingBinding.instance.imageCache.maximumSize = 3000;
   PaintingBinding.instance.imageCache.maximumSizeBytes =
@@ -70,6 +73,7 @@ class GreennoteApp extends ConsumerWidget {
           navigatorKey: rootNavigatorKey,
           title: 'GreenNote',
           debugShowCheckedModeBanner: false,
+          scrollBehavior: const AppScrollBehavior(),
           locale: const Locale('zh', 'CN'),
           supportedLocales: const [Locale('zh', 'CN'), Locale('en', 'US')],
           localizationsDelegates: GlobalMaterialLocalizations.delegates,
@@ -357,6 +361,7 @@ class _MainScaffoldState extends ConsumerState<MainScaffold>
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontSize: 14,
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),

@@ -164,6 +164,14 @@ class _PredictiveBackRouteObserverState
 class AppTheme {
   AppTheme._();
 
+  static const double contentFontSize = 16;
+
+  static final noTouchOverlay = WidgetStateProperty.resolveWith<Color?>(
+    (states) => states.contains(WidgetState.pressed) || states.contains(WidgetState.dragged)
+        ? Colors.transparent
+        : null,
+  );
+
   // Preset Theme Color Palettes
   static const List<Map<String, dynamic>> themeColors = [
     {'name': '经典红', 'color': Color(0xFFFA2F3A)},
@@ -242,10 +250,12 @@ class AppTheme {
 
     return textTheme.copyWith(
       bodyLarge: textTheme.bodyLarge?.copyWith(
+        fontSize: contentFontSize,
         color: scheme.onSurface,
         letterSpacing: 0.0,
       ),
       bodyMedium: textTheme.bodyMedium?.copyWith(
+        fontSize: contentFontSize,
         color: scheme.onSurface,
         letterSpacing: 0.0,
       ),
@@ -299,6 +309,11 @@ class AppTheme {
       useMaterial3: true,
       pageTransitionsTheme: _reviewPageTransitionsTheme,
       splashFactory: const HapticSplashFactory(),
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      checkboxTheme: CheckboxThemeData(overlayColor: noTouchOverlay),
+      radioTheme: RadioThemeData(overlayColor: noTouchOverlay),
+      switchTheme: SwitchThemeData(overlayColor: noTouchOverlay),
       colorScheme: scheme,
       textTheme: textTheme,
       scaffoldBackgroundColor: scheme.surface,
@@ -470,6 +485,11 @@ class AppTheme {
       useMaterial3: true,
       pageTransitionsTheme: _reviewPageTransitionsTheme,
       splashFactory: const HapticSplashFactory(),
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      checkboxTheme: CheckboxThemeData(overlayColor: noTouchOverlay),
+      radioTheme: RadioThemeData(overlayColor: noTouchOverlay),
+      switchTheme: SwitchThemeData(overlayColor: noTouchOverlay),
       colorScheme: effectiveScheme,
       textTheme: textTheme,
       scaffoldBackgroundColor: bgColor,

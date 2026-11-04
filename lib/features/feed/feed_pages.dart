@@ -1,7 +1,10 @@
-import '../shared/community_ui.dart' show communityData;
+import '../shared/community_ui.dart' show communityData, communityText;
 import '../../core/services/cache_service.dart';
 
 import 'dart:async';
+
+import '../../core/utils/shopping_links.dart';
+
 import 'dart:convert';
 
 import 'package:easy_refresh/easy_refresh.dart';
@@ -28,12 +31,12 @@ import 'article_body.dart';
 import '../shared/activity_pages.dart';
 import 'nine_grid_view.dart';
 import 'feed_vote.dart';
+import 'feed_collection_picker.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/coolapk_api.dart';
 import '../../core/network/coolapk_image.dart';
@@ -493,6 +496,7 @@ class _FeedListPageState extends State<_FeedListPage>
   final _scrollController = ScrollController();
   final _feeds = <CoolapkFeed>[];
   final _bufferedFeeds = <CoolapkFeed>[];
+  final _feedCards = <String, FeedCard>{};
   List<CoolapkFeed> _recentFollowingFeeds = [];
   List<Map<String, dynamic>> _banners = const [];
   String? _error;
@@ -787,6 +791,7 @@ class _FeedListPageState extends State<_FeedListPage>
         if (refresh) {
           if (newItems.isNotEmpty || _feeds.isEmpty) {
             _feeds.clear();
+            _feedCards.clear();
             _bufferedFeeds.clear();
           }
         }
@@ -1090,10 +1095,21 @@ class _FeedListPageState extends State<_FeedListPage>
             final rankNumber = (isRankChannel && feedIndex < 20)
                 ? (feedIndex + 1)
                 : null;
-            return FeedCard(
-              key: ValueKey('feed-${_feeds[feedIndex].id}'),
+            final feed = _feeds[feedIndex];
+            final cached = _feedCards[feed.id];
+            // Paging must not rebuild unchanged, already retained cards.
+            if (cached != null &&
+                identical(cached.feed, feed) &&
+                identical(cached.api, widget.api) &&
+                cached.rankNumber == rankNumber &&
+                cached.officialLayout == (widget.channel.id == 'follow') &&
+                cached.isHeadline == (widget.channel.id == 'headline')) {
+              return cached;
+            }
+            return _feedCards[feed.id] = FeedCard(
+              key: ValueKey('feed-${feed.id}'),
               api: widget.api,
-              feed: _feeds[feedIndex],
+              feed: feed,
               officialLayout: widget.channel.id == 'follow',
               rankNumber: rankNumber,
               isHeadline: widget.channel.id == 'headline',
@@ -1652,61 +1668,97 @@ class _HomeTopicPageState extends State<_HomeTopicPage> {
             topic['url'].toString(),
             topic['title']?.toString() ?? '',
           );
+          final scheme = Theme.of(context).colorScheme;
+          final dark = Theme.of(context).brightness == Brightness.dark;
+          final panelColor = dark ? const Color(0xFF1E1E1E) : scheme.surface;
+          final gutterColor = dark
+              ? const Color(0xFF101010)
+              : scheme.surfaceContainerLow;
           return Row(
             children: [
               SizedBox(
-                width: 92,
-                child: ListView.builder(
-                  itemCount: topics.length,
-                  itemBuilder: (context, index) {
-                    final item = topics[index];
-                    return InkWell(
-                      onTap: () => setState(() => _selected = index),
-                      child: Container(
-                        constraints: const BoxConstraints(minHeight: 56),
-                        decoration: BoxDecoration(
-                          color: index == selected
-                              ? Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHigh
-                              : null,
-                          border: Border(
-                            left: BorderSide(
+                width: 84,
+                child: ColoredBox(
+                  color: panelColor,
+                  child: ListView.builder(
+                    itemCount: topics.length,
+                    itemBuilder: (context, index) {
+                      final item = topics[index];
+                      return InkWell(
+                        onTap: () => setState(() => _selected = index),
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 43),
+                          decoration: BoxDecoration(
+                            color: index == selected ? gutterColor : null,
+                            border: Border(
+                              left: BorderSide(
+                                color: index == selected
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Colors.transparent,
+                                width: 3,
+                              ),
+                            ),
+                          ),
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 10,
+                          ),
+                          child: Text(
+                            item['title'].toString(),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              height: 1.2,
                               color: index == selected
                                   ? Theme.of(context).colorScheme.primary
-                                  : Colors.transparent,
-                              width: 3,
+                                  : null,
                             ),
                           ),
                         ),
-                        alignment: Alignment.center,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 10,
-                        ),
-                        child: Text(
-                          item['title'].toString(),
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: index == selected
-                                ? Theme.of(context).colorScheme.primary
-                                : null,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
               Expanded(
-                child: ApiListPage(
-                  key: ValueKey(target.toString()),
-                  api: widget.api,
-                  title: topic['title'].toString(),
-                  path: target.$1,
-                  query: target.$2,
-                  showAppBar: false,
-                  nested: true,
+                child: ColoredBox(
+                  color: gutterColor,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(12),
+                      ),
+                      child: ColoredBox(
+                        color: panelColor,
+                        child: ApiListPage(
+                          key: ValueKey(target.toString()),
+                          api: widget.api,
+                          title: topic['title'].toString(),
+                          path: target.$1,
+                          query: target.$2,
+                          showAppBar: false,
+                          nested: true,
+                          gridColumns: 3,
+                          itemFilter: (item) => communityText(item, [
+                            'title',
+                            'name',
+                            'tag',
+                            'tagName',
+                          ]).isNotEmpty,
+                          padding: EdgeInsets.fromLTRB(
+                            8,
+                            0,
+                            8,
+                            96 + MediaQuery.paddingOf(context).bottom,
+                          ),
+                          itemBuilder: (context, item) =>
+                              _HomeTopicTile(api: widget.api, entity: item),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -1736,6 +1788,113 @@ class _HomeTopicPageState extends State<_HomeTopicPage> {
   }
 }
 
+class _HomeTopicTile extends StatelessWidget {
+  const _HomeTopicTile({required this.api, required this.entity});
+
+  final CoolapkApi api;
+  final Map<String, dynamic> entity;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = communityText(entity, ['title', 'name', 'tag', 'tagName']);
+    final logo = normalizeCoolapkImageUrl(
+      communityText(entity, ['logo', 'icon', 'pic', 'avatar']),
+    );
+    final rawHeat = communityText(entity, [
+      'hotNumTxt',
+      'hot_num_txt',
+      'hot_num',
+      'hotNum',
+    ]).replaceAll('热度', '').trim();
+    final count = num.tryParse(rawHeat);
+    final heat = count != null && count >= 10000
+        ? '${(count / 10000).toStringAsFixed(1)}万'
+        : rawHeat;
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return InkWell(
+      onTap: () {
+        final tag = ApiEntityCard.extractTopicTag(entity);
+        if (tag.isEmpty) return;
+        Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => TopicPage(
+              api: api,
+              tag: tag,
+              initialTitle: title,
+              initialLogo: logo.isEmpty ? null : logo,
+            ),
+          ),
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 12, 4, 10),
+        child: Column(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox.square(
+                dimension: 56,
+                child: logo.isEmpty
+                    ? Icon(Icons.tag, color: scheme.onSurfaceVariant)
+                    : CachedNetworkImage(
+                        logo,
+                        headers: coolapkImageHeaders(logo, api: api),
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            Icon(Icons.tag, color: scheme.onSurfaceVariant),
+                      ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.2,
+                color: dark ? const Color(0xFFD0D0D0) : scheme.onSurface,
+              ),
+            ),
+            const Spacer(),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.local_fire_department_outlined,
+                  size: 11,
+                  color: dark
+                      ? const Color(0xFFB8B8B8)
+                      : scheme.onSurfaceVariant,
+                ),
+                Flexible(
+                  child: Text(
+                    heat.isEmpty ? '暂无热度' : heat,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      height: 1.2,
+                      color: dark
+                          ? const Color(0xFFB8B8B8)
+                          : scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _HeadlineCarousel extends StatefulWidget {
   const _HeadlineCarousel({required this.api, required this.cards});
   final CoolapkApi api;
@@ -1752,6 +1911,8 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
   Timer? _timer;
   late List<Map<String, dynamic>> _items = _resolveItems(widget.cards);
   int _page = 0;
+  bool _warming = false;
+  bool _launching = false;
 
   static const List<Map<String, dynamic>> _defaultCarouselEntities = [
     {
@@ -1818,6 +1979,60 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (TickerMode.valuesOf(context).enabled &&
+        (ModalRoute.of(context)?.isCurrent ?? true)) {
+      _startTimer();
+      _warmCurrent();
+    } else {
+      _timer?.cancel();
+    }
+  }
+
+  String _topicTag(Map<String, dynamic> item) {
+    final url = '${item['url'] ?? ''}';
+    if (!url.contains('/t/') &&
+        !url.contains('/topic/') &&
+        !url.contains('tag=') &&
+        item['entityType'] != 'topic') {
+      return '';
+    }
+    return ApiEntityCard.extractTopicTag(item);
+  }
+
+  void _warmCurrent() {
+    if (!mounted ||
+        _launching ||
+        _items.isEmpty ||
+        !TickerMode.valuesOf(context).enabled ||
+        !(ModalRoute.of(context)?.isCurrent ?? true)) {
+      return;
+    }
+    final tag = _topicTag(_items[_page]);
+    if (tag.isEmpty || _warming) return;
+    _warming = true;
+    final session = (widget.api.notificationSessionKey, widget.api.isAnonymous);
+    final future = prepareTopic(context, widget.api, tag);
+    unawaited(
+      future
+          .then<void>((_) {}, onError: (Object error, StackTrace stack) {})
+          .whenComplete(() {
+            _warming = false;
+            if (mounted &&
+                (_topicTag(_items[_page]) != tag ||
+                    session !=
+                        (
+                          widget.api.notificationSessionKey,
+                          widget.api.isAnonymous,
+                        ))) {
+              _warmCurrent();
+            }
+          }),
+    );
+  }
+
+  @override
   void didUpdateWidget(covariant _HeadlineCarousel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.cards, widget.cards)) {
@@ -1830,6 +2045,7 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
         _page = 0;
         _initController();
         _startTimer();
+        _warmCurrent();
       }
     }
   }
@@ -1840,7 +2056,11 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
   ) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
-      if (_image(a[i]) != _image(b[i])) return false;
+      if (_image(a[i]) != _image(b[i]) ||
+          a[i]['url'] != b[i]['url'] ||
+          a[i]['title'] != b[i]['title']) {
+        return false;
+      }
     }
     return true;
   }
@@ -1850,6 +2070,25 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
     _timer?.cancel();
     _controller?.dispose();
     super.dispose();
+  }
+
+  Future<void> _open(Map<String, dynamic> item) async {
+    if (_launching) return;
+    _launching = true;
+    final tag = _topicTag(item);
+    final prepared = tag.isEmpty
+        ? null
+        : prepareTopic(context, widget.api, tag);
+    try {
+      await openHeadlineTarget(
+        context,
+        widget.api,
+        item,
+        preparedTopic: prepared,
+      );
+    } finally {
+      _launching = false;
+    }
   }
 
   @override
@@ -1884,6 +2123,7 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
                     final newPage = index % _items.length;
                     if (newPage != _page) {
                       setState(() => _page = newPage);
+                      _warmCurrent();
                     }
                   },
                   itemBuilder: (context, index) {
@@ -1894,7 +2134,7 @@ class _HeadlineCarouselState extends State<_HeadlineCarousel> {
                       child: InkWell(
                         onTap: () {
                           HapticFeedbackUtil.selection();
-                          openHeadlineTarget(context, widget.api, item);
+                          _open(item);
                         },
                         child: CachedNetworkImage(
                           normalizeCoolapkImageUrl(image),
@@ -3554,11 +3794,12 @@ class _VideoFilterBar extends StatelessWidget {
   }
 }
 
-void openHeadlineTarget(
+Future<void> openHeadlineTarget(
   BuildContext context,
   CoolapkApi api,
-  Map<String, dynamic> item,
-) {
+  Map<String, dynamic> item, {
+  Future<PreparedTopic>? preparedTopic,
+}) async {
   final dedicated =
       communityPageForUrl(api, '${item['url'] ?? ''}', initial: item) ??
       communityPageForEntity(api, item);
@@ -3577,14 +3818,9 @@ void openHeadlineTarget(
               '')
           .toString()
           .trim();
-  final value =
-      (item['url'] ??
-              item['href'] ??
-              item['goods_url'] ??
-              item['goods_buy_url'] ??
-              '')
-          .toString()
-          .trim();
+  final value = ['url', 'href', 'goods_url', 'goods_buy_url']
+      .map((key) => '${item[key] ?? ''}'.trim())
+      .firstWhere((value) => value.isNotEmpty, orElse: () => '');
   if (title.isEmpty && value.contains('/t/')) {
     final sub = value
         .substring(value.indexOf('/t/') + 3)
@@ -3640,16 +3876,14 @@ void openHeadlineTarget(
 
   if (value.isEmpty) {
     if (title.isNotEmpty) {
-      Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => TopicPage(
-            api: api,
-            tag: title.replaceAll('#', '').trim(),
-            initialTitle: title,
-            initialLogo: pic.isNotEmpty ? pic : null,
-            initialCover: pic.isNotEmpty ? pic : null,
-          ),
-        ),
+      await openPreparedTopic(
+        context,
+        api,
+        title.replaceAll('#', '').trim(),
+        prepared: preparedTopic,
+        initialTitle: title,
+        initialLogo: pic.isNotEmpty ? pic : null,
+        initialCover: pic.isNotEmpty ? pic : null,
       );
     }
     return;
@@ -3686,16 +3920,14 @@ void openHeadlineTarget(
     }
     tag = tag.replaceAll('#', '').trim();
     if (tag.isNotEmpty) {
-      Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => TopicPage(
-            api: api,
-            tag: tag,
-            initialTitle: tag,
-            initialLogo: pic.isNotEmpty ? pic : null,
-            initialCover: pic.isNotEmpty ? pic : null,
-          ),
-        ),
+      await openPreparedTopic(
+        context,
+        api,
+        tag,
+        prepared: preparedTopic,
+        initialTitle: tag,
+        initialLogo: pic.isNotEmpty ? pic : null,
+        initialCover: pic.isNotEmpty ? pic : null,
       );
       return;
     }
@@ -3778,10 +4010,7 @@ void openHeadlineTarget(
   final path = uri.path;
 
   if (path.startsWith('/clickUrl/')) {
-    launchUrl(
-      uri.replace(scheme: 'https', host: 'api.coolapk.com'),
-      mode: LaunchMode.externalApplication,
-    );
+    launchShoppingUrl(uri.replace(scheme: 'https', host: 'api.coolapk.com'));
     return;
   }
 
@@ -3918,23 +4147,29 @@ void openHeadlineTarget(
     return;
   }
 
-  if (uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https')) {
-    launchUrl(uri, mode: LaunchMode.externalApplication);
+  if ([
+    'http',
+    'https',
+    'openapp.jdmobile',
+    'taobao',
+    'pinduoduo',
+  ].contains(uri.scheme)) {
+    if (!await launchShoppingUrl(uri) && context.mounted) {
+      AppToast.show(context, '无法打开商品链接');
+    }
     return;
   }
 
   // Fallback: If title exists, open topic or search instead of dead end
   if (title.isNotEmpty) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => TopicPage(
-          api: api,
-          tag: title.replaceAll('#', '').trim(),
-          initialTitle: title,
-          initialLogo: pic.isNotEmpty ? pic : null,
-          initialCover: pic.isNotEmpty ? pic : null,
-        ),
-      ),
+    await openPreparedTopic(
+      context,
+      api,
+      title.replaceAll('#', '').trim(),
+      prepared: preparedTopic,
+      initialTitle: title,
+      initialLogo: pic.isNotEmpty ? pic : null,
+      initialCover: pic.isNotEmpty ? pic : null,
     );
   }
 }
@@ -4259,6 +4494,7 @@ class FeedCard extends StatefulWidget {
     this.articleLayout = false,
     this.editorialCover = false,
     this.picturesBeforeText = false,
+    this.sliver = false,
     this.authorHeader,
     this.body,
     super.key,
@@ -4272,6 +4508,7 @@ class FeedCard extends StatefulWidget {
   final bool articleLayout;
   final bool editorialCover;
   final bool picturesBeforeText;
+  final bool sliver;
   final Widget? authorHeader;
   final Widget? body;
   @override
@@ -4363,7 +4600,9 @@ class _FeedCardState extends State<FeedCard>
       if (val != null) {
         var s = val.toString().trim();
         if (s.isNotEmpty && s != feedTitle) {
-          s = html.parse(s).body?.text.trim() ?? s;
+          if (s.contains('<') || s.contains('&')) {
+            s = html.parse(s).body?.text.trim() ?? s;
+          }
           if (feedTitle.isNotEmpty && s.startsWith(feedTitle)) {
             s = s.substring(feedTitle.length).trim();
           }
@@ -4461,17 +4700,24 @@ class _FeedCardState extends State<FeedCard>
     }
   }
 
-  Future<void> _toggleFavorite() async {
+  Future<void> _toggleFavorite({bool chooseCollection = false}) async {
     if (_working) return;
     setState(() => _working = true);
     try {
-      await widget.api.favoriteFeed(
-        widget.feed.id,
-        favorited: _favorited,
-        feed: widget.feed,
-      );
+      bool? next;
+      if (chooseCollection) {
+        next = await showFeedCollectionPicker(context, widget.api, widget.feed);
+        if (next == null) return;
+      } else {
+        await widget.api.favoriteFeed(
+          widget.feed.id,
+          favorited: _favorited,
+          feed: widget.feed,
+        );
+        next = !_favorited;
+      }
       if (mounted) {
-        setState(() => _favorited = !_favorited);
+        setState(() => _favorited = next!);
         AppToast.show(context, _favorited ? '已添加至收藏' : '已取消收藏');
       }
     } catch (error) {
@@ -4536,6 +4782,10 @@ class _FeedCardState extends State<FeedCard>
                                       ? Colors.white.withValues(alpha: 0.85)
                                       : const Color(0xFF333333)),
                             label: _favorited ? '已收藏' : '收藏',
+                            onLongPress: () {
+                              Navigator.pop(sheetContext);
+                              _toggleFavorite(chooseCollection: true);
+                            },
                             onTap: () {
                               Navigator.pop(sheetContext);
                               _toggleFavorite();
@@ -4773,6 +5023,7 @@ class _FeedCardState extends State<FeedCard>
     required VoidCallback onTap,
     Color? iconColor,
     double iconSize = 24,
+    VoidCallback? onLongPress,
   }) {
     final bgColor = isGreen
         ? (isDark ? const Color(0xFF1B3D2F) : const Color(0xFFE2F7EB))
@@ -4790,6 +5041,7 @@ class _FeedCardState extends State<FeedCard>
       key: key,
       borderRadius: BorderRadius.circular(28),
       onTap: onTap,
+      onLongPress: onLongPress,
       child: SizedBox(
         width: 60,
         child: Column(
@@ -5009,10 +5261,19 @@ class _FeedCardState extends State<FeedCard>
     final device = (feed.raw['device_title'] ?? feed.raw['device_name'] ?? '')
         .toString()
         .trim();
+    final contentPadding = isDetail
+        ? const EdgeInsets.symmetric(horizontal: 14, vertical: 6)
+        : const EdgeInsets.fromLTRB(12, 10, 12, 8);
+    final articleBody = inlineArticle
+        ? ArticleBody(
+            api: widget.api,
+            feed: feed,
+            parts: _articleParts,
+            sliver: widget.sliver,
+          )
+        : null;
     final innerContent = Padding(
-      padding: isDetail
-          ? const EdgeInsets.symmetric(horizontal: 14, vertical: 6)
-          : const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      padding: contentPadding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -5227,7 +5488,7 @@ class _FeedCardState extends State<FeedCard>
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 17.5,
+                    fontSize: AppTheme.contentFontSize,
                     fontWeight: context.adjustWeight(FontWeight.bold),
                     color: scheme.onSurface,
                     height: 1.35,
@@ -5271,10 +5532,11 @@ class _FeedCardState extends State<FeedCard>
                   child: CoolapkRichText(
                     api: widget.api,
                     text: summary,
+                    maxCharacters: 1000,
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 14.5,
+                      fontSize: AppTheme.contentFontSize,
                       height: 1.45,
                       letterSpacing: 0.1,
                       color: scheme.onSurfaceVariant,
@@ -5334,16 +5596,8 @@ class _FeedCardState extends State<FeedCard>
                         ],
                       ),
                       style: TextStyle(
-                        fontSize: widget.articleLayout
-                            ? 18
-                            : widget.officialLayout
-                            ? 16
-                            : 17,
-                        fontWeight: widget.articleLayout
-                            ? FontWeight.bold
-                            : widget.officialLayout
-                            ? FontWeight.w500
-                            : FontWeight.bold,
+                        fontSize: AppTheme.contentFontSize,
+                        fontWeight: context.adjustWeight(FontWeight.bold),
                         color: scheme.onSurface,
                         height: 1.4,
                       ),
@@ -5476,13 +5730,10 @@ class _FeedCardState extends State<FeedCard>
                 ),
               ),
             if (inlineArticle)
-              SelectionArea(
-                child: ArticleBody(
-                  api: widget.api,
-                  feed: feed,
-                  parts: _articleParts,
-                ),
-              )
+              if (widget.sliver)
+                articleBody!
+              else
+                SelectionArea(child: articleBody!)
             else if (feed.message.isNotEmpty && !widget.editorialCover)
               if (isDetail)
                 SelectionArea(
@@ -5490,7 +5741,7 @@ class _FeedCardState extends State<FeedCard>
                     api: widget.api,
                     text: feed.message,
                     style: TextStyle(
-                      fontSize: 15.5,
+                      fontSize: AppTheme.contentFontSize,
                       height: 1.65,
                       letterSpacing: 0.15,
                       color: scheme.onSurface,
@@ -5504,7 +5755,7 @@ class _FeedCardState extends State<FeedCard>
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 14.5,
+                    fontSize: AppTheme.contentFontSize,
                     height: 1.45,
                     letterSpacing: 0.1,
                     color: scheme.onSurfaceVariant,
@@ -5515,7 +5766,7 @@ class _FeedCardState extends State<FeedCard>
                   api: widget.api,
                   text: feed.message.trimRight(),
                   style: TextStyle(
-                    fontSize: 14.5,
+                    fontSize: AppTheme.contentFontSize,
                     height: 1.38,
                     color: scheme.onSurface,
                   ),
@@ -5560,9 +5811,7 @@ class _FeedCardState extends State<FeedCard>
                   maxLines: 8,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: (widget.officialLayout || widget.isHeadline)
-                        ? (productPrice != null ? 15.5 : 14.5)
-                        : (productPrice != null ? 17.5 : 16),
+                    fontSize: AppTheme.contentFontSize,
                     height: (widget.officialLayout || widget.isHeadline)
                         ? 1.38
                         : (productPrice != null ? 1.4 : 1.3),
@@ -5667,7 +5916,7 @@ class _FeedCardState extends State<FeedCard>
                   lines: 3,
                   onMore: _openDetail,
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: AppTheme.contentFontSize,
                     height: 1.4,
                     color: scheme.onSurfaceVariant,
                   ),
@@ -5775,10 +6024,34 @@ class _FeedCardState extends State<FeedCard>
         ],
       ),
     );
-
-    if (isDetail) {
-      return innerContent;
+    if (isDetail && widget.sliver) {
+      if (articleBody != null) {
+        final contentChildren = (innerContent.child! as Column).children;
+        final bodyIndex = contentChildren.indexOf(articleBody);
+        return SliverPadding(
+          padding: contentPadding,
+          sliver: SliverMainAxisGroup(
+            slivers: [
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: contentChildren.take(bodyIndex).toList(),
+                ),
+              ),
+              articleBody,
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: contentChildren.skip(bodyIndex + 1).toList(),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+      return SliverToBoxAdapter(child: innerContent);
     }
+    if (isDetail) return innerContent;
 
     return RepaintBoundary(
       child: ReviewCard(
@@ -6914,6 +7187,7 @@ class _TargetFollowPillState extends State<_TargetFollowPill> {
       } else {
         final cleanTag = widget.tag.replaceAll('#', '').trim();
         await widget.api.followTopic(cleanTag, following: _following);
+        setPreparedTopicFollowing(widget.api, cleanTag, !_following);
       }
       if (mounted) {
         setState(() => _following = !_following);
@@ -7356,8 +7630,8 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     } catch (_) {}
 
     final detail = _detailAnchor.currentContext?.findRenderObject();
-    if (detail is RenderBox) {
-      final commentSectionTop = detail.size.height + 16;
+    if (detail is RenderSliver && detail.geometry != null) {
+      final commentSectionTop = detail.geometry!.scrollExtent + 16;
       if (_scroll.offset > commentSectionTop) {
         _scroll.jumpTo(
           commentSectionTop.clamp(0.0, _scroll.position.maxScrollExtent),
@@ -7458,9 +7732,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       final detail = _detailAnchor.currentContext?.findRenderObject();
-      if (detail is RenderBox) {
+      if (detail is RenderSliver && detail.geometry != null) {
         _scroll.jumpTo(
-          (detail.size.height + 16).clamp(
+          (detail.geometry!.scrollExtent + 16).clamp(
             0.0,
             _scroll.position.maxScrollExtent,
           ),
@@ -7855,22 +8129,30 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     }
   }
 
-  Future<void> _toggleFavorite() async {
+  Future<void> _toggleFavorite({bool chooseCollection = false}) async {
     if (_feedActionBusy) return;
     setState(() => _feedActionBusy = true);
     try {
-      await widget.api.favoriteFeed(
-        widget.feed.id,
-        favorited: _favorited,
-        feed: _detail == null
-            ? widget.feed
-            : CoolapkFeed.fromJson({
-                ...widget.feed.raw,
-                ..._detail!,
-                'id': widget.feed.id,
-              }),
-      );
-      if (mounted) setState(() => _favorited = !_favorited);
+      final feed = _detail == null
+          ? widget.feed
+          : CoolapkFeed.fromJson({
+              ...widget.feed.raw,
+              ..._detail!,
+              'id': widget.feed.id,
+            });
+      bool? next;
+      if (chooseCollection) {
+        next = await showFeedCollectionPicker(context, widget.api, feed);
+        if (next == null) return;
+      } else {
+        await widget.api.favoriteFeed(
+          widget.feed.id,
+          favorited: _favorited,
+          feed: feed,
+        );
+        next = !_favorited;
+      }
+      if (mounted) setState(() => _favorited = next!);
     } catch (error) {
       if (mounted) _showMessage(error.toString());
     } finally {
@@ -8452,261 +8734,294 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
           header: reviewDefaultRefreshHeader,
           onRefresh: _load,
           child: filterHorizontalScrollNotifications(
-            ListView(
-              controller: _scroll,
-              physics: const AlwaysScrollableScrollPhysics(),
-              scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
-              padding: EdgeInsets.fromLTRB(
-                0,
-                0,
-                0,
-                80 + MediaQuery.paddingOf(context).bottom,
-              ),
-              children: [
-                SizedBox(
-                  key: _detailAnchor,
-                  child:
-                      _detail == null &&
-                          widget.feed.message.isEmpty &&
-                          widget.feed.pictures.isEmpty
-                      ? const SizedBox.shrink()
-                      : _DetailContent(
-                          api: widget.api,
-                          feed: widget.feed,
-                          detail: _detail,
-                        ),
-                ),
-                if (_detailError != null)
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        Text(_detailError!, textAlign: TextAlign.center),
-                        TextButton(
-                          onPressed: () async {
-                            await _loadDetail();
-                            _positionTargetReply();
-                          },
-                          child: const Text('重新加载原帖'),
-                        ),
-                      ],
+            SelectionArea(
+              child: CustomScrollView(
+                controller: _scroll,
+                physics: const AlwaysScrollableScrollPhysics(),
+                scrollCacheExtent: const ScrollCacheExtent.pixels(800.0),
+                slivers: [
+                  if (_detail == null &&
+                      widget.feed.message.isEmpty &&
+                      widget.feed.pictures.isEmpty)
+                    SliverToBoxAdapter(
+                      key: _detailAnchor,
+                      child: const SizedBox.shrink(),
+                    )
+                  else
+                    _DetailContent(
+                      key: _detailAnchor,
+                      api: widget.api,
+                      feed: widget.feed,
+                      detail: _detail,
                     ),
-                  ),
-                if (widget.initialReplyId.isNotEmpty)
-                  Container(
-                    key: _targetAnchor,
-                    padding: const EdgeInsets.only(top: 12, bottom: 8),
-                    color: Theme.of(context).colorScheme.primaryContainer
-                        .withValues(alpha: .18),
+                  SliverToBoxAdapter(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
-                          child: Text(
-                            '定位到的评论',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        if (_targetReply != null)
-                          _replyThreadTile(context, _targetReply!, authorUid)
-                        else if (_targetReplyError != null)
-                          TextButton(
-                            onPressed: () async {
-                              await _loadTargetReply();
-                              _positionTargetReply();
-                            },
-                            child: Text(_targetReplyError!),
-                          )
-                        else
-                          const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: LinearProgressIndicator(),
-                          ),
-                      ],
-                    ),
-                  ),
-                if (_loadingDetail &&
-                    widget.feed.message.isEmpty &&
-                    _detail == null)
-                  const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Center(child: LinearProgressIndicator()),
-                  ),
-                Divider(
-                  height: 16,
-                  thickness: 0.5,
-                  color: Theme.of(context).colorScheme.outlineVariant
-                      .withValues(alpha: 0.25),
-                ),
-                Padding(
-                  key: _commentsHeaderKey,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Builder(
-                        builder: (context) {
-                          final replyNum =
-                              int.tryParse(
-                                '${_detail?['replynum'] ?? _detail?['replyNum'] ?? widget.feed.replyCount}',
-                              ) ??
-                              _replies.length;
-                          final totalReplies = replyNum > 0
-                              ? '$replyNum'
-                              : (_replies.isNotEmpty
-                                    ? '${_replies.length}'
-                                    : '0');
-                          return Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '共 $totalReplies 回复',
-                                style: TextStyle(
-                                  fontSize: 15.5,
-                                  fontWeight: FontWeight.bold,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurface,
+                        if (_detailError != null)
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                Text(
+                                  _detailError!,
+                                  textAlign: TextAlign.center,
                                 ),
-                              ),
-                              if (_loadingReplies && _replies.isNotEmpty) ...[
-                                const SizedBox(width: 8),
-                                const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
+                                TextButton(
+                                  onPressed: () async {
+                                    await _loadDetail();
+                                    _positionTargetReply();
+                                  },
+                                  child: const Text('重新加载原帖'),
                                 ),
                               ],
-                            ],
-                          );
-                        },
-                      ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? const Color(0xFF1E1E1E)
-                              : Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest
-                                    .withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        padding: const EdgeInsets.all(2.5),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _commentFilterChip('默认', 'default'),
-                            _commentFilterChip('最新', 'latest'),
-                            _commentFilterChip('热门', 'hot'),
-                            _commentFilterChip('楼主', 'author'),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (_loadingReplies && _replies.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(18),
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                else if (_replies.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 40),
-                    child: Center(
-                      child: Column(
-                        children: [
-                          Icon(
-                            Icons.chat_bubble_outline_rounded,
-                            size: 40,
+                            ),
+                          ),
+                        if (widget.initialReplyId.isNotEmpty)
+                          Container(
+                            key: _targetAnchor,
+                            padding: const EdgeInsets.only(top: 12, bottom: 8),
                             color: Theme.of(context)
                                 .colorScheme
-                                .onSurfaceVariant
-                                .withValues(alpha: 0.35),
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            _commentMode == 'author'
-                                ? '该动态下暂无楼主回复'
-                                : '还没有回复哦，快来回复一下吧~',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant
-                                  .withValues(alpha: 0.7),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  Opacity(
-                    opacity: _loadingReplies && _replies.isNotEmpty
-                        ? 0.65
-                        : 1.0,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (var index = 0; index < _replies.length; index++)
-                          if (_replies[index].id != _targetReply?.id)
-                            _ReplyTile(
-                              api: widget.api,
-                              reply: _replies[index],
-                              authorUid: authorUid,
-                              showDivider: index + 1 < _replies.length,
-                              onFilterAuthor: () =>
-                                  _switchCommentMode('author'),
-                              onReply: () {
-                                setState(() {
-                                  _replyTo = _replies[index].id;
-                                });
-                                _openCommentComposer();
-                              },
-                              liked:
-                                  _replyLikes[_replies[index].id] ??
-                                  _replies[index].liked,
-                              onLike: () => _toggleReplyLike(_replies[index]),
-                              onDelete:
-                                  widget.api.currentUid.isNotEmpty &&
-                                      widget.api.currentUid ==
-                                          _replies[index].uid
-                                  ? () => _deleteReply(_replies[index])
-                                  : null,
-                              onDetails: () => Navigator.of(context).push<void>(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => ApiDetailPage(
-                                    api: widget.api,
-                                    title: '评论详情',
-                                    path: '/v6/feed/replyDetail',
-                                    query: {'id': _replies[index].id},
+                                .primaryContainer
+                                .withValues(alpha: .18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 16),
+                                  child: Text(
+                                    '定位到的评论',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
-                              ),
-                              onThread: () =>
-                                  _showReplyThread(_replies[index], authorUid),
+                                if (_targetReply != null)
+                                  _replyThreadTile(
+                                    context,
+                                    _targetReply!,
+                                    authorUid,
+                                  )
+                                else if (_targetReplyError != null)
+                                  TextButton(
+                                    onPressed: () async {
+                                      await _loadTargetReply();
+                                      _positionTargetReply();
+                                    },
+                                    child: Text(_targetReplyError!),
+                                  )
+                                else
+                                  const Padding(
+                                    padding: EdgeInsets.all(16),
+                                    child: LinearProgressIndicator(),
+                                  ),
+                              ],
                             ),
+                          ),
+                        if (_loadingDetail &&
+                            widget.feed.message.isEmpty &&
+                            _detail == null)
+                          const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Center(child: LinearProgressIndicator()),
+                          ),
+                        Divider(
+                          height: 16,
+                          thickness: 0.5,
+                          color: Theme.of(context).colorScheme.outlineVariant
+                              .withValues(alpha: 0.25),
+                        ),
+                        Padding(
+                          key: _commentsHeaderKey,
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Builder(
+                                builder: (context) {
+                                  final replyNum =
+                                      int.tryParse(
+                                        '${_detail?['replynum'] ?? _detail?['replyNum'] ?? widget.feed.replyCount}',
+                                      ) ??
+                                      _replies.length;
+                                  final totalReplies = replyNum > 0
+                                      ? '$replyNum'
+                                      : (_replies.isNotEmpty
+                                            ? '${_replies.length}'
+                                            : '0');
+                                  return Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '共 $totalReplies 回复',
+                                        style: TextStyle(
+                                          fontSize: 15.5,
+                                          fontWeight: FontWeight.bold,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurface,
+                                        ),
+                                      ),
+                                      if (_loadingReplies &&
+                                          _replies.isNotEmpty) ...[
+                                        const SizedBox(width: 8),
+                                        const SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  );
+                                },
+                              ),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color:
+                                      Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? const Color(0xFF1E1E1E)
+                                      : Theme.of(context)
+                                            .colorScheme
+                                            .surfaceContainerHighest
+                                            .withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                padding: const EdgeInsets.all(2.5),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _commentFilterChip('默认', 'default'),
+                                    _commentFilterChip('最新', 'latest'),
+                                    _commentFilterChip('热门', 'hot'),
+                                    _commentFilterChip('楼主', 'author'),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (_loadingReplies && _replies.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(18),
+                            child: Center(child: CircularProgressIndicator()),
+                          )
+                        else if (_replies.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 40),
+                            child: Center(
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    Icons.chat_bubble_outline_rounded,
+                                    size: 40,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant
+                                        .withValues(alpha: 0.35),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    _commentMode == 'author'
+                                        ? '该动态下暂无楼主回复'
+                                        : '还没有回复哦，快来回复一下吧~',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withValues(alpha: 0.7),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else
+                          Opacity(
+                            opacity: _loadingReplies && _replies.isNotEmpty
+                                ? 0.65
+                                : 1.0,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                for (
+                                  var index = 0;
+                                  index < _replies.length;
+                                  index++
+                                )
+                                  if (_replies[index].id != _targetReply?.id)
+                                    _ReplyTile(
+                                      api: widget.api,
+                                      reply: _replies[index],
+                                      authorUid: authorUid,
+                                      showDivider: index + 1 < _replies.length,
+                                      onFilterAuthor: () =>
+                                          _switchCommentMode('author'),
+                                      onReply: () {
+                                        setState(() {
+                                          _replyTo = _replies[index].id;
+                                        });
+                                        _openCommentComposer();
+                                      },
+                                      liked:
+                                          _replyLikes[_replies[index].id] ??
+                                          _replies[index].liked,
+                                      onLike: () =>
+                                          _toggleReplyLike(_replies[index]),
+                                      onDelete:
+                                          widget.api.currentUid.isNotEmpty &&
+                                              widget.api.currentUid ==
+                                                  _replies[index].uid
+                                          ? () => _deleteReply(_replies[index])
+                                          : null,
+                                      onDetails: () => Navigator.of(context)
+                                          .push<void>(
+                                            MaterialPageRoute<void>(
+                                              builder: (_) => ApiDetailPage(
+                                                api: widget.api,
+                                                title: '评论详情',
+                                                path: '/v6/feed/replyDetail',
+                                                query: {
+                                                  'id': _replies[index].id,
+                                                },
+                                              ),
+                                            ),
+                                          ),
+                                      onThread: () => _showReplyThread(
+                                        _replies[index],
+                                        authorUid,
+                                      ),
+                                    ),
+                              ],
+                            ),
+                          ),
+                        if (_loadingReplies &&
+                            _replies.isNotEmpty &&
+                            _replyPage > 0)
+                          const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: Center(child: CircularProgressIndicator()),
+                          ),
+                        if (!_replyHasMore && _replies.isNotEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Center(child: Text('已经到底了')),
+                          ),
                       ],
                     ),
                   ),
-                if (_loadingReplies && _replies.isNotEmpty && _replyPage > 0)
-                  const Padding(
-                    padding: EdgeInsets.all(14),
-                    child: Center(child: CircularProgressIndicator()),
+                  SliverToBoxAdapter(
+                    child: SizedBox(
+                      height: 80 + MediaQuery.paddingOf(context).bottom,
+                    ),
                   ),
-                if (!_replyHasMore && _replies.isNotEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: Text('已经到底了')),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -8894,6 +9209,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
                                         ? Colors.amber.shade700
                                         : scheme.onSurfaceVariant,
                                     onTap: _toggleFavorite,
+                                    onLongPress: () =>
+                                        _toggleFavorite(chooseCollection: true),
+                                    semanticLabel: '收藏，长按选择收藏夹',
                                   ),
                                   _bottomActionItem(
                                     icon: Icons.repeat_rounded,
@@ -8971,17 +9289,20 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
     required String label,
     required Color color,
     required VoidCallback onTap,
+    VoidCallback? onLongPress,
+    String? semanticLabel,
   }) {
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 24, color: color),
+            Icon(icon, size: 24, color: color, semanticLabel: semanticLabel),
             const SizedBox(height: 1),
             Text(
               label,
@@ -9154,8 +9475,9 @@ class _FeedDetailPageState extends ConsumerState<FeedDetailPage> {
   }
 }
 
-class _DetailContent extends StatelessWidget {
+class _DetailContent extends StatefulWidget {
   const _DetailContent({
+    super.key,
     required this.api,
     required this.feed,
     required this.detail,
@@ -9166,7 +9488,28 @@ class _DetailContent extends StatelessWidget {
   final Map<String, dynamic>? detail;
 
   @override
-  Widget build(BuildContext context) {
+  State<_DetailContent> createState() => _DetailContentState();
+}
+
+class _DetailContentState extends State<_DetailContent> {
+  late Widget _content = _buildContent();
+
+  @override
+  void didUpdateWidget(covariant _DetailContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.api != widget.api ||
+        oldWidget.feed != widget.feed ||
+        !identical(oldWidget.detail, widget.detail)) {
+      _content = _buildContent();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _content;
+
+  Widget _buildContent() {
+    final api = widget.api, feed = widget.feed;
+    final detail = widget.detail;
     final message = _text(detail?['message'] ?? detail?['description']);
     final nestedUser = detail?['userInfo'] ?? detail?['user_info'];
     final user = nestedUser is Map
@@ -9176,31 +9519,31 @@ class _DetailContent extends StatelessWidget {
         ? feed
         : CoolapkFeed(
             id: feed.id,
-            uid: _text(detail?['uid'] ?? user['uid'] ?? feed.uid),
+            uid: _text(detail['uid'] ?? user['uid'] ?? feed.uid),
             username: _text(
-              detail?['username'] ?? user['username'] ?? feed.username,
+              detail['username'] ?? user['username'] ?? feed.username,
             ),
             avatar: _text(
-              detail?['userAvatar'] ?? user['avatar'] ?? feed.avatar,
+              detail['userAvatar'] ?? user['avatar'] ?? feed.avatar,
             ),
             message: message.isEmpty ? feed.message : message,
             date: feed.date,
             likeCount: _text(
-              detail?['likenum'] ?? detail?['likeNum'] ?? feed.likeCount,
+              detail['likenum'] ?? detail['likeNum'] ?? feed.likeCount,
             ),
             replyCount: _text(
-              detail?['replynum'] ?? detail?['replyNum'] ?? feed.replyCount,
+              detail['replynum'] ?? detail['replyNum'] ?? feed.replyCount,
             ),
-            pictures: _detailImages(detail!, feed.pictures),
+            pictures: _detailImages(detail, feed.pictures),
             pictureMetadata: {
               ...feed.pictureMetadata,
-              ...CoolapkFeed.pictureMetadataFromJson(detail!),
+              ...CoolapkFeed.pictureMetadataFromJson(detail),
             },
             liked: feed.liked,
             favorited: feed.favorited,
-            raw: detail!,
+            raw: detail,
           );
-    return FeedCard(api: api, feed: expandedFeed, isDetail: true);
+    return FeedCard(api: api, feed: expandedFeed, isDetail: true, sliver: true);
   }
 }
 
@@ -9339,7 +9682,7 @@ class _ReplyTile extends StatelessWidget {
                           api: api,
                           text: reply.message,
                           style: TextStyle(
-                            fontSize: 14.5,
+                            fontSize: AppTheme.contentFontSize,
                             height: 1.45,
                             color: scheme.onSurface,
                           ),
@@ -9577,7 +9920,7 @@ class _ReplyTile extends StatelessWidget {
               style: TextStyle(
                 color: nameColor,
                 fontWeight: FontWeight.bold,
-                fontSize: 12.5,
+                fontSize: AppTheme.contentFontSize,
               ),
             ),
             if (uid.isNotEmpty && uid == authorUid) ...[
@@ -9611,7 +9954,7 @@ class _ReplyTile extends StatelessWidget {
           text: subMsg,
           style: TextStyle(
             color: scheme.onSurface,
-            fontSize: 12.5,
+            fontSize: AppTheme.contentFontSize,
             height: 1.35,
           ),
           prefixSpans: [
@@ -9621,7 +9964,7 @@ class _ReplyTile extends StatelessWidget {
                 text: ' 回复 ',
                 style: TextStyle(
                   color: scheme.onSurfaceVariant,
-                  fontSize: 12.5,
+                  fontSize: AppTheme.contentFontSize,
                 ),
               ),
               userName(ruser, ruserUid),
@@ -9631,7 +9974,7 @@ class _ReplyTile extends StatelessWidget {
               style: TextStyle(
                 color: scheme.onSurface,
                 fontWeight: FontWeight.bold,
-                fontSize: 12.5,
+                fontSize: AppTheme.contentFontSize,
               ),
             ),
           ],

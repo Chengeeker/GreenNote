@@ -6,11 +6,13 @@ import '../../core/network/coolapk_api.dart';
 import '../../core/design_system/components/review_frosted_app_bar.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/widgets/app_avatar.dart';
+import '../../core/widgets/editor_keyboard.dart';
 import 'api_list_page.dart';
 import 'community_ui.dart';
 import 'community_detail_page.dart';
 import 'following_page.dart';
 import 'home_destination_page.dart' show officialHomeTheme;
+import 'rating_square_page.dart';
 import '../../core/utils/coolapk_url_handler.dart';
 
 enum CommunityLibrary {
@@ -527,8 +529,11 @@ class _CommunityLibraryPageState extends State<CommunityLibraryPage> {
 Map<String, dynamic> productAlbumForm(
   String title,
   String description,
-  List<Map<String, String>> items,
-) {
+  List<Map<String, String>> items, {
+  bool ranked = false,
+  String targetType = '',
+  String targetId = '',
+}) {
   if (title.trim().isEmpty ||
       title.length > 100 ||
       description.length > 1000 ||
@@ -537,6 +542,7 @@ Map<String, dynamic> productAlbumForm(
         (item) =>
             (item['item_name']?.trim().isEmpty ?? true) ||
             (item['item_name']?.length ?? 0) > 100 ||
+            (ranked && !RegExp(r'^[1-5]$').hasMatch(item['level'] ?? '1')) ||
             (item['item_description']?.length ?? 0) > 1000,
       )) {
     throw const FormatException('清单内容无效');
@@ -544,14 +550,14 @@ Map<String, dynamic> productAlbumForm(
   return {
     'title': title.trim(),
     'description': description.trim(),
-    'album_type': 0,
-    'targetType': '',
-    'targetId': '',
+    'album_type': ranked ? 1 : 0,
+    'targetType': targetType,
+    'targetId': targetId,
     for (final entry in items.indexed)
       for (final field in {
         ...entry.$2,
         'id': '',
-        'level': '1',
+        'level': ranked ? entry.$2['level'] ?? '1' : '1',
         'display_order': '${entry.$1}',
       }.entries)
         'productItems[${entry.$1}][${field.key}]': field.value,
@@ -559,8 +565,13 @@ Map<String, dynamic> productAlbumForm(
 }
 
 class AnyListCreatePage extends StatefulWidget {
-  const AnyListCreatePage({super.key, required this.api});
+  const AnyListCreatePage({
+    super.key,
+    required this.api,
+    this.initialRank = false,
+  });
   final CoolapkApi api;
+  final bool initialRank;
   @override
   State<AnyListCreatePage> createState() => _AnyListCreatePageState();
 }
@@ -570,11 +581,97 @@ class _AnyListCreatePageState extends State<AnyListCreatePage> {
       _description = TextEditingController();
   final _items = <Map<String, String>>[];
   bool _busy = false;
+  late bool _ranked = widget.initialRank;
+  Map<String, dynamic>? _target;
   late final String _session;
   @override
   void initState() {
     super.initState();
     _session = widget.api.notificationSessionKey;
+    _title.addListener(_changed);
+    _description.addListener(_changed);
+    _draftFlags = (_canCreate, _hasDraft);
+  }
+
+  late (bool, bool) _draftFlags;
+  bool get _canCreate => _title.text.trim().isNotEmpty && _items.isNotEmpty;
+  void _changed() {
+    final flags = (_canCreate, _hasDraft);
+    if (flags != _draftFlags) setState(() => _draftFlags = flags);
+  }
+
+  bool get _hasDraft =>
+      _title.text.isNotEmpty ||
+      _description.text.isNotEmpty ||
+      _items.isNotEmpty ||
+      _target != null;
+
+  Future<void> _close() async {
+    if (_busy) return;
+    if (_hasDraft &&
+        !await confirmCommunityAction(context, '放弃编辑？', '退出后已输入的内容将不会被保存。')) {
+      return;
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
+  Future<void> _selectItem([int level = 1]) async {
+    final source = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('从数码库选择产品'),
+              leading: const Icon(Icons.devices),
+              onTap: () => Navigator.pop(ctx, 'library'),
+            ),
+            ListTile(
+              title: const Text('自定义产品'),
+              leading: const Icon(Icons.edit_outlined),
+              onTap: () => Navigator.pop(ctx, 'custom'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || source == null) return;
+    if (source == 'custom') {
+      final count = _items.length;
+      await _item();
+      if (mounted && _items.length > count) {
+        setState(() => _items.last['level'] = '$level');
+      }
+      return;
+    }
+    final product = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RatingSquarePage(api: widget.api, selectOnly: true),
+      ),
+    );
+    if (!mounted || product == null) return;
+    setState(
+      () => _items.add({
+        'item_id': '${product['id']}',
+        'item_name': '${product['title']}',
+        'item_description': '',
+        'item_logo': '${product['logo'] ?? ''}',
+        'item_images': '',
+        'level': '$level',
+      }),
+    );
+  }
+
+  Future<void> _chooseTarget() async {
+    final target = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RatingSquarePage(api: widget.api, selectOnly: true),
+      ),
+    );
+    if (mounted && target != null) setState(() => _target = target);
   }
 
   @override
@@ -596,11 +693,12 @@ class _AnyListCreatePageState extends State<AnyListCreatePage> {
     );
     if (values == null || !mounted) return;
     final value = {
-      'item_id': '',
+      if (index != null) ..._items[index],
+      'item_id': index == null ? '' : _items[index]['item_id'] ?? '',
       'item_name': values['名称']!,
       'item_description': values['说明']!,
-      'item_logo': '',
-      'item_images': '',
+      'item_logo': index == null ? '' : _items[index]['item_logo'] ?? '',
+      'item_images': index == null ? '' : _items[index]['item_images'] ?? '',
     };
     setState(() {
       if (index == null) {
@@ -627,7 +725,18 @@ class _AnyListCreatePageState extends State<AnyListCreatePage> {
         _session,
         '/v6/productAlbum/create',
         method: 'POST',
-        body: productAlbumForm(_title.text, _description.text, _items),
+        body: productAlbumForm(
+          _title.text,
+          _description.text,
+          _items,
+          ranked: _ranked,
+          targetType: _target == null
+              ? ''
+              : _target!['entityType'] == 'product'
+              ? 'product_phone'
+              : 'tag',
+          targetId: '${_target?['id'] ?? ''}',
+        ),
       );
       if (mounted) Navigator.pop(context, true);
     } catch (_) {
@@ -637,68 +746,379 @@ class _AnyListCreatePageState extends State<AnyListCreatePage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: ReviewFrostedAppBar(title: const Text('创建万物清单')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        TextField(
-          controller: _title,
-          maxLength: 100,
-          decoration: const InputDecoration(labelText: '标题'),
+  Widget _addCard({int? level, String label = '', Color? color}) => InkWell(
+    onTap: _busy || _items.length >= 100 ? null : () => _selectItem(level ?? 1),
+    child: Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color:
+              color ?? Theme.of(context).dividerColor.withValues(alpha: 0.25),
         ),
-        TextField(
-          controller: _description,
-          maxLength: 1000,
-          maxLines: 4,
-          decoration: const InputDecoration(labelText: '说明'),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          '清单商品（${_items.length}）',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        for (final entry in _items.indexed)
-          ListTile(
-            leading: Text('${entry.$1 + 1}'),
-            title: Text(entry.$2['item_name']!),
-            subtitle: Text(entry.$2['item_description']!),
-            onTap: _busy ? null : () => _item(entry.$1),
-            trailing: Wrap(
-              children: [
-                if (entry.$1 > 0)
-                  IconButton(
-                    tooltip: '上移',
-                    onPressed: _busy
-                        ? null
-                        : () => setState(() {
-                            final item = _items.removeAt(entry.$1);
-                            _items.insert(entry.$1 - 1, item);
-                          }),
-                    icon: const Icon(Icons.arrow_upward),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (level != null)
+              Container(
+                width: 16,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: const BorderRadius.horizontal(
+                    left: Radius.circular(7),
                   ),
-                IconButton(
-                  tooltip: '移除商品',
-                  onPressed: _busy
-                      ? null
-                      : () => setState(() => _items.removeAt(entry.$1)),
-                  icon: const Icon(Icons.close),
                 ),
-              ],
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? const Color(0xFF2B2B2D)
+                            : const Color(0xFFF0F0F0),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(
+                        Icons.add,
+                        size: 30,
+                        color: Color(0xFF888888),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('添加产品', style: TextStyle(fontSize: 16)),
+                          const SizedBox(height: 4),
+                          const Text(
+                            '支持从数码库选择产品或自定义产品',
+                            style: TextStyle(fontSize: 12),
+                            maxLines: 2,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        OutlinedButton.icon(
-          onPressed: _busy || _items.length >= 100 ? null : _item,
-          icon: const Icon(Icons.add),
-          label: const Text('添加商品'),
+          ],
         ),
-        const SizedBox(height: 24),
-        FilledButton(
-          onPressed: _busy ? null : _save,
-          child: Text(_busy ? '正在发布…' : '发布清单'),
+      ),
+    ),
+  );
+
+  Widget _itemRow(int index) => ListTile(
+    title: Text(_items[index]['item_name']!),
+    subtitle: Text(_items[index]['item_description']!),
+    onTap: _busy ? null : () => _item(index),
+    trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (index > 0)
+          IconButton(
+            tooltip: '上移',
+            icon: const Icon(Icons.arrow_upward),
+            onPressed: _busy
+                ? null
+                : () => setState(() {
+                    final item = _items.removeAt(index);
+                    _items.insert(index - 1, item);
+                  }),
+          ),
+        IconButton(
+          tooltip: '移除商品',
+          icon: const Icon(Icons.close),
+          onPressed: _busy
+              ? null
+              : () => setState(() => _items.removeAt(index)),
         ),
       ],
     ),
   );
+
+  @override
+  Widget build(BuildContext context) {
+    _draftFlags = (_canCreate, _hasDraft);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final name = _ranked ? '天梯榜' : '清单';
+    return Theme(
+      data: officialHomeTheme(Theme.of(context)),
+      child: PopScope(
+        canPop: !_hasDraft && !_busy,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _close();
+        },
+        child: Scaffold(
+          backgroundColor: dark ? const Color(0xFF1E1E1E) : Colors.white,
+          resizeToAvoidBottomInset: false,
+          body: SafeArea(
+            maintainBottomViewPadding: true,
+            child: Column(
+              children: [
+                Container(
+                  height: 52,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: Theme.of(context).dividerColor
+                            .withValues(alpha: 0.2),
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: '关闭',
+                        onPressed: _busy ? null : _close,
+                        icon: const Icon(Icons.close, size: 26),
+                      ),
+                      const Spacer(),
+                      Container(
+                        height: 32,
+                        padding: const EdgeInsets.all(2),
+                        decoration: BoxDecoration(
+                          color: dark
+                              ? const Color(0xFF333335)
+                              : const Color(0xFFECECEC),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Row(
+                          children: [
+                            for (final (rank, title) in [
+                              (false, '清单'),
+                              (true, '天梯榜'),
+                            ])
+                              InkWell(
+                                onTap: _busy
+                                    ? null
+                                    : () => setState(() => _ranked = rank),
+                                child: Container(
+                                  width: 74,
+                                  alignment: Alignment.center,
+                                  decoration: BoxDecoration(
+                                    color: _ranked == rank
+                                        ? dark
+                                              ? const Color(0xFF1E1E1E)
+                                              : Colors.white
+                                        : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Text(
+                                    title,
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      color: _ranked == rank
+                                          ? const Color(0xFF009688)
+                                          : null,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      Padding(
+                        padding: const EdgeInsets.only(right: 16),
+                        child: OutlinedButton(
+                          onPressed:
+                              _busy ||
+                                  _title.text.trim().isEmpty ||
+                                  _items.isEmpty
+                              ? null
+                              : _save,
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size(56, 30),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
+                          child: Text(
+                            _busy ? '创建中' : '创建',
+                            style: const TextStyle(fontWeight: FontWeight.w400),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView(
+                    padding: EdgeInsets.zero,
+                    children: [
+                      InkWell(
+                        onTap: _busy ? null : _chooseTarget,
+                        child: Container(
+                          height: 56,
+                          margin: const EdgeInsets.symmetric(horizontal: 16),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(
+                                color: Theme.of(context).dividerColor
+                                    .withValues(alpha: 0.2),
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF009688)
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Icon(
+                                  Icons.add,
+                                  color: Color(0xFF009688),
+                                  size: 28,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              const Text('发布到', style: TextStyle(fontSize: 16)),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  '${_target?['title'] ?? '选择合适的板块会有更多的赞'}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.end,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF888888),
+                                  ),
+                                ),
+                              ),
+                              const Icon(Icons.chevron_right),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                        child: Builder(
+                          builder: (fieldContext) => TextField(
+                            scrollPadding: editorKeyboardScrollPadding(
+                              fieldContext,
+                            ),
+                            key: const ValueKey('album-title'),
+                            controller: _title,
+                            maxLength: 100,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: '$name标题',
+                              counterText: '',
+                              enabledBorder: UnderlineInputBorder(
+                                borderSide: BorderSide(
+                                  color: Theme.of(context).dividerColor
+                                      .withValues(alpha: 0.2),
+                                ),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 14,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: Builder(
+                          builder: (fieldContext) => TextField(
+                            scrollPadding: editorKeyboardScrollPadding(
+                              fieldContext,
+                            ),
+                            key: const ValueKey('album-description'),
+                            controller: _description,
+                            minLines: 1,
+                            maxLines: 4,
+                            maxLength: 200,
+                            style: const TextStyle(fontSize: 15),
+                            decoration: InputDecoration(
+                              hintText: '介绍下你的$name，最多200字',
+                              border: InputBorder.none,
+                              counterText: '',
+                              contentPadding: const EdgeInsets.only(top: 10),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (!_ranked) ...[
+                        for (var i = 0; i < _items.length; i++) _itemRow(i),
+                        _addCard(),
+                      ] else
+                        for (final (level, label, color) in [
+                          (5, '夯', const Color(0xFFFF5257)),
+                          (4, '顶\n级', const Color(0xFFFF9800)),
+                          (3, '人\n上\n人', const Color(0xFFFFC107)),
+                          (2, 'N\nP\nC', const Color(0xFF8BC34A)),
+                          (1, '拉', const Color(0xFF9E9E9E)),
+                        ]) ...[
+                          for (var i = 0; i < _items.length; i++)
+                            if ((_items[i]['level'] ?? '1') == '$level')
+                              _itemRow(i),
+                          _addCard(level: level, label: label, color: color),
+                        ],
+                      const EditorKeyboardSpace(),
+                    ],
+                  ),
+                ),
+                if (!_ranked)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 38, top: 12),
+                    child: FilledButton.icon(
+                      onPressed: _busy || _items.length >= 100
+                          ? null
+                          : _selectItem,
+                      icon: const Icon(Icons.add_box_outlined, size: 20),
+                      label: const Text(
+                        '添加产品',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF009F91),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 10,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

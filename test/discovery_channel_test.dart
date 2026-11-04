@@ -229,6 +229,8 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     _launchedUrls.clear();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(const MethodChannel('com.green.note/links'), (_) async => false);
+    addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(const MethodChannel('com.green.note/links'), null));
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_launcherChannel, (call) async {
           if (call.method == 'launch') {
@@ -579,6 +581,11 @@ void main() {
     expect(find.text('酷安内容'), findsNothing);
     expect(find.text('大家都在买'), findsOneWidget);
     expect(find.text('商品0'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('领50元券').first).dy -
+          tester.getBottomLeft(find.text('券后26.29元').first).dy,
+      lessThan(24),
+    );
     expect(find.text('券后26.29元'), findsWidgets);
     expect(find.text('更多商品'), findsOneWidget);
     final labels = [

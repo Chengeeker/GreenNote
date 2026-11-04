@@ -213,7 +213,6 @@ class _LocalProfilePageState extends State<LocalProfilePage> {
           ),
         ),
         const SizedBox(height: 24),
-        const Divider(),
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.manage_accounts_outlined),

@@ -6,6 +6,8 @@ import 'package:greennote/core/theme/app_theme.dart';
 import 'package:greennote/core/widgets/app_avatar.dart';
 import 'package:greennote/features/shared/api_list_page.dart';
 import 'package:greennote/features/shared/following_page.dart';
+import 'package:greennote/features/shared/user_qr_card_page.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:greennote/features/feed/feed_pages.dart';
 import 'package:greennote/features/shell/main_pages.dart';
 
@@ -13,10 +15,12 @@ class _FakeProfileApi implements CoolapkApi {
   _FakeProfileApi({
     this.currentUidValue = '1001',
     this.loginTimeValue,
+    this.genderValue = 1,
   });
 
   final String currentUidValue;
   final int? loginTimeValue;
+  final Object? genderValue;
   final List<String> requestedPaths = [];
 
   @override
@@ -56,7 +60,7 @@ class _FakeProfileApi implements CoolapkApi {
         'avatarFrame': 'https://image.coolapk.com/frame/test.png',
         'level': 5,
         'bio': '喜欢数码与编程的酷友',
-        'gender': 1,
+        'gender': genderValue,
         'birth_year': 2002,
         'province': '广东',
         'city': '佛山',
@@ -82,7 +86,7 @@ class _FakeProfileApi implements CoolapkApi {
         'avatarFrame': 'https://image.coolapk.com/frame/test.png',
         'level': 5,
         'bio': '喜欢数码与编程的酷友',
-        'gender': 1,
+        'gender': genderValue,
         'birth_year': 2002,
         'province': '广东',
         'city': '佛山',
@@ -212,9 +216,9 @@ void main() {
     expect(find.text('我的装备'), findsOneWidget);
     expect(find.text('27个装备'), findsOneWidget);
 
-    // Verify Action button for Self is 编辑资料 + grid icon
+    // The QR action has its own destination beside profile editing.
     expect(find.text('编辑资料'), findsOneWidget);
-    expect(find.byIcon(Icons.grid_view_rounded), findsOneWidget);
+    expect(find.byTooltip('我的二维码名片'), findsOneWidget);
 
     // Verify TabBar includes 点评 right after 回复
     expect(find.text('主页'), findsOneWidget);
@@ -224,7 +228,45 @@ void main() {
 
     // Verify 全部动态 (331) sub-header is present on the feed list
     expect(find.text('全部动态 (331)'), findsOneWidget);
+    await tester.tap(find.byTooltip('我的二维码名片'));
+    await tester.pumpAndSettle();
+    expect(find.byType(UserQrCardPage), findsOneWidget);
+    expect(find.byType(QrImageView), findsOneWidget);
+    final card = tester.widget<UserQrCardPage>(find.byType(UserQrCardPage));
+    expect(card.profileUrl, 'https://www.coolapk.com/u/1001');
+    expect(card.name, '极客酷友');
+    expect(find.text('特别关注'), findsNothing);
+    expect(find.text('复制 UID'), findsNothing);
   });
+
+  for (final brightness in Brightness.values) {
+    for (final gender in [1, 0, '0', -1]) {
+      testWidgets('profile gender $gender capsule in $brightness', (tester) async {
+        tester.view.physicalSize = const Size(360, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(MaterialApp(
+          theme: brightness == Brightness.dark ? AppTheme.darkTheme() : AppTheme.lightTheme(),
+          home: UserSpacePage(api: _FakeProfileApi(genderValue: gender), uid: '1001'),
+        ));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        final label = gender == 1 ? '♂ 00后' : gender == -1 ? '00后' : '♀ 00后';
+        final capsule = tester.widget<Container>(find.ancestor(
+          of: find.text(label), matching: find.byType(Container),
+        ).first);
+        expect((capsule.decoration as BoxDecoration).color, gender == 1
+            ? const Color(0xFF1976D2)
+            : gender == -1 ? Colors.white.withValues(alpha: 0.16) : const Color(0xFFC2185B));
+        if (gender == -1) {
+          expect(find.textContaining('♂'), findsNothing);
+          expect(find.textContaining('♀'), findsNothing);
+        }
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
 
   testWidgets('UserSpacePage displays 1:1 official layout for other user profile', (
     tester,

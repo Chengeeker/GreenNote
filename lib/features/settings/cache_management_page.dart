@@ -449,9 +449,12 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
     );
   }
 
-  Widget _sectionTitle(BuildContext context, String title) => Text(
-    title,
-    style: Theme.of(context).textTheme.titleSmall
-        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+  Widget _sectionTitle(BuildContext context, String title) => Padding(
+    padding: const EdgeInsetsDirectional.only(start: 16),
+    child: Text(
+      title,
+      style: Theme.of(context).textTheme.titleSmall
+          ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+    ),
   );
 }

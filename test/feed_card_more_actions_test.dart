@@ -18,6 +18,26 @@ class _MockFeedApi extends Fake implements CoolapkApi {
   bool get hasCookie => true;
 
   @override
+  String get notificationSessionKey => 'card-account';
+
+  @override
+  Future<List<FeedCollection>> getFeedCollections(
+    String id, {
+    required String scope,
+  }) async => [
+    FeedCollection.fromJson({'id': '1', 'title': '数码资料'}),
+  ];
+
+  @override
+  Future<void> updateFeedCollections(
+    String id, {
+    required List<String> selected,
+    required List<String> cancelled,
+    required String scope,
+    CoolapkFeed? feed,
+  }) async => callLogs.add('collections:$id:${selected.join(',')}');
+
+  @override
   String get currentUserAvatar => 'http://example.com/avatar.png';
 
   @override
@@ -36,6 +56,37 @@ class _MockFeedApi extends Fake implements CoolapkApi {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('card menu long press opens folders without a default favorite', (
+    tester,
+  ) async {
+    final api = _MockFeedApi();
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: FeedCard(
+              api: api,
+              feed: CoolapkFeed.fromJson({'id': '42', 'message': '收藏手势'}),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('feed-more-actions-btn')));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.byKey(const ValueKey('action-favorite')));
+    await tester.pumpAndSettle();
+    expect(find.text('选择收藏夹'), findsOneWidget);
+    expect(api.callLogs, isEmpty);
+    await tester.tap(find.text('数码资料'));
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
+    expect(api.callLogs, ['collections:42:1']);
+    expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(seconds: 3));
+  });
+
 
   testWidgets('FeedCard top-right downward arrow opens 1:1 official more actions modal',
       (tester) async {

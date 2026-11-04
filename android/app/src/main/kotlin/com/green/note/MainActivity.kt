@@ -5,12 +5,14 @@ import android.content.res.Configuration
 import android.os.Build
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterSurfaceView
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private var avatarResult: MethodChannel.Result? = null
     private var pickingMessageImage = false
+    private var pickingTextDocument = false
     private var mediaChannel: MethodChannel? = null
     private val mediaExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var uiChannel: MethodChannel? = null
@@ -19,6 +21,79 @@ class MainActivity : FlutterActivity() {
     private var linksChannel: MethodChannel? = null
     private var initialLink: String? = null
     private var appDownloads: AppDownloads? = null
+    private var flutterSurface: FlutterSurfaceView? = null
+    private var idleWindowRefreshRate: Float? = null
+
+    override fun onFlutterSurfaceViewCreated(flutterSurfaceView: FlutterSurfaceView) {
+        super.onFlutterSurfaceViewCreated(flutterSurfaceView)
+        flutterSurface = flutterSurfaceView
+    }
+
+    private fun setScrolling(active: Boolean): Map<String, Any> {
+        val report = linkedMapOf<String, Any>("active" to active, "sdk" to Build.VERSION.SDK_INT)
+        if (Build.VERSION.SDK_INT < 30) {
+            report["status"] = "unsupported"
+            return report
+        }
+        val view = flutterSurface
+        val display = try { view?.display } catch (_: RuntimeException) { null }
+        val rate = try {
+            val mode = display?.mode
+            report["reported_display_hz"] = display?.refreshRate ?: 0f
+            if (active && display != null && mode != null) {
+                display.supportedModes
+                    .filter { it.physicalWidth == mode.physicalWidth && it.physicalHeight == mode.physicalHeight }
+                    .maxOfOrNull { it.refreshRate } ?: mode.refreshRate
+            } else 0f
+        } catch (_: RuntimeException) {
+            report["status"] = "display_error"
+            0f
+        }
+        report["requested_hz"] = rate
+        try {
+            // Apply the preference to the window as well as Flutter's child Surface.
+            val attributes = android.view.WindowManager.LayoutParams().apply { copyFrom(window.attributes) }
+            report["display_mode_override"] = attributes.preferredDisplayModeId
+            val requested = if (active && rate > 0f) rate else if (!active) idleWindowRefreshRate else null
+            if (requested != null) {
+                if (active && idleWindowRefreshRate == null) idleWindowRefreshRate = attributes.preferredRefreshRate
+                if (attributes.preferredRefreshRate != requested) {
+                    attributes.preferredRefreshRate = requested
+                    window.attributes = attributes
+                }
+                if (!active) idleWindowRefreshRate = null
+                report["window"] = if (attributes.preferredDisplayModeId == 0) "applied" else "mode_override"
+            } else {
+                report["window"] = if (active) "missing_display" else "unchanged"
+            }
+            report["window_requested_hz"] = attributes.preferredRefreshRate
+        } catch (_: RuntimeException) {
+            report["window"] = "failed"
+        }
+        val surface = view?.holder?.surface
+        if (surface == null || !surface.isValid) {
+            report["surface"] = "unavailable"
+            return report
+        }
+        try {
+            // Keep the fling tail smooth, then return refresh-rate policy to Android.
+            if (Build.VERSION.SDK_INT >= 31) {
+                surface.setFrameRate(rate, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                    android.view.Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS)
+            } else {
+                surface.setFrameRate(rate, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+            }
+            report["surface"] = "applied"
+        } catch (_: RuntimeException) {
+            report["surface"] = "failed"
+        }
+        return report
+    }
+
+    override fun onPause() {
+        setScrolling(false)
+        super.onPause()
+    }
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,16 +122,18 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result -> appDownloads?.handle(call.method, call.arguments as? Map<*, *>, result) }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/avatar")
             .setMethodCallHandler { call, result ->
-                if (call.method != "pick" && call.method != "pickImage") { result.notImplemented(); return@setMethodCallHandler }
+                if (call.method !in listOf("pick", "pickImage", "pickTextDocument")) { result.notImplemented(); return@setMethodCallHandler }
                 if (avatarResult != null) { result.error("busy", "Picker is open", null); return@setMethodCallHandler }
                 avatarResult = result
                 pickingMessageImage = call.method == "pickImage"
+                pickingTextDocument = call.method == "pickTextDocument"
                 try {
-                    val action = if (pickingMessageImage && Build.VERSION.SDK_INT >= 33)
+                    val action = if (pickingTextDocument) android.content.Intent.ACTION_OPEN_DOCUMENT
+                        else if (pickingMessageImage && Build.VERSION.SDK_INT >= 33)
                         android.provider.MediaStore.ACTION_PICK_IMAGES else android.content.Intent.ACTION_GET_CONTENT
                     startActivityForResult(android.content.Intent(action).apply {
-                        type = "image/*"
-                        if (action == android.content.Intent.ACTION_GET_CONTENT) addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                        type = if (pickingTextDocument) "text/plain" else "image/*"
+                        if (action != android.provider.MediaStore.ACTION_PICK_IMAGES) addCategory(android.content.Intent.CATEGORY_OPENABLE)
                     }, 7401)
                 } catch (_: Exception) {
                     avatarResult = null
@@ -67,7 +144,19 @@ class MainActivity : FlutterActivity() {
         uiChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.green.note/ui")
         uiChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
+                "setScrolling" -> {
+                    result.success(setScrolling(call.arguments == true && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)))
+                }
                 "getFontWeightAdjustment" -> result.success(getSystemFontWeightAdjustment())
+                "getAppVersion" -> {
+                    try {
+                        @Suppress("DEPRECATION")
+                        val info = packageManager.getPackageInfo(packageName, 0)
+                        result.success(info.versionName.orEmpty())
+                    } catch (error: Exception) {
+                        result.error("APP_VERSION_FAILED", error.message, null)
+                    }
+                }
                 "getDeviceProfile" -> result.success(
                     mapOf(
                         "marketName" to getMarketDeviceName(),
@@ -103,9 +192,18 @@ class MainActivity : FlutterActivity() {
         )
         appManagerChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "getInstalledApps" -> mediaExecutor.execute {
+                "getInstalledApps", "getInstalledAppsIfChanged" -> mediaExecutor.execute {
                     try {
+                        @Suppress("DEPRECATION")
+                        val signature = packageManager.getInstalledPackages(0)
+                            .map { "${it.packageName}:${it.lastUpdateTime}:${it.applicationInfo?.enabled}" }
+                            .sorted().joinToString("|")
+                        if (call.method == "getInstalledAppsIfChanged" && signature == installedAppsSignature) {
+                            runOnUiThread { result.success(null) }
+                            return@execute
+                        }
                         val apps = getInstalledApps()
+                        installedAppsSignature = signature
                         runOnUiThread { result.success(apps) }
                     } catch (error: Exception) {
                         runOnUiThread {
@@ -185,6 +283,38 @@ class MainActivity : FlutterActivity() {
         )
         linksChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
+                "openShoppingLink" -> {
+                    val uri = android.net.Uri.parse(call.arguments as? String ?: "")
+                    val host = uri.host.orEmpty().lowercase()
+                    fun domain(name: String) = host == name || host.endsWith(".$name")
+                    val web = uri.scheme in listOf("https", "http") && uri.userInfo == null
+                    val target = when {
+                        web && (domain("jd.com") || domain("3.cn")) -> "com.jingdong.app.mall"
+                        web && (domain("taobao.com") || domain("tmall.com") || domain("tb.cn")) -> "com.taobao.taobao"
+                        web && (domain("yangkeduo.com") || domain("pinduoduo.com")) -> "com.xunmeng.pinduoduo"
+                        uri.scheme == "openapp.jdmobile" -> "com.jingdong.app.mall"
+                        uri.scheme == "taobao" -> "com.taobao.taobao"
+                        uri.scheme == "pinduoduo" -> "com.xunmeng.pinduoduo"
+                        else -> null
+                    }
+                    if (target == null || host.isEmpty() || uri.userInfo != null) {
+                        result.success(false)
+                    } else {
+                        val destination = if (web && target == "com.jingdong.app.mall") {
+                            val params = org.json.JSONObject().put("category", "jump").put("des", "m").put("url", uri.toString())
+                            android.net.Uri.parse("openapp.jdmobile://virtual?params=${android.net.Uri.encode(params.toString())}")
+                        } else uri
+                        try {
+                            startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, destination)
+                                .addCategory(android.content.Intent.CATEGORY_BROWSABLE).setPackage(target))
+                            result.success(true)
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            result.success(false)
+                        } catch (_: SecurityException) {
+                            result.success(false)
+                        }
+                    }
+                }
                 "getInitialLink" -> {
                     val link = initialLink
                     initialLink = null
@@ -194,6 +324,8 @@ class MainActivity : FlutterActivity() {
             }
         }
     }
+
+    private var installedAppsSignature: String? = null
 
     private fun getInstalledApps(): List<Map<String, Any>> {
         val pm = packageManager
@@ -266,6 +398,8 @@ class MainActivity : FlutterActivity() {
         val result = avatarResult ?: return
         avatarResult = null
         val isMessageImage = pickingMessageImage
+        val isTextDocument = pickingTextDocument
+        pickingTextDocument = false
         val uri = data?.data
         if (resultCode != android.app.Activity.RESULT_OK || uri == null) { result.success(null); return }
         mediaExecutor.execute {
@@ -275,12 +409,22 @@ class MainActivity : FlutterActivity() {
                     val buffer = ByteArray(8192)
                     var count = input.read(buffer)
                     while (count != -1) {
-                        if (output.size() + count > 16 * 1024 * 1024) throw IllegalArgumentException("Image is too large")
+                        val limit = if (isTextDocument) 256 * 1024 else 16 * 1024 * 1024
+                        if (output.size() + count > limit) throw IllegalArgumentException("File is too large")
                         output.write(buffer, 0, count)
                         count = input.read(buffer)
                     }
                     output.toByteArray()
                 } ?: throw IllegalArgumentException("Image unavailable")
+                if (isTextDocument) {
+                    val text = Charsets.UTF_8.newDecoder()
+                        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                        .decode(java.nio.ByteBuffer.wrap(bytes)).toString().removePrefix("\uFEFF")
+                    require(text.length <= 100000 && !text.contains('\u0000')) { "Invalid text document" }
+                    runOnUiThread { result.success(text) }
+                    return@execute
+                }
                 val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalArgumentException("Invalid image")
@@ -380,15 +524,11 @@ class MainActivity : FlutterActivity() {
 
     private fun getCustomOsName(): String {
         // Vivo / iQOO (OriginOS / Funtouch OS)
-        val vivoVer = getSystemProperty("ro.vivo.os.version")
-        val vivoName = getSystemProperty("ro.vivo.os.name")
-        if (vivoVer.isNotBlank()) {
-            val prefix = if (vivoName.contains("funtouch", ignoreCase = true)) "Funtouch OS" else "OriginOS"
-            return "$prefix $vivoVer"
-        }
-        val vivoDisplay = getSystemProperty("ro.vivo.os.build.display.id")
-        if (vivoDisplay.startsWith("OriginOS", ignoreCase = true) ||
-            vivoDisplay.startsWith("Funtouch", ignoreCase = true)) return vivoDisplay
+        vivoOsName(
+            getSystemProperty("ro.vivo.os.build.display.id"),
+            getSystemProperty("ro.vivo.os.name"),
+            getSystemProperty("ro.vivo.os.version"),
+        )?.let { return it }
 
         // Xiaomi / Redmi (HyperOS / MIUI)
         val hyperOs = getSystemProperty("ro.mi.os.version.name")

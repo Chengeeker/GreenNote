@@ -207,39 +207,64 @@ class _GoodsRankingBodyState extends ConsumerState<GoodsRankingBody> {
     bool selected = false,
     bool compact = false,
     String? semanticsLabel,
-  }) => Expanded(
-    child: Semantics(
-      label: semanticsLabel ?? label,
-      button: true,
-      excludeSemantics: true,
-      child: TextButton(
-        onPressed: onTap,
-        style: TextButton.styleFrom(
-          foregroundColor: selected
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(context).colorScheme.onSurfaceVariant,
-          minimumSize: Size(0, compact ? 44 : 48),
-          padding: EdgeInsets.symmetric(
-            vertical: compact ? 3 : 10,
-            horizontal: 4,
+  }) {
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final foreground = selected
+        ? theme.colorScheme.primary
+        : compact
+        ? (dark ? Colors.white : theme.colorScheme.onSurface)
+        : theme.colorScheme.onSurfaceVariant;
+    return Expanded(
+      child: Semantics(
+        label: semanticsLabel ?? label,
+        button: true,
+        excludeSemantics: true,
+        child: TextButton(
+          onPressed: onTap,
+          style: TextButton.styleFrom(
+            foregroundColor: foreground,
+            minimumSize: Size(0, compact ? 44 : 48),
+            padding: EdgeInsets.symmetric(
+              vertical: compact ? 3 : 10,
+              horizontal: 4,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (compact && icon == Icons.chat_bubble_outline)
+                CustomPaint(
+                  key: const ValueKey('ranking-toolbar-comment-glyph'),
+                  size: const Size.square(22),
+                  painter: _ToolbarCommentPainter(foreground),
+                )
+              else
+                Icon(
+                  icon,
+                  size: compact ? 22 : 25,
+                  color: compact ? foreground : null,
+                ),
+              SizedBox(height: compact ? 0 : 4),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: compact ? 10 : 12,
+                  height: compact ? 1 : null,
+                  fontWeight: compact ? FontWeight.w400 : null,
+                  color: compact && dark && !selected
+                      ? const Color(0xFFCCCCCC)
+                      : null,
+                ),
+              ),
+            ],
           ),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: compact ? 22 : 25),
-            SizedBox(height: compact ? 0 : 4),
-            Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: compact ? 10 : 12),
-            ),
-          ],
-        ),
       ),
-    ),
-  );
+    );
+  }
 
   Widget _header(int itemCount) {
     final cover = communityText(info, ['cover']);
@@ -651,7 +676,11 @@ class _GoodsRankingBodyState extends ConsumerState<GoodsRankingBody> {
       appSettingsProvider.select((state) => state.useLiquidGlassNavBar),
     );
     final height =
-        48.0 + (MediaQuery.textScalerOf(context).scale(12) - 12).clamp(0, 24);
+        44.0 + (MediaQuery.textScalerOf(context).scale(12) - 12).clamp(0, 24);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final toolbarColor = dark
+        ? Colors.white
+        : Theme.of(context).colorScheme.onSurface;
     final userAction = communityMap(data['userAction']);
     return Stack(
       children: [
@@ -680,7 +709,7 @@ class _GoodsRankingBodyState extends ConsumerState<GoodsRankingBody> {
         Positioned(
           left: 20,
           right: 20,
-          bottom: 12,
+          bottom: 20,
           child: SafeArea(
             top: false,
             child: Row(
@@ -688,14 +717,36 @@ class _GoodsRankingBodyState extends ConsumerState<GoodsRankingBody> {
                 Expanded(
                   flex: 9,
                   child: _capsule(
-                    TextButton.icon(
+                    TextButton(
                       onPressed: () => _write('comment', _comment),
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                      label: const Text('写评论'),
                       style: TextButton.styleFrom(
-                        foregroundColor: Theme.of(context)
-                            .colorScheme
-                            .onSurface,
+                        alignment: Alignment.centerLeft,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        foregroundColor: dark
+                            ? const Color(0xFFCCCCCC)
+                            : toolbarColor,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.drive_file_rename_outline,
+                            size: 20,
+                            color: toolbarColor,
+                          ),
+                          const SizedBox(width: 4),
+                          const Flexible(
+                            child: Text(
+                              '写评论',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     height,
@@ -706,44 +757,50 @@ class _GoodsRankingBodyState extends ConsumerState<GoodsRankingBody> {
                 Expanded(
                   flex: 12,
                   child: _capsule(
-                    Row(
-                      children: [
-                        _action(
-                          communityFlag(userAction['like'])
-                              ? Icons.thumb_up
-                              : Icons.thumb_up_outlined,
-                          '${data['likenum'] ?? 0}',
-                          () => _write('like', () => _toggleFeedAction(false)),
-                          compact: true,
-                          semanticsLabel: '点赞，${data['likenum'] ?? 0}',
-                          selected: communityFlag(userAction['like']),
-                        ),
-                        _action(
-                          Icons.chat_bubble_outline,
-                          '${data['replynum'] ?? 0}',
-                          _comments,
-                          compact: true,
-                          semanticsLabel: '评论，${data['replynum'] ?? 0}',
-                        ),
-                        _action(
-                          communityFlag(userAction['collect'])
-                              ? Icons.star
-                              : Icons.star_border,
-                          '${info['fav_num'] ?? 0}',
-                          () =>
-                              _write('favorite', () => _toggleFeedAction(true)),
-                          compact: true,
-                          semanticsLabel: '收藏，${info['fav_num'] ?? 0}',
-                          selected: communityFlag(userAction['collect']),
-                        ),
-                        _action(
-                          Icons.refresh_rounded,
-                          '${data['forwardnum'] ?? 0}',
-                          _copyInvite,
-                          compact: true,
-                          semanticsLabel: '分享榜单链接',
-                        ),
-                      ],
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        children: [
+                          _action(
+                            communityFlag(userAction['like'])
+                                ? Icons.thumb_up
+                                : Icons.thumb_up_outlined,
+                            '${data['likenum'] ?? 0}',
+                            () =>
+                                _write('like', () => _toggleFeedAction(false)),
+                            compact: true,
+                            semanticsLabel: '点赞，${data['likenum'] ?? 0}',
+                            selected: communityFlag(userAction['like']),
+                          ),
+                          _action(
+                            Icons.chat_bubble_outline,
+                            '${data['replynum'] ?? 0}',
+                            _comments,
+                            compact: true,
+                            semanticsLabel: '评论，${data['replynum'] ?? 0}',
+                          ),
+                          _action(
+                            communityFlag(userAction['collect'])
+                                ? Icons.star
+                                : Icons.star_border,
+                            '${info['fav_num'] ?? 0}',
+                            () => _write(
+                              'favorite',
+                              () => _toggleFeedAction(true),
+                            ),
+                            compact: true,
+                            semanticsLabel: '收藏，${info['fav_num'] ?? 0}',
+                            selected: communityFlag(userAction['collect']),
+                          ),
+                          _action(
+                            Icons.refresh_rounded,
+                            '${data['forwardnum'] ?? 0}',
+                            _copyInvite,
+                            compact: true,
+                            semanticsLabel: '分享榜单链接',
+                          ),
+                        ],
+                      ),
                     ),
                     height,
                     glass,
@@ -756,6 +813,39 @@ class _GoodsRankingBodyState extends ConsumerState<GoodsRankingBody> {
       ],
     );
   }
+}
+
+class _ToolbarCommentPainter extends CustomPainter {
+  const _ToolbarCommentPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(
+      Path()
+        ..moveTo(22, 12)
+        ..cubicTo(22, 6.5, 17.5, 2, 12, 2)
+        ..cubicTo(6.5, 2, 2, 6.5, 2, 12)
+        ..cubicTo(2, 17.5, 6.5, 22, 12, 22)
+        ..lineTo(18.5, 22)
+        ..quadraticBezierTo(22, 22, 22, 18.5)
+        ..close(),
+      stroke,
+    );
+    canvas.drawLine(const Offset(7, 9), const Offset(17, 9), stroke);
+    canvas.drawLine(const Offset(7, 14), const Offset(14, 14), stroke);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ToolbarCommentPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class _RankMedal extends StatelessWidget {

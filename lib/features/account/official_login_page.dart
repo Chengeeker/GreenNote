@@ -306,7 +306,6 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
                   const Text('需要人机验证或无法直接登录时，可在酷安官方网页中完成登录。'),
                 ],
                 const SizedBox(height: 24),
-                const Divider(),
                 OutlinedButton.icon(
                   onPressed: _busy
                       ? null

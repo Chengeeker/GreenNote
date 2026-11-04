@@ -24,6 +24,28 @@ class MockChannelApi implements CoolapkApi {
   final String currentUid;
   @override
   String get notificationSessionKey => 'session-$currentUid';
+  final favoriteActions = <String>[];
+  @override
+  Future<List<FeedCollection>> getFeedCollections(
+    String id, {
+    required String scope,
+  }) async => [
+    FeedCollection.fromJson({'id': '1', 'title': '数码资料'}),
+  ];
+  @override
+  Future<void> updateFeedCollections(
+    String id, {
+    required List<String> selected,
+    required List<String> cancelled,
+    required String scope,
+    CoolapkFeed? feed,
+  }) async => favoriteActions.add('collections:$id:${selected.join(',')}');
+  @override
+  Future<void> favoriteFeed(
+    String id, {
+    required bool favorited,
+    CoolapkFeed? feed,
+  }) async => favoriteActions.add('favorite:$id:$favorited');
   String? openedUserSpaceUid;
 
   @override
@@ -585,6 +607,17 @@ void main() {
         expect(find.byIcon(Icons.edit_outlined), findsOneWidget);
         expect(find.byIcon(Icons.repeat_rounded), findsOneWidget);
         expect(find.byIcon(Icons.star_outline_rounded), findsOneWidget);
+        await tester.longPress(find.byIcon(Icons.star_outline_rounded));
+        await tester.pumpAndSettle();
+        expect(api.favoriteActions, isEmpty);
+        expect(find.text('选择收藏夹'), findsOneWidget);
+        await tester.tap(find.text('数码资料'));
+        await tester.tap(find.text('完成'));
+        await tester.pumpAndSettle();
+        expect(api.favoriteActions, ['collections:601:1']);
+        await tester.tap(find.byIcon(Icons.star_rounded));
+        await tester.pumpAndSettle();
+        expect(api.favoriteActions.last, 'favorite:601:true');
         expect(
           find.byKey(const ValueKey('feed-detail-action-glass')),
           findsNothing,

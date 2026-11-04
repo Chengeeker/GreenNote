@@ -216,7 +216,6 @@ class _StorageSettingsPageState extends ConsumerState<StorageSettingsPage> {
                     isVideo: false,
                   ),
                 ),
-                const Divider(height: 1, indent: 72),
                 ListTile(
                   leading: Icon(
                     Icons.video_library_outlined,

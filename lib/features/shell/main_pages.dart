@@ -9,6 +9,7 @@ import 'package:easy_refresh/easy_refresh.dart';
 
 import '../../core/widgets/review_refresh_header.dart';
 import '../../core/widgets/cached_network_image.dart';
+import '../../core/widgets/editor_keyboard.dart';
 import '../../core/utils/app_dialog.dart';
 import '../../core/utils/app_toast.dart';
 import '../../core/design_system/components/review_frosted_app_bar.dart';
@@ -29,7 +30,10 @@ import '../../core/widgets/app_avatar.dart';
 import '../settings/app_settings_page.dart';
 import '../feed/feed_pages.dart';
 import '../shared/api_list_page.dart';
+import '../shared/user_qr_card_page.dart';
 import '../shared/app_management_page.dart';
+import '../shared/account_topic_pages.dart';
+import '../shared/rating_square_page.dart';
 import '../shared/discovery_channel_page.dart';
 import '../../core/utils/haptic_feedback_util.dart';
 import '../../core/utils/coolapk_url_handler.dart';
@@ -2757,6 +2761,8 @@ class _AccountPageState extends State<AccountPage> {
     builder: (context, snapshot) {
       final data = {...user, ...?snapshot.data};
       final name = _first(data, ['username', 'userName', 'name']);
+      final avatar = _first(data, ['userAvatar', 'avatar']);
+      final profileAvatar = avatar.isEmpty ? widget.api.currentUserAvatar : avatar;
       final level = _first(data, ['level', 'userLevel']);
       final experience = int.tryParse(_first(data, ['experience', 'exp']));
       final nextExperience = int.tryParse(
@@ -2795,9 +2801,7 @@ class _AccountPageState extends State<AccountPage> {
                 )
               else
                 AppAvatar(
-                  url: _first(data, ['userAvatar', 'avatar']).isEmpty
-                      ? widget.api.currentUserAvatar
-                      : _first(data, ['userAvatar', 'avatar']),
+                  url: profileAvatar,
                   api: widget.api,
                   size: 72,
                   name: name,
@@ -2901,12 +2905,24 @@ class _AccountPageState extends State<AccountPage> {
                 ),
                 const SizedBox(width: 4),
               ],
-              if (!(anonymous && publicIdentity != null)) ...[
+              if (!anonymous && loggedIn)
+                IconButton(
+                  tooltip: '我的二维码名片',
+                  icon: const Icon(Icons.qr_code_2_rounded, size: 28),
+                  onPressed: uid.isEmpty
+                      ? null
+                      : () => openUserQrCard(
+                          context,
+                          widget.api,
+                          uid: uid,
+                          name: name,
+                          avatar: profileAvatar,
+                        ),
+                )
+              else if (!(anonymous && publicIdentity != null)) ...[
                 Icon(
                   anonymous
                       ? Icons.edit_outlined
-                      : loggedIn
-                      ? Icons.qr_code_2_rounded
                       : Icons.login_rounded,
                   size: 28,
                 ),
@@ -3034,8 +3050,7 @@ class _AccountPageState extends State<AccountPage> {
           children: [
             Text(
               value.isEmpty ? '—' : value,
-              style: Theme.of(context).textTheme.titleLarge
-                  ?.copyWith(fontSize: 22, fontWeight: FontWeight.w500),
+              style: Theme.of(context).textTheme.titleMedium,
             ),
             Text(label, style: Theme.of(context).textTheme.bodySmall),
           ],
@@ -3253,7 +3268,12 @@ class _AccountPageState extends State<AccountPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         for (final item in items.take(4))
-                          Expanded(child: _accountMiniCard(item)),
+                          Expanded(
+                            child: _accountMiniCard(
+                              item,
+                              followedTopic: title == '我关注的话题',
+                            ),
+                          ),
                         for (var index = items.length; index < 4; index++)
                           const Spacer(),
                       ],
@@ -3313,7 +3333,19 @@ class _AccountPageState extends State<AccountPage> {
     _ => '暂无最近访问内容',
   };
 
-  Widget _accountMiniCard(Map<String, dynamic> item) {
+  String _accountMiniSubtitle(
+    Map<String, dynamic> item, {
+    required bool followedTopic,
+  }) {
+    if (!followedTopic) return accountEntityCategory(item);
+    final count = accountTopicCount(item);
+    return count.isEmpty ? '' : '$count条动态';
+  }
+
+  Widget _accountMiniCard(
+    Map<String, dynamic> item, {
+    required bool followedTopic,
+  }) {
     final type = _first(item, ['entityType', 'entity_type']).toLowerCase();
     final title = _first(item, [
       'title',
@@ -3323,15 +3355,7 @@ class _AccountPageState extends State<AccountPage> {
       'apkName',
       'tag',
     ]);
-    final count = _first(item, [
-      'feedNumTxt',
-      'feed_num_txt',
-      'hotNumTxt',
-      'hot_num_txt',
-    ]);
-    final subtitle = count.isNotEmpty
-        ? (type.contains('topic') ? '$count条动态' : count)
-        : _first(item, ['typeName', 'subTitle', 'description']);
+    final subtitle = _accountMiniSubtitle(item, followedTopic: followedTopic);
     return InkWell(
       onTap: () => _openAccountItem(item, type),
       borderRadius: BorderRadius.circular(12),
@@ -3348,16 +3372,20 @@ class _AccountPageState extends State<AccountPage> {
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
-            if (subtitle.isNotEmpty)
+            if (subtitle.isNotEmpty) ...[
+              const SizedBox(height: 6),
               Text(
                 subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontSize: 11,
+                  height: 1.4,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
+            ],
           ],
         ),
       ),
@@ -3601,7 +3629,14 @@ class _AccountPageState extends State<AccountPage> {
   void _openRoute(String path, Map<String, dynamic> query) {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => path.contains('hitHistoryList')
+        builder: (_) =>
+            path.endsWith('/myFollowTopicList') ||
+                path.endsWith('/recentHistoryList')
+            ? AccountTopicListPage(
+                api: widget.api,
+                followedTopics: path.endsWith('/myFollowTopicList'),
+              )
+            : path.contains('hitHistoryList')
             ? CommunityLibraryPage(
                 api: widget.api,
                 library: CommunityLibrary.history,
@@ -3745,7 +3780,7 @@ class _AccountPageState extends State<AccountPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.only(left: 5, bottom: 8),
+              padding: const EdgeInsetsDirectional.only(start: 14, bottom: 8),
               child: Text(
                 title,
                 style: Theme.of(context).textTheme.titleMedium,
@@ -4147,7 +4182,14 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
     text: widget.initialMessage ?? '',
   );
   final FocusNode _focusNode = FocusNode();
+  final _title = TextEditingController();
+  final _voteOptions = List.generate(4, (_) => TextEditingController());
   final List<_ComposePictureItem> _pictures = [];
+  _ComposePictureItem? _cover;
+  bool _multiVote = false;
+  int _voteDays = 7, _voteLimit = 1;
+  String _seller = '个人', _price = '', _productLink = '';
+  String? _pictureCategory, _productTitle;
   bool _isCoverMode = true; // 大封面 (true) vs 九宫格 (false)
   String? _selectedTopic;
   String _visibility = 'public'; // public, private, friends
@@ -4168,18 +4210,60 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
     }
     _selectedTopic = widget.initialTag;
     _productId = widget.initialProductId;
-    _message.addListener(() => setState(() {}));
+    _draftFlags = (_canSubmit, _hasDraft);
+    _message.addListener(_draftChanged);
+    _title.addListener(_draftChanged);
+    for (final option in _voteOptions) {
+      option.addListener(_draftChanged);
+    }
+  }
+
+  late (bool, bool) _draftFlags;
+  void _draftChanged() {
+    final flags = (_canSubmit, _hasDraft);
+    if (flags == _draftFlags) return;
+    setState(() => _draftFlags = flags);
   }
 
   @override
   void dispose() {
     _message.dispose();
     _focusNode.dispose();
+    _title.dispose();
+    for (final option in _voteOptions) {
+      option.dispose();
+    }
     super.dispose();
   }
 
-  bool get _canSubmit => _message.text.trim().isNotEmpty || _pictures.isNotEmpty;
-  bool get _hasDraft => _message.text.trim().isNotEmpty || _pictures.isNotEmpty;
+  bool get _canSubmit => switch (_type) {
+    'article' =>
+      _title.text.trim().isNotEmpty &&
+          (_message.text.trim().isNotEmpty || _pictures.isNotEmpty),
+    'picture' => _pictures.isNotEmpty && _pictureCategory != null,
+    'ershou' =>
+      _title.text.trim().isNotEmpty &&
+          _message.text.trim().isNotEmpty &&
+          _pictures.isNotEmpty &&
+          (double.tryParse(_price) ?? 0) > 0,
+    'vote' =>
+      _title.text.trim().isNotEmpty &&
+          (_multiVote ? _voteOptions : _voteOptions.take(2)).every(
+            (o) => o.text.trim().isNotEmpty,
+          ),
+    _ => _message.text.trim().isNotEmpty || _pictures.isNotEmpty,
+  };
+  bool get _hasDraft =>
+      _message.text.trim().isNotEmpty ||
+      _pictures.isNotEmpty ||
+      _cover != null ||
+      _title.text.isNotEmpty ||
+      _voteOptions.any((o) => o.text.isNotEmpty) ||
+      _price.isNotEmpty ||
+      _productLink.isNotEmpty ||
+      _productTitle != null ||
+      _pictureCategory != null ||
+      _location != null;
 
   String get _visibilityLabel {
     switch (_visibility) {
@@ -4195,7 +4279,25 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
 
   Future<void> _submit() async {
     final text = _message.text.trim();
-    if ((text.isEmpty && _pictures.isEmpty) || _busy) return;
+    if (!_canSubmit || _busy) return;
+    if (!widget.api.hasCookie) {
+      AppToast.show(context, widget.api.loginRequiredMessage);
+      return;
+    }
+    if (_visibility != 'public') {
+      AppToast.show(context, '当前发布接口尚不支持此可见范围，请改为公开后发布');
+      return;
+    }
+    if (_type == 'vote') {
+      final options = (_multiVote ? _voteOptions : _voteOptions.take(2))
+          .map((o) => o.text.trim())
+          .toList();
+      if (options.toSet().length != options.length) {
+        AppToast.show(context, '投票选项不能重复');
+        return;
+      }
+    }
+    final session = _type == 'feed' ? null : widget.api.notificationSessionKey;
     HapticFeedbackUtil.light();
     setState(() => _busy = true);
     try {
@@ -4210,16 +4312,70 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
         }
       }
 
-      await widget.api.createFeed(
-        text.isNotEmpty ? text : '分享图片',
-        pic: uploadedUrls.isNotEmpty ? uploadedUrls.join(',') : null,
-        type: _type,
-        extraTitle: _extraTitle,
-        tag: _selectedTopic,
-        location: _location,
-        productId: _productId,
-        voteId: _voteId,
-      );
+      if (_type != 'feed') {
+        if (_cover?.url == null && _cover?.bytes != null) {
+          _cover!.url = await widget.api.uploadFeedImage(_cover!.bytes!);
+        }
+        if (session != widget.api.notificationSessionKey ||
+            !await widget.api.notificationSessionMatches(session!)) {
+          throw StateError('账号已切换，请重新进入发布页');
+        }
+        await widget.api.request(
+          '/v6/feed/createFeed',
+          method: 'POST',
+          body: {
+            'message': _type == 'vote'
+                ? _title.text.trim()
+                : text.isEmpty
+                ? '分享图片'
+                : text,
+            'type': _type,
+            'pic': uploadedUrls.join(','),
+            if (_selectedTopic != null) 'tag': _selectedTopic,
+            if (_productId != null) ...{
+              'product_id': _productId,
+              'targetType': 'product_phone',
+              'targetId': _productId,
+            },
+            if (_location != null) 'location': _location,
+            if (_type == 'article') ...{
+              'extra_title': _title.text.trim(),
+              'message_title': _title.text.trim(),
+              if (_cover?.url != null) 'message_cover': _cover!.url,
+            },
+            if (_type == 'picture') 'tag': _pictureCategory,
+            if (_type == 'ershou') ...{
+              'extra_title': _title.text.trim(),
+              'ershou_price': _price,
+              'ershou_link': _productLink,
+              'ershou_deal_type': _seller == '个人' ? '0' : '1',
+            },
+            if (_type == 'vote') ...{
+              'extra_title': _title.text.trim(),
+              'vote_type': _multiVote ? '1' : '0',
+              'vote_message': text,
+              'vote_end_time':
+                  '${DateTime.now().millisecondsSinceEpoch ~/ 1000 + _voteDays * 86400}',
+              'vote_max_select_num': _multiVote ? '$_voteLimit' : '1',
+              'vote_min_select_num': '1',
+              for (final (i, option)
+                  in (_multiVote ? _voteOptions : _voteOptions.take(2)).indexed)
+                'vote_option[$i]': option.text.trim(),
+            },
+          },
+        );
+      } else {
+        await widget.api.createFeed(
+          text.isNotEmpty ? text : '分享图片',
+          pic: uploadedUrls.isNotEmpty ? uploadedUrls.join(',') : null,
+          type: _type,
+          extraTitle: _extraTitle,
+          tag: _selectedTopic,
+          location: _location,
+          productId: _productId,
+          voteId: _voteId,
+        );
+      }
       if (mounted) {
         HapticFeedbackUtil.medium();
         AppToast.show(context, '发布成功');
@@ -4233,6 +4389,7 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
   }
 
   Future<void> _handleClose() async {
+    if (_busy) return;
     if (_hasDraft) {
       final discard = await showDialog<bool>(
         context: context,
@@ -4246,9 +4403,7 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
             ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.redAccent,
-              ),
+              style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
               child: const Text('放弃'),
             ),
           ],
@@ -4262,10 +4417,10 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
     }
   }
 
-  Future<void> _pickImage() async {
+  Future<void> _pickImage({bool cover = false}) async {
     HapticFeedbackUtil.light();
-    final maxCount = _isCoverMode ? 1 : 9;
-    if (_pictures.length >= maxCount) {
+    final maxCount = _type == 'feed' && _isCoverMode ? 1 : 9;
+    if (!cover && _pictures.length >= maxCount) {
       AppToast.show(
         context,
         _isCoverMode ? '大封面模式只能添加 1 张图片' : '九宫格模式最多添加 9 张图片',
@@ -4277,7 +4432,11 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
           .invokeMethod<Uint8List>('pickImage');
       if (bytes != null && mounted) {
         setState(() {
-          if (_isCoverMode) {
+          if (cover) {
+            _cover = _ComposePictureItem(bytes: bytes);
+            return;
+          }
+          if (_type == 'feed' && _isCoverMode) {
             _pictures.clear();
           }
           _pictures.add(_ComposePictureItem(bytes: bytes));
@@ -4319,109 +4478,137 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                 .toList();
             return Material(
               color: isDark ? const Color(0xFF222226) : Colors.white,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(20),
+              ),
               child: SizedBox(
                 height: MediaQuery.of(ctx).size.height * 0.65,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                   child: Column(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.white24 : Colors.black12,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        '选择发布的板块 / 话题',
-                        style: TextStyle(
-                          fontSize: 16.5,
-                          fontWeight: FontWeight.bold,
-                          color: isDark ? Colors.white : Colors.black87,
+                      Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white24 : Colors.black12,
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.of(ctx).pop(),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '选择发布的板块 / 话题',
+                            style: TextStyle(
+                              fontSize: 16.5,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () => Navigator.of(ctx).pop(),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        decoration: InputDecoration(
+                          prefixIcon: const Icon(Icons.search_rounded),
+                          hintText: '搜索或输入自定义话题…',
+                          filled: true,
+                          fillColor: isDark
+                              ? const Color(0xFF2A2A2E)
+                              : const Color(0xFFF0F0F2),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                        ),
+                        onChanged: (val) => setModalState(() => query = val),
+                        onSubmitted: (val) {
+                          if (val.trim().isNotEmpty) {
+                            HapticFeedbackUtil.selection();
+                            Navigator.of(ctx).pop(val.trim());
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount:
+                              filtered.length +
+                              (query.trim().isNotEmpty &&
+                                      !filtered.contains(query.trim())
+                                  ? 1
+                                  : 0),
+                          separatorBuilder: (_, _) => Divider(
+                            height: 0.5,
+                            color: isDark ? Colors.white12 : Colors.black12,
+                          ),
+                          itemBuilder: (ctx, index) {
+                            if (index == filtered.length) {
+                              return ListTile(
+                                leading: const Icon(
+                                  Icons.add_rounded,
+                                  color: Color(0xFF34D399),
+                                ),
+                                title: Text('使用自定义话题 "#${query.trim()}#"'),
+                                onTap: () {
+                                  HapticFeedbackUtil.selection();
+                                  Navigator.of(ctx).pop(query.trim());
+                                },
+                              );
+                            }
+                            final topic = filtered[index];
+                            final isChosen = _selectedTopic == topic;
+                            return ListTile(
+                              leading: Icon(
+                                Icons.tag_rounded,
+                                color: isChosen
+                                    ? const Color(0xFF34D399)
+                                    : (isDark
+                                          ? Colors.white54
+                                          : Colors.black54),
+                              ),
+                              title: Text(
+                                topic,
+                                style: TextStyle(
+                                  color: isChosen
+                                      ? const Color(0xFF34D399)
+                                      : (isDark
+                                            ? Colors.white
+                                            : Colors.black87),
+                                  fontWeight: isChosen
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                              trailing: isChosen
+                                  ? const Icon(
+                                      Icons.check_rounded,
+                                      color: Color(0xFF34D399),
+                                    )
+                                  : null,
+                              onTap: () {
+                                HapticFeedbackUtil.selection();
+                                Navigator.of(ctx).pop(topic);
+                              },
+                            );
+                          },
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    decoration: InputDecoration(
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      hintText: '搜索或输入自定义话题…',
-                      filled: true,
-                      fillColor: isDark ? const Color(0xFF2A2A2E) : const Color(0xFFF0F0F2),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    ),
-                    onChanged: (val) => setModalState(() => query = val),
-                    onSubmitted: (val) {
-                      if (val.trim().isNotEmpty) {
-                        HapticFeedbackUtil.selection();
-                        Navigator.of(ctx).pop(val.trim());
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: ListView.separated(
-                      itemCount: filtered.length + (query.trim().isNotEmpty && !filtered.contains(query.trim()) ? 1 : 0),
-                      separatorBuilder: (_, _) => Divider(
-                        height: 0.5,
-                        color: isDark ? Colors.white12 : Colors.black12,
-                      ),
-                      itemBuilder: (ctx, index) {
-                        if (index == filtered.length) {
-                          return ListTile(
-                            leading: const Icon(Icons.add_rounded, color: Color(0xFF34D399)),
-                            title: Text('使用自定义话题 "#${query.trim()}#"'),
-                            onTap: () {
-                              HapticFeedbackUtil.selection();
-                              Navigator.of(ctx).pop(query.trim());
-                            },
-                          );
-                        }
-                        final topic = filtered[index];
-                        final isChosen = _selectedTopic == topic;
-                        return ListTile(
-                          leading: Icon(
-                            Icons.tag_rounded,
-                            color: isChosen ? const Color(0xFF34D399) : (isDark ? Colors.white54 : Colors.black54),
-                          ),
-                          title: Text(
-                            topic,
-                            style: TextStyle(
-                              color: isChosen ? const Color(0xFF34D399) : (isDark ? Colors.white : Colors.black87),
-                              fontWeight: isChosen ? FontWeight.bold : FontWeight.normal,
-                            ),
-                          ),
-                          trailing: isChosen
-                              ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
-                              : null,
-                          onTap: () {
-                            HapticFeedbackUtil.selection();
-                            Navigator.of(ctx).pop(topic);
-                          },
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ),
-        );
+            );
           },
         );
       },
@@ -4444,57 +4631,66 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
             child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '谁可以看',
-                style: TextStyle(
-                  fontSize: 16.5,
-                  fontWeight: FontWeight.bold,
-                  color: isDark ? Colors.white : Colors.black87,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '谁可以看',
+                  style: TextStyle(
+                    fontSize: 16.5,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black87,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              ListTile(
-                leading: const Icon(Icons.public_rounded),
-                title: const Text('公开'),
-                subtitle: const Text('所有人可见（默认）'),
-                trailing: _visibility == 'public'
-                    ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
-                    : null,
-                onTap: () {
-                  HapticFeedbackUtil.selection();
-                  Navigator.of(ctx).pop('public');
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.lock_outline_rounded),
-                title: const Text('仅自己可见'),
-                subtitle: const Text('私密动态，仅本人可查阅'),
-                trailing: _visibility == 'private'
-                    ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
-                    : null,
-                onTap: () {
-                  HapticFeedbackUtil.selection();
-                  Navigator.of(ctx).pop('private');
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.people_outline_rounded),
-                title: const Text('好友圈'),
-                subtitle: const Text('仅互相关注的酷友好友可见'),
-                trailing: _visibility == 'friends'
-                    ? const Icon(Icons.check_rounded, color: Color(0xFF34D399))
-                    : null,
-                onTap: () {
-                  HapticFeedbackUtil.selection();
-                  Navigator.of(ctx).pop('friends');
-                },
-              ),
-            ],
+                const SizedBox(height: 16),
+                ListTile(
+                  leading: const Icon(Icons.public_rounded),
+                  title: const Text('公开'),
+                  subtitle: const Text('所有人可见（默认）'),
+                  trailing: _visibility == 'public'
+                      ? const Icon(
+                          Icons.check_rounded,
+                          color: Color(0xFF34D399),
+                        )
+                      : null,
+                  onTap: () {
+                    HapticFeedbackUtil.selection();
+                    Navigator.of(ctx).pop('public');
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.lock_outline_rounded),
+                  title: const Text('仅自己可见'),
+                  subtitle: const Text('私密动态，仅本人可查阅'),
+                  trailing: _visibility == 'private'
+                      ? const Icon(
+                          Icons.check_rounded,
+                          color: Color(0xFF34D399),
+                        )
+                      : null,
+                  onTap: () {
+                    HapticFeedbackUtil.selection();
+                    Navigator.of(ctx).pop('private');
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.people_outline_rounded),
+                  title: const Text('好友圈'),
+                  subtitle: const Text('仅互相关注的酷友好友可见'),
+                  trailing: _visibility == 'friends'
+                      ? const Icon(
+                          Icons.check_rounded,
+                          color: Color(0xFF34D399),
+                        )
+                      : null,
+                  onTap: () {
+                    HapticFeedbackUtil.selection();
+                    Navigator.of(ctx).pop('friends');
+                  },
+                ),
+              ],
+            ),
           ),
-        ),
-      );
+        );
       },
     );
     if (selected != null && mounted) {
@@ -4590,11 +4786,15 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
       builder: (ctx) {
         final isDark = Theme.of(ctx).brightness == Brightness.dark;
         return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+          ),
           child: Container(
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF222226) : Colors.white,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(20),
+              ),
             ),
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
             child: Column(
@@ -4658,10 +4858,18 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     onPressed: () {
                       HapticFeedbackUtil.light();
                       setState(() {
-                        _extraTitle = titleController.text.trim().isEmpty ? null : titleController.text.trim();
-                        _location = locationController.text.trim().isEmpty ? null : locationController.text.trim();
-                        _productId = productController.text.trim().isEmpty ? null : productController.text.trim();
-                        _voteId = voteController.text.trim().isEmpty ? null : voteController.text.trim();
+                        _extraTitle = titleController.text.trim().isEmpty
+                            ? null
+                            : titleController.text.trim();
+                        _location = locationController.text.trim().isEmpty
+                            ? null
+                            : locationController.text.trim();
+                        _productId = productController.text.trim().isEmpty
+                            ? null
+                            : productController.text.trim();
+                        _voteId = voteController.text.trim().isEmpty
+                            ? null
+                            : voteController.text.trim();
                       });
                       Navigator.of(ctx).pop();
                     },
@@ -4691,13 +4899,17 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
               width: 104,
               height: 104,
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF262629) : const Color(0xFFF2F2F4),
+                color: isDark
+                    ? const Color(0xFF262629)
+                    : const Color(0xFFF2F2F4),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(
                 Icons.add_rounded,
                 size: 38,
-                color: isDark ? const Color(0xFF6E6E73) : const Color(0xFFAAAAAA),
+                color: isDark
+                    ? const Color(0xFF6E6E73)
+                    : const Color(0xFFAAAAAA),
               ),
             ),
           ),
@@ -4711,7 +4923,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                   '长按图片可拖动排序',
                   style: TextStyle(
                     fontSize: 13,
-                    color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    color: isDark
+                        ? const Color(0xFF8E8E93)
+                        : const Color(0xFF666666),
                     height: 1.5,
                   ),
                 ),
@@ -4719,7 +4933,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                   '发无关图、色情图将会被禁言',
                   style: TextStyle(
                     fontSize: 13,
-                    color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                    color: isDark
+                        ? const Color(0xFF8E8E93)
+                        : const Color(0xFF666666),
                     height: 1.5,
                   ),
                 ),
@@ -4744,16 +4960,18 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                   width: 104,
                   height: 104,
                   child: _pictures[i].bytes != null
-                      ? Image.memory(
-                          _pictures[i].bytes!,
-                          fit: BoxFit.cover,
-                        )
+                      ? Image.memory(_pictures[i].bytes!, fit: BoxFit.cover)
                       : Image.network(
                           _pictures[i].url ?? '',
                           fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => Container(
-                            color: isDark ? const Color(0xFF2A2A2E) : const Color(0xFFE5E5E5),
-                            child: const Icon(Icons.image_outlined, color: Colors.grey),
+                            color: isDark
+                                ? const Color(0xFF2A2A2E)
+                                : const Color(0xFFE5E5E5),
+                            child: const Icon(
+                              Icons.image_outlined,
+                              color: Colors.grey,
+                            ),
                           ),
                         ),
                 ),
@@ -4772,7 +4990,11 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                       color: Color(0x99000000),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.close_rounded, size: 14, color: Colors.white),
+                    child: const Icon(
+                      Icons.close_rounded,
+                      size: 14,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -4786,13 +5008,17 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
               width: 104,
               height: 104,
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF262629) : const Color(0xFFF2F2F4),
+                color: isDark
+                    ? const Color(0xFF262629)
+                    : const Color(0xFFF2F2F4),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(
                 Icons.add_rounded,
                 size: 38,
-                color: isDark ? const Color(0xFF6E6E73) : const Color(0xFFAAAAAA),
+                color: isDark
+                    ? const Color(0xFF6E6E73)
+                    : const Color(0xFFAAAAAA),
               ),
             ),
           ),
@@ -4815,7 +5041,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: isFeatured
+          color: _type == 'picture'
+              ? (isDark ? const Color(0xFF333333) : const Color(0xFFF0F0F2))
+              : isFeatured
               ? (isDark ? const Color(0xFF1B2A22) : const Color(0xFFE8F5E9))
               : (isDark ? const Color(0xFF222225) : const Color(0xFFF0F0F2)),
           borderRadius: BorderRadius.circular(16),
@@ -4827,7 +5055,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
               Icon(
                 Icons.campaign_rounded,
                 size: 15,
-                color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+                color: isDark
+                    ? const Color(0xFF34D399)
+                    : const Color(0xFF2E7D32),
               ),
               const SizedBox(width: 5),
             ],
@@ -4835,10 +5065,16 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
               title,
               style: TextStyle(
                 fontSize: 12.5,
-                fontWeight: isFeatured ? FontWeight.w600 : FontWeight.normal,
+                fontWeight: _type != 'picture' && isFeatured
+                    ? FontWeight.w600
+                    : FontWeight.normal,
                 color: isFeatured
-                    ? (isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32))
-                    : (isDark ? const Color(0xFFCCCCCC) : const Color(0xFF555555)),
+                    ? (isDark
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFF2E7D32))
+                    : (isDark
+                          ? const Color(0xFFCCCCCC)
+                          : const Color(0xFF555555)),
               ),
             ),
           ],
@@ -4850,10 +5086,38 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
   Widget _buildEmojiKeyboard(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     const commonEmojis = [
-      '滑稽', 'doge', '笑哭', '捂脸', '点赞', '妙啊', '机智', '吃瓜',
-      '微笑', '思考', '流泪', '白眼', '发怒', '疑问', '酷', '偷笑',
-      '爱心', 'OK', '强', '抱拳', '握手', '胜利', '二哈', '黑线',
-      '委屈', '再见', '可怜', '亲亲', '坏笑', '阴险', '傲慢', '害羞',
+      '滑稽',
+      'doge',
+      '笑哭',
+      '捂脸',
+      '点赞',
+      '妙啊',
+      '机智',
+      '吃瓜',
+      '微笑',
+      '思考',
+      '流泪',
+      '白眼',
+      '发怒',
+      '疑问',
+      '酷',
+      '偷笑',
+      '爱心',
+      'OK',
+      '强',
+      '抱拳',
+      '握手',
+      '胜利',
+      '二哈',
+      '黑线',
+      '委屈',
+      '再见',
+      '可怜',
+      '亲亲',
+      '坏笑',
+      '阴险',
+      '傲慢',
+      '害羞',
     ];
 
     return Container(
@@ -4880,7 +5144,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                   '[$emojiName]',
                   style: TextStyle(
                     fontSize: 11,
-                    color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+                    color: isDark
+                        ? const Color(0xFF34D399)
+                        : const Color(0xFF2E7D32),
                   ),
                   textAlign: TextAlign.center,
                   maxLines: 1,
@@ -4894,12 +5160,1043 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
     );
   }
 
+  Future<String?> _editValue(
+    String title,
+    String value, {
+    bool number = false,
+  }) async {
+    final controller = TextEditingController(text: value);
+    final route = DialogRoute<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: number
+              ? const TextInputType.numberWithOptions(decimal: true)
+              : TextInputType.text,
+          decoration: InputDecoration(hintText: title),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    final result = await Navigator.of(context).push(route);
+    unawaited(route.completed.then((_) => controller.dispose()));
+    return result;
+  }
+
+  Future<void> _chooseProduct() async {
+    final item = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RatingSquarePage(api: widget.api, selectOnly: true),
+      ),
+    );
+    if (item == null || !mounted) return;
+    setState(() {
+      _productId = '${item['id']}';
+      _productTitle = '${item['title']}';
+    });
+  }
+
+  void _showArticleMore() => showModalBottomSheet<void>(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.image_outlined),
+            title: const Text('插入图片'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _pickImage();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.devices),
+            title: const Text('关联产品'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _chooseProduct();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.upload_file_outlined),
+            title: const Text('导入文档'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _importDocument();
+            },
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Future<void> _importDocument() async {
+    try {
+      final text = await const MethodChannel('com.green.note/avatar')
+          .invokeMethod<String>('pickTextDocument');
+      if (text == null || !mounted) return;
+      if (_message.text.isNotEmpty) {
+        final replace = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('替换当前正文？'),
+            content: const Text('导入的文档将替换当前正文。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('替换'),
+              ),
+            ],
+          ),
+        );
+        if (replace != true || !mounted) return;
+      }
+      _message.text = text;
+    } catch (_) {
+      if (mounted) AppToast.show(context, '请选择 UTF-8 纯文本文档（可从金山文档导出）');
+    }
+  }
+
+  Widget _typedRow(
+    IconData icon,
+    String label, {
+    String value = '',
+    VoidCallback? onTap,
+    Widget? trailing,
+  }) => InkWell(
+    onTap: _busy ? null : onTap,
+    child: Container(
+      constraints: const BoxConstraints(minHeight: 48),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 25,
+            color: label == _location ? const Color(0xFF009688) : null,
+          ),
+          const SizedBox(width: 14),
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 16))),
+          if (trailing != null)
+            trailing
+          else ...[
+            if (value.isNotEmpty)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width * 0.45,
+                ),
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ),
+            if (onTap != null) const Icon(Icons.chevron_right, size: 25),
+          ],
+        ],
+      ),
+    ),
+  );
+
+  Widget _typedTopicRow() => InkWell(
+    onTap: _busy ? null : _showTopicPicker,
+    child: Container(
+      height: 60,
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: Theme.of(context).dividerColor.withValues(alpha: 0.18),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: const Color(0xFF009688).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Icon(Icons.add, color: Color(0xFF009688), size: 28),
+          ),
+          const SizedBox(width: 10),
+          const Text('发布到', style: TextStyle(fontSize: 16)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _selectedTopic ??
+                  (_type == 'vote' ? '观点的节点会同步关联' : '选择合适的板块会有更多的赞'),
+              textAlign: TextAlign.end,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF888888)),
+            ),
+          ),
+          const Icon(Icons.chevron_right, color: Color(0xFF888888)),
+        ],
+      ),
+    ),
+  );
+
+  Widget _typedField(
+    TextEditingController controller,
+    String hint, {
+    bool title = false,
+    double? height,
+    int? limit,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: SizedBox(
+      height: height,
+      child: Builder(
+        builder: (fieldContext) => TextField(
+          scrollPadding: editorKeyboardScrollPadding(fieldContext),
+          key: ValueKey(title ? 'publish-title' : 'publish-body'),
+          controller: controller,
+          focusNode: title ? null : _focusNode,
+          readOnly: _busy,
+          minLines: height == null ? 1 : null,
+          maxLines: title ? 2 : null,
+          maxLength: limit,
+          style: TextStyle(
+            fontSize: title ? 18 : 15,
+            height: 1.5,
+            fontWeight: title ? FontWeight.w600 : FontWeight.normal,
+          ),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: TextStyle(
+              fontSize: title ? 18 : 15,
+              color: const Color(0xFF808080),
+            ),
+            counterText: '',
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: EdgeInsets.symmetric(vertical: title ? 14 : 10),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _typedMedia({String? caption}) {
+    final size = _type == 'picture' ? 96.0 : 106.0;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    Widget add() => Semantics(
+      button: true,
+      label: '添加图片',
+      child: InkWell(
+        key: const ValueKey('compose-media-add-box'),
+        onTap: _busy ? null : _pickImage,
+        borderRadius: BorderRadius.circular(9),
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: dark ? const Color(0xFF2B2B2D) : const Color(0xFFF0F0F0),
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: const Icon(Icons.add, size: 46, color: Color(0xFF808080)),
+        ),
+      ),
+    );
+    if (_pictures.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            add(),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                caption ?? '长按图片可拖动排序\n发无关图、色情图将会被禁言',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, height: 1.6),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final picture in _pictures)
+            DragTarget<_ComposePictureItem>(
+              key: ObjectKey(picture),
+              onWillAcceptWithDetails: (d) => !_busy && d.data != picture,
+              onAcceptWithDetails: (d) => setState(() {
+                final index = _pictures.indexOf(picture);
+                _pictures.remove(d.data);
+                _pictures.insert(index, d.data);
+              }),
+              builder: (context, candidate, rejected) =>
+                  LongPressDraggable<_ComposePictureItem>(
+                    data: picture,
+                    maxSimultaneousDrags: _busy ? 0 : 1,
+                    feedback: Material(
+                      child: Image.memory(
+                        picture.bytes!,
+                        width: size,
+                        height: size,
+                        fit: BoxFit.cover,
+                        cacheWidth: 320,
+                      ),
+                    ),
+                    childWhenDragging: SizedBox.square(dimension: size),
+                    child: Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(9),
+                          child: Image.memory(
+                            picture.bytes!,
+                            width: size,
+                            height: size,
+                            fit: BoxFit.cover,
+                            cacheWidth: 320,
+                          ),
+                        ),
+                        Positioned(
+                          top: 0,
+                          right: 0,
+                          child: IconButton(
+                            tooltip: '移除图片',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: _busy
+                                ? null
+                                : () =>
+                                      setState(() => _pictures.remove(picture)),
+                            icon: const Icon(Icons.cancel, color: Colors.white),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+            ),
+          if (_pictures.length < 9) add(),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _selectVoteValue({required bool limit}) async {
+    final choices = limit
+        ? List.generate(_voteOptions.length, (i) => i + 1)
+        : [1, 3, 7, 15, 30];
+    final selected = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final n in choices)
+              ListTile(
+                title: Text(limit ? (n == 1 ? '单项' : '最多$n项') : '$n天'),
+                onTap: () => Navigator.pop(ctx, n),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null && mounted) {
+      setState(() {
+        if (limit) {
+          _voteLimit = selected;
+        } else {
+          _voteDays = selected;
+        }
+      });
+    }
+  }
+
+  Widget _typedToolbar() => Container(
+    decoration: BoxDecoration(
+      border: Border(
+        top: BorderSide(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
+        ),
+      ),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceAround,
+      children: [
+        IconButton(
+          tooltip: '表情',
+          onPressed: () => setState(() {
+            _showEmojiPicker = !_showEmojiPicker;
+            if (_showEmojiPicker) _focusNode.unfocus();
+          }),
+          icon: const Icon(Icons.sentiment_satisfied_alt_outlined, size: 25),
+        ),
+        if (_type != 'vote')
+          IconButton(
+            tooltip: '添加图片',
+            onPressed: _busy ? null : _pickImage,
+            icon: const Icon(Icons.image_outlined, size: 25),
+          ),
+        IconButton(
+          tooltip: '提及用户',
+          onPressed: _insertAtSymbol,
+          icon: const Icon(Icons.alternate_email, size: 25),
+        ),
+        if (_type != 'ershou')
+          IconButton(
+            tooltip: '话题',
+            onPressed: _insertTagSymbol,
+            icon: const Icon(Icons.tag, size: 25),
+          ),
+        if (_type == 'article')
+          IconButton(
+            tooltip: '关联商品',
+            onPressed: _chooseProduct,
+            icon: const Icon(Icons.shopping_bag_outlined, size: 25),
+          ),
+        if (_type == 'article')
+          IconButton(
+            tooltip: '更多',
+            onPressed: _showArticleMore,
+            icon: const Icon(Icons.add_circle_outline, size: 25),
+          ),
+        if (_type == 'picture' || _type == 'vote')
+          IconButton(
+            tooltip: '选择板块',
+            onPressed: _showTopicPicker,
+            icon: const Icon(Icons.grid_view_outlined, size: 25),
+          ),
+        IconButton(
+          tooltip: '键盘',
+          onPressed: () {
+            setState(() => _showEmojiPicker = false);
+            _focusNode.requestFocus();
+          },
+          icon: Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Theme.of(context).iconTheme.color ?? Colors.grey,
+                width: 1.8,
+              ),
+            ),
+            child: const Icon(Icons.dialpad_rounded, size: 16),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _buildTypedComposer(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final background = dark ? const Color(0xFF1E1E1E) : Colors.white;
+    final label = switch (_type) {
+      'article' => '发布图文',
+      'ershou' => '发布二手信息',
+      'picture' => '发布酷图',
+      'vote' => '发起投票',
+      _ => '发布',
+    };
+    final foreground = dark ? const Color(0xFFCCCCCC) : const Color(0xFF333333);
+    final divider = Divider(
+      height: 1,
+      color: dark ? const Color(0xFF2B2B2B) : const Color(0xFFECECEC),
+    );
+    final stripe = Container(
+      height: 8,
+      color: dark ? const Color(0xFF111111) : const Color(0xFFF5F5F5),
+    );
+    return Theme(
+      data: Theme.of(context).copyWith(
+        iconTheme: IconThemeData(color: foreground),
+        textTheme: Theme.of(context).textTheme
+            .apply(bodyColor: foreground, displayColor: foreground),
+      ),
+      child: PopScope(
+        canPop: !_hasDraft && !_busy,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _handleClose();
+        },
+        child: Scaffold(
+          backgroundColor: background,
+          resizeToAvoidBottomInset: false,
+          body: AbsorbPointer(
+            absorbing: _busy,
+            child: SafeArea(
+              maintainBottomViewPadding: true,
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: 52,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: '关闭',
+                          onPressed: _busy ? null : _handleClose,
+                          icon: const Icon(Icons.close, size: 26),
+                        ),
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: const TextStyle(fontSize: 20),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 16),
+                          child: OutlinedButton(
+                            onPressed: _canSubmit && !_busy ? _submit : null,
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(64, 32),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                              side: BorderSide(
+                                color: _canSubmit
+                                    ? const Color(0xFF009688)
+                                    : const Color(0xFF808080),
+                              ),
+                            ),
+                            child: Text(
+                              _busy ? '发布中' : '发布',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final bodyHeight =
+                            (constraints.maxHeight -
+                                    (_type == 'article' ? 400 : 260))
+                                .clamp(110.0, 300.0);
+                        return SingleChildScrollView(
+                          key: const ValueKey('typed-publish-scroll'),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (_type == 'article' || _type == 'vote')
+                                _typedTopicRow(),
+                              if (_type == 'article') ...[
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    12,
+                                    16,
+                                    0,
+                                  ),
+                                  child: InkWell(
+                                    onTap: _busy
+                                        ? null
+                                        : () => _pickImage(cover: true),
+                                    child: Container(
+                                      height: 80,
+                                      clipBehavior: Clip.antiAlias,
+                                      decoration: BoxDecoration(
+                                        color: dark
+                                            ? const Color(0xFF2B2B2D)
+                                            : const Color(0xFFF0F0F0),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: _cover?.bytes != null
+                                          ? Image.memory(
+                                              _cover!.bytes!,
+                                              fit: BoxFit.cover,
+                                              cacheWidth: 1000,
+                                            )
+                                          : const Column(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                Text(
+                                                  '＋添加题图',
+                                                  style: TextStyle(
+                                                    fontSize: 20,
+                                                    color: Color(0xFF999999),
+                                                  ),
+                                                ),
+                                                SizedBox(height: 8),
+                                                Text(
+                                                  '(无关题图会导致无法获得推荐)',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Color(0xFF999999),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                                _typedField(
+                                  _title,
+                                  '标题',
+                                  title: true,
+                                  limit: 100,
+                                ),
+                                divider,
+                                _typedField(_message, '正文', height: bodyHeight),
+                                if (_pictures.isNotEmpty) _typedMedia(),
+                                stripe,
+                                _typedRow(
+                                  Icons.visibility_outlined,
+                                  '谁可以看',
+                                  value: _visibilityLabel,
+                                  onTap: _showVisibilityPicker,
+                                ),
+                                divider,
+                                _typedRow(
+                                  Icons.upload_file_outlined,
+                                  '导入文档',
+                                  value: '金山文档',
+                                  onTap: _importDocument,
+                                ),
+                              ],
+                              if (_type == 'picture') ...[
+                                _typedMedia(),
+                                _typedField(
+                                  _message,
+                                  '以上传壁纸为主，发布广告、色情、手机截图和无关低质量图片将会被删除并对账号做禁言处理。',
+                                  height: 150,
+                                ),
+                                divider,
+                                _typedRow(
+                                  Icons.menu,
+                                  '选择分类',
+                                  value: _pictureCategory ?? '',
+                                  onTap: () async {
+                                    final value = await _editValue(
+                                      '选择分类',
+                                      _pictureCategory ?? '',
+                                    );
+                                    if (mounted &&
+                                        value != null &&
+                                        value.isNotEmpty) {
+                                      setState(() => _pictureCategory = value);
+                                    }
+                                  },
+                                ),
+                                stripe,
+                                _typedRow(
+                                  Icons.visibility_outlined,
+                                  '谁可以看',
+                                  value: _visibilityLabel,
+                                  onTap: _showVisibilityPicker,
+                                ),
+                              ],
+                              if (_type == 'ershou') ...[
+                                _typedRow(
+                                  Icons.phone_android,
+                                  _productTitle ?? '选择商品',
+                                  onTap: _chooseProduct,
+                                ),
+                                stripe,
+                                _typedField(
+                                  _title,
+                                  '宝贝品牌型号',
+                                  title: true,
+                                  limit: 100,
+                                ),
+                                divider,
+                                _typedField(
+                                  _message,
+                                  '写写宝贝的转手原因，入手渠道等具体信息吧',
+                                  height: 120,
+                                ),
+                                _typedMedia(caption: '添加真实详细的商品照片\n首图会作为动态封面'),
+                                divider,
+                                _typedRow(
+                                  Icons.location_on_outlined,
+                                  _location ?? '选择位置',
+                                  onTap: () async {
+                                    final value = await _editValue(
+                                      '所在城市',
+                                      _location ?? '',
+                                    );
+                                    if (mounted && value != null) {
+                                      setState(
+                                        () => _location = value.isEmpty
+                                            ? null
+                                            : value,
+                                      );
+                                    }
+                                  },
+                                ),
+                                stripe,
+                                _typedRow(
+                                  Icons.currency_yen,
+                                  '开个价',
+                                  value: _price.isEmpty ? '' : '¥$_price',
+                                  onTap: () async {
+                                    final value = await _editValue(
+                                      '开个价',
+                                      _price,
+                                      number: true,
+                                    );
+                                    if (!mounted || value == null) return;
+                                    final number = double.tryParse(value);
+                                    if (number == null ||
+                                        !number.isFinite ||
+                                        number <= 0) {
+                                      AppToast.show(this.context, '请输入有效价格');
+                                      return;
+                                    }
+                                    setState(() => _price = value);
+                                  },
+                                ),
+                                divider,
+                                _typedRow(
+                                  Icons.account_circle_outlined,
+                                  '我的身份',
+                                  trailing: Row(
+                                    children: [
+                                      for (final seller in ['个人', '商家'])
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            left: 12,
+                                          ),
+                                          child: InkWell(
+                                            onTap: () => setState(
+                                              () => _seller = seller,
+                                            ),
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 6,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: _seller == seller
+                                                    ? const Color(
+                                                        0xFF009688,
+                                                      ).withValues(alpha: 0.18)
+                                                    : dark
+                                                    ? const Color(0xFF2B2B2D)
+                                                    : const Color(0xFFF0F0F0),
+                                                borderRadius:
+                                                    BorderRadius.circular(6),
+                                              ),
+                                              child: Text(
+                                                seller,
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  color: _seller == seller
+                                                      ? const Color(0xFF009688)
+                                                      : null,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                divider,
+                                _typedRow(
+                                  Icons.link,
+                                  '商品链接',
+                                  value: _productLink,
+                                  onTap: () async {
+                                    final value = await _editValue(
+                                      '商品链接',
+                                      _productLink,
+                                    );
+                                    if (!mounted || value == null) return;
+                                    final uri = Uri.tryParse(value);
+                                    if (value.isNotEmpty &&
+                                        (uri == null ||
+                                            ![
+                                              'http',
+                                              'https',
+                                            ].contains(uri.scheme) ||
+                                            uri.host.isEmpty)) {
+                                      AppToast.show(this.context, '请输入有效的商品链接');
+                                      return;
+                                    }
+                                    setState(() => _productLink = value);
+                                  },
+                                ),
+                              ],
+                              if (_type == 'vote') ...[
+                                _typedField(
+                                  _title,
+                                  '投票标题',
+                                  title: true,
+                                  limit: 100,
+                                ),
+                                divider,
+                                _typedField(_message, '投票说明', height: 165),
+                                stripe,
+                                _typedRow(
+                                  Icons.poll_outlined,
+                                  '模式选择',
+                                  trailing: Row(
+                                    children: [
+                                      for (final (multi, title) in [
+                                        (false, 'PK模式'),
+                                        (true, '多选项模式'),
+                                      ])
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            left: 8,
+                                          ),
+                                          child: InkWell(
+                                            onTap: () => setState(
+                                              () => _multiVote = multi,
+                                            ),
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 8,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: _multiVote == multi
+                                                    ? const Color(
+                                                        0xFF009688,
+                                                      ).withValues(alpha: 0.12)
+                                                    : dark
+                                                    ? const Color(0xFF242426)
+                                                    : const Color(0xFFF0F0F0),
+                                                borderRadius:
+                                                    BorderRadius.circular(3),
+                                              ),
+                                              child: Text(
+                                                title,
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: _multiVote == multi
+                                                      ? const Color(0xFF009688)
+                                                      : const Color(0xFF888888),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                stripe,
+                                for (final (i, option)
+                                    in (_multiVote
+                                            ? _voteOptions
+                                            : _voteOptions.take(2))
+                                        .indexed)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                    ),
+                                    child: Column(
+                                      children: [
+                                        Row(
+                                          children: [
+                                            SizedBox(
+                                              width: 36,
+                                              child: Text(
+                                                String.fromCharCode(0x2460 + i),
+                                                style: const TextStyle(
+                                                  fontSize: 27,
+                                                  color: Color(0xFF888888),
+                                                ),
+                                              ),
+                                            ),
+                                            Text(
+                                              _multiVote
+                                                  ? '选项${i < 10 ? '一二三四五六七八九十'[i] : '${i + 1}'}'
+                                                  : i == 0
+                                                  ? '正方观点'
+                                                  : '反方观点',
+                                              style: const TextStyle(
+                                                fontSize: 15,
+                                                color: Color(0xFF888888),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Builder(
+                                                builder: (fieldContext) => TextField(
+                                                  scrollPadding:
+                                                      editorKeyboardScrollPadding(
+                                                        fieldContext,
+                                                      ),
+                                                  key: ValueKey(
+                                                    'vote-option-$i',
+                                                  ),
+                                                  controller: option,
+                                                  readOnly: _busy,
+                                                  maxLength: 100,
+                                                  decoration:
+                                                      const InputDecoration(
+                                                        hintText: '选项内容',
+                                                        hintStyle: TextStyle(
+                                                          fontSize: 15,
+                                                          color: Color(
+                                                            0xFFCCCCCC,
+                                                          ),
+                                                        ),
+                                                        counterText: '',
+                                                        border:
+                                                            InputBorder.none,
+                                                        contentPadding:
+                                                            EdgeInsets.symmetric(
+                                                              vertical: 16,
+                                                            ),
+                                                      ),
+                                                  style: const TextStyle(
+                                                    fontSize: 15,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            if (_multiVote)
+                                              IconButton(
+                                                tooltip: '删除选项${i + 1}',
+                                                onPressed:
+                                                    _voteOptions.length <= 2
+                                                    ? null
+                                                    : () => setState(() {
+                                                        final removed =
+                                                            _voteOptions
+                                                                .removeAt(i);
+                                                        removed.dispose();
+                                                        _voteLimit = _voteLimit
+                                                            .clamp(
+                                                              1,
+                                                              _voteOptions
+                                                                  .length,
+                                                            );
+                                                      }),
+                                                icon: const Icon(
+                                                  Icons.close,
+                                                  size: 24,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        divider,
+                                      ],
+                                    ),
+                                  ),
+                                if (_multiVote)
+                                  _typedRow(
+                                    Icons.add_circle_outline,
+                                    '添加选项',
+                                    onTap: _voteOptions.length >= 10
+                                        ? null
+                                        : () => setState(() {
+                                            final o = TextEditingController()
+                                              ..addListener(_draftChanged);
+                                            _voteOptions.add(o);
+                                          }),
+                                  ),
+                                stripe,
+                                _typedRow(
+                                  Icons.schedule,
+                                  '截止时间',
+                                  value: '$_voteDays天',
+                                  onTap: () => _selectVoteValue(limit: false),
+                                ),
+                                if (_multiVote) ...[
+                                  divider,
+                                  _typedRow(
+                                    Icons.how_to_vote_outlined,
+                                    '投票上限',
+                                    value: _voteLimit == 1
+                                        ? '单项'
+                                        : '最多$_voteLimit项',
+                                    onTap: () => _selectVoteValue(limit: true),
+                                  ),
+                                ],
+                              ],
+                              const EditorKeyboardSpace(),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  if (_type == 'picture')
+                    SizedBox(
+                      height: 46,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.all(8),
+                        children: [
+                          for (final tag in [
+                            '数码日常',
+                            '123云盘',
+                            'VibeCoding',
+                            '魅族PA',
+                          ])
+                            Padding(
+                              padding: const EdgeInsets.only(right: 10),
+                              child: _buildTopicChip(
+                                context,
+                                '# $tag',
+                                isFeatured: tag == '数码日常',
+                                onTap: () => _insertTopic(tag),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  _typedToolbar(),
+                  if (_showEmojiPicker) _buildEmojiKeyboard(context),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    _draftFlags = (_canSubmit, _hasDraft);
+    if (_type == 'rating') return RatingSquarePage(api: widget.api);
+    if (_type == 'collection' || _type == 'rank') {
+      return AnyListCreatePage(api: widget.api, initialRank: _type == 'rank');
+    }
+    if (_type != 'feed') return _buildTypedComposer(context);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final scheme = theme.colorScheme;
-    final topPadding = MediaQuery.paddingOf(context).top;
+    final topPadding = MediaQuery.viewPaddingOf(context).top;
 
     final hasDraft = _hasDraft;
 
@@ -4910,6 +6207,7 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
       },
       child: Scaffold(
         backgroundColor: isDark ? const Color(0xFF141416) : Colors.white,
+        resizeToAvoidBottomInset: false,
         body: Column(
           children: [
             // Top Bar
@@ -4933,7 +6231,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     height: 34,
                     padding: const EdgeInsets.all(2),
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF222225) : const Color(0xFFEAEAEA),
+                      color: isDark
+                          ? const Color(0xFF222225)
+                          : const Color(0xFFEAEAEA),
                       borderRadius: BorderRadius.circular(17),
                     ),
                     child: Row(
@@ -4945,10 +6245,15 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                             setState(() => _isCoverMode = true);
                           },
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 5,
+                            ),
                             decoration: BoxDecoration(
                               color: _isCoverMode
-                                  ? (isDark ? const Color(0xFF1B382B) : const Color(0xFFE8F5E9))
+                                  ? (isDark
+                                        ? const Color(0xFF1B382B)
+                                        : const Color(0xFFE8F5E9))
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(15),
                             ),
@@ -4956,10 +6261,16 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                               '大封面',
                               style: TextStyle(
                                 fontSize: 13.5,
-                                fontWeight: _isCoverMode ? FontWeight.bold : FontWeight.normal,
+                                fontWeight: _isCoverMode
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
                                 color: _isCoverMode
-                                  ? (isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32))
-                                  : (isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666)),
+                                    ? (isDark
+                                          ? const Color(0xFF34D399)
+                                          : const Color(0xFF2E7D32))
+                                    : (isDark
+                                          ? const Color(0xFF8E8E93)
+                                          : const Color(0xFF666666)),
                               ),
                             ),
                           ),
@@ -4970,10 +6281,15 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                             setState(() => _isCoverMode = false);
                           },
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 5,
+                            ),
                             decoration: BoxDecoration(
                               color: !_isCoverMode
-                                  ? (isDark ? const Color(0xFF1B382B) : const Color(0xFFE8F5E9))
+                                  ? (isDark
+                                        ? const Color(0xFF1B382B)
+                                        : const Color(0xFFE8F5E9))
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(15),
                             ),
@@ -4981,10 +6297,16 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                               '九宫格',
                               style: TextStyle(
                                 fontSize: 13.5,
-                                fontWeight: !_isCoverMode ? FontWeight.bold : FontWeight.normal,
+                                fontWeight: !_isCoverMode
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
                                 color: !_isCoverMode
-                                    ? (isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32))
-                                    : (isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666)),
+                                    ? (isDark
+                                          ? const Color(0xFF34D399)
+                                          : const Color(0xFF2E7D32))
+                                    : (isDark
+                                          ? const Color(0xFF8E8E93)
+                                          : const Color(0xFF666666)),
                               ),
                             ),
                           ),
@@ -5003,8 +6325,12 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                         padding: const EdgeInsets.symmetric(horizontal: 14),
                         side: BorderSide(
                           color: _canSubmit
-                              ? (isDark ? const Color(0xFF34D399) : scheme.primary)
-                              : (isDark ? const Color(0xFF48484C) : const Color(0xFFCCCCCC)),
+                              ? (isDark
+                                    ? const Color(0xFF34D399)
+                                    : scheme.primary)
+                              : (isDark
+                                    ? const Color(0xFF48484C)
+                                    : const Color(0xFFCCCCCC)),
                           width: 0.8,
                         ),
                         shape: RoundedRectangleBorder(
@@ -5022,8 +6348,12 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                               style: TextStyle(
                                 fontSize: 13.5,
                                 color: _canSubmit
-                                    ? (isDark ? const Color(0xFF34D399) : scheme.primary)
-                                    : (isDark ? const Color(0xFFC0C0C4) : const Color(0xFF999999)),
+                                    ? (isDark
+                                          ? const Color(0xFF34D399)
+                                          : scheme.primary)
+                                    : (isDark
+                                          ? const Color(0xFFC0C0C4)
+                                          : const Color(0xFF999999)),
                               ),
                             ),
                     ),
@@ -5040,20 +6370,27 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                   InkWell(
                     onTap: _showTopicPicker,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       child: Row(
                         children: [
                           Container(
                             width: 24,
                             height: 24,
                             decoration: BoxDecoration(
-                              color: isDark ? const Color(0xFF163324) : const Color(0xFFE8F5E9),
+                              color: isDark
+                                  ? const Color(0xFF163324)
+                                  : const Color(0xFFE8F5E9),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Icon(
                               Icons.add_rounded,
                               size: 16,
-                              color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+                              color: isDark
+                                  ? const Color(0xFF34D399)
+                                  : const Color(0xFF2E7D32),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -5065,19 +6402,27 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                               color: isDark ? Colors.white : Colors.black87,
                             ),
                           ),
-                          if (_selectedTopic != null && _selectedTopic!.isNotEmpty) ...[
+                          if (_selectedTopic != null &&
+                              _selectedTopic!.isNotEmpty) ...[
                             const SizedBox(width: 8),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
                               decoration: BoxDecoration(
-                                color: isDark ? const Color(0xFF1B382B) : const Color(0xFFE8F5E9),
+                                color: isDark
+                                    ? const Color(0xFF1B382B)
+                                    : const Color(0xFFE8F5E9),
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Text(
                                 '# $_selectedTopic',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: isDark ? const Color(0xFF34D399) : const Color(0xFF2E7D32),
+                                  color: isDark
+                                      ? const Color(0xFF34D399)
+                                      : const Color(0xFF2E7D32),
                                 ),
                               ),
                             ),
@@ -5089,14 +6434,18 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                                 : '更换板块',
                             style: TextStyle(
                               fontSize: 13,
-                              color: isDark ? const Color(0xFF7C7C82) : const Color(0xFF888888),
+                              color: isDark
+                                  ? const Color(0xFF7C7C82)
+                                  : const Color(0xFF888888),
                             ),
                           ),
                           const SizedBox(width: 2),
                           Icon(
                             Icons.chevron_right_rounded,
                             size: 16,
-                            color: isDark ? const Color(0xFF7C7C82) : const Color(0xFF888888),
+                            color: isDark
+                                ? const Color(0xFF7C7C82)
+                                : const Color(0xFF888888),
                           ),
                         ],
                       ),
@@ -5109,25 +6458,35 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                   ),
                   // Text Input Field
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                    child: TextField(
-                      controller: _message,
-                      focusNode: _focusNode,
-                      minLines: 5,
-                      maxLines: 15,
-                      style: TextStyle(
-                        fontSize: 15.5,
-                        height: 1.45,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: '分享你此刻的想法…',
-                        hintStyle: TextStyle(
-                          fontSize: 15,
-                          color: isDark ? const Color(0xFF5A5A60) : const Color(0xFF999999),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    child: Builder(
+                      builder: (fieldContext) => TextField(
+                        scrollPadding: editorKeyboardScrollPadding(
+                          fieldContext,
                         ),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.zero,
+                        controller: _message,
+                        focusNode: _focusNode,
+                        minLines: 5,
+                        maxLines: 15,
+                        style: TextStyle(
+                          fontSize: 15.5,
+                          height: 1.45,
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: '分享你此刻的想法…',
+                          hintStyle: TextStyle(
+                            fontSize: 15,
+                            color: isDark
+                                ? const Color(0xFF5A5A60)
+                                : const Color(0xFF999999),
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.zero,
+                        ),
                       ),
                     ),
                   ),
@@ -5135,25 +6494,34 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                   Divider(
                     height: 1,
                     thickness: 0.5,
-                    color: isDark ? const Color(0xFF2C2C30) : const Color(0xFFE5E5E5),
+                    color: isDark
+                        ? const Color(0xFF2C2C30)
+                        : const Color(0xFFE5E5E5),
                   ),
                   InkWell(
                     onTap: _showVisibilityPicker,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
                       child: Row(
                         children: [
                           Icon(
                             Icons.visibility_outlined,
                             size: 20,
-                            color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                            color: isDark
+                                ? const Color(0xFF8E8E93)
+                                : const Color(0xFF666666),
                           ),
                           const SizedBox(width: 10),
                           Text(
                             '谁可以看',
                             style: TextStyle(
                               fontSize: 14.5,
-                              color: isDark ? const Color(0xFFE0E0E0) : const Color(0xFF333333),
+                              color: isDark
+                                  ? const Color(0xFFE0E0E0)
+                                  : const Color(0xFF333333),
                             ),
                           ),
                           const Spacer(),
@@ -5161,19 +6529,24 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                             _visibilityLabel,
                             style: TextStyle(
                               fontSize: 13.5,
-                              color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF777777),
+                              color: isDark
+                                  ? const Color(0xFF8E8E93)
+                                  : const Color(0xFF777777),
                             ),
                           ),
                           const SizedBox(width: 2),
                           Icon(
                             Icons.chevron_right_rounded,
                             size: 16,
-                            color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF777777),
+                            color: isDark
+                                ? const Color(0xFF8E8E93)
+                                : const Color(0xFF777777),
                           ),
                         ],
                       ),
                     ),
                   ),
+                  const EditorKeyboardSpace(),
                 ],
               ),
             ),
@@ -5192,17 +6565,41 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     onTap: () => _insertTopic('数码日常'),
                   ),
                   const SizedBox(width: 8),
-                  _buildTopicChip(context, '# 123云盘', onTap: () => _insertTopic('123云盘')),
+                  _buildTopicChip(
+                    context,
+                    '# 123云盘',
+                    onTap: () => _insertTopic('123云盘'),
+                  ),
                   const SizedBox(width: 8),
-                  _buildTopicChip(context, '# VibeCoding', onTap: () => _insertTopic('VibeCoding')),
+                  _buildTopicChip(
+                    context,
+                    '# VibeCoding',
+                    onTap: () => _insertTopic('VibeCoding'),
+                  ),
                   const SizedBox(width: 8),
-                  _buildTopicChip(context, '# 魅族PA...', onTap: () => _insertTopic('魅族PA')),
+                  _buildTopicChip(
+                    context,
+                    '# 魅族PA...',
+                    onTap: () => _insertTopic('魅族PA'),
+                  ),
                   const SizedBox(width: 8),
-                  _buildTopicChip(context, '# 今日份日常', onTap: () => _insertTopic('今日份日常')),
+                  _buildTopicChip(
+                    context,
+                    '# 今日份日常',
+                    onTap: () => _insertTopic('今日份日常'),
+                  ),
                   const SizedBox(width: 8),
-                  _buildTopicChip(context, '# 玩机日记', onTap: () => _insertTopic('玩机日记')),
+                  _buildTopicChip(
+                    context,
+                    '# 玩机日记',
+                    onTap: () => _insertTopic('玩机日记'),
+                  ),
                   const SizedBox(width: 8),
-                  _buildTopicChip(context, '# 手机摄影', onTap: () => _insertTopic('手机摄影')),
+                  _buildTopicChip(
+                    context,
+                    '# 手机摄影',
+                    onTap: () => _insertTopic('手机摄影'),
+                  ),
                 ],
               ),
             ),
@@ -5220,7 +6617,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                       size: 24,
                       color: _showEmojiPicker
                           ? const Color(0xFF34D399)
-                          : (isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666)),
+                          : (isDark
+                                ? const Color(0xFF8E8E93)
+                                : const Color(0xFF666666)),
                     ),
                     onPressed: () {
                       HapticFeedbackUtil.light();
@@ -5238,7 +6637,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     icon: Icon(
                       Icons.image_outlined,
                       size: 24,
-                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                      color: isDark
+                          ? const Color(0xFF8E8E93)
+                          : const Color(0xFF666666),
                     ),
                     onPressed: _pickImage,
                   ),
@@ -5246,7 +6647,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     icon: Icon(
                       Icons.alternate_email_rounded,
                       size: 24,
-                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                      color: isDark
+                          ? const Color(0xFF8E8E93)
+                          : const Color(0xFF666666),
                     ),
                     onPressed: _insertAtSymbol,
                   ),
@@ -5254,7 +6657,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     icon: Icon(
                       Icons.tag_rounded,
                       size: 24,
-                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                      color: isDark
+                          ? const Color(0xFF8E8E93)
+                          : const Color(0xFF666666),
                     ),
                     onPressed: _insertTagSymbol,
                   ),
@@ -5262,7 +6667,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     icon: Icon(
                       Icons.add_circle_outline_rounded,
                       size: 24,
-                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                      color: isDark
+                          ? const Color(0xFF8E8E93)
+                          : const Color(0xFF666666),
                     ),
                     onPressed: _showMoreOptions,
                   ),
@@ -5270,7 +6677,9 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
                     icon: Icon(
                       Icons.language_rounded,
                       size: 24,
-                      color: isDark ? const Color(0xFF8E8E93) : const Color(0xFF666666),
+                      color: isDark
+                          ? const Color(0xFF8E8E93)
+                          : const Color(0xFF666666),
                     ),
                     onPressed: _showVisibilityPicker,
                   ),
@@ -5278,7 +6687,7 @@ class _ComposeFeedPageState extends State<ComposeFeedPage> {
               ),
             ),
             if (_showEmojiPicker) _buildEmojiKeyboard(context),
-            SizedBox(height: MediaQuery.paddingOf(context).bottom),
+            SizedBox(height: MediaQuery.viewPaddingOf(context).bottom),
           ],
         ),
       ),

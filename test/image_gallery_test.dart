@@ -18,8 +18,12 @@ import 'package:greennote/core/settings/app_settings.dart';
 import 'package:greennote/core/widgets/app_avatar.dart';
 import 'package:greennote/features/feed/image_gallery_page.dart';
 import 'package:greennote/features/feed/nine_grid_view.dart';
+import 'package:greennote/features/feed/feed_pages.dart'
+    show FeedCard, FeedDetailPage;
 import 'package:greennote/features/shared/api_list_page.dart'
     show UserSpacePage;
+
+import 'feed_channel_extended_test.dart' show MockChannelApi;
 
 class GalleryApi implements CoolapkApi {
   @override
@@ -61,6 +65,21 @@ class GalleryFeedApi extends GalleryApi {
   Future<Map<String, dynamic>>? pendingDetail;
   bool rejectNextLike = false;
   String session = 'gallery-account';
+  @override
+  Future<List<FeedCollection>> getFeedCollections(
+    String id, {
+    required String scope,
+  }) async => [
+    FeedCollection.fromJson({'id': '1', 'title': '数码资料'}),
+  ];
+  @override
+  Future<void> updateFeedCollections(
+    String id, {
+    required List<String> selected,
+    required List<String> cancelled,
+    required String scope,
+    CoolapkFeed? feed,
+  }) async => actions.add('collections:$id:${selected.join(',')}');
   @override
   String get notificationSessionKey => session;
   @override
@@ -113,6 +132,188 @@ class _DoubleTapState extends Fake implements ExtendedImageGestureState {
 }
 
 void main() {
+  testWidgets(
+    'real feed image reopens the gallery instead of its surrounding post',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'greennote.liquid_glass_nav': false,
+      });
+      final navigator = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            navigatorKey: navigator,
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: FeedCard(
+                  api: MockChannelApi(),
+                  feed: CoolapkFeed.fromJson({
+                    'id': '12345',
+                    'username': '作者',
+                    'message': '带图片的帖子',
+                    'picArr': [galleryTestPic.url],
+                  }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      final point = tester.getCenter(find.byType(ImageGalleryHeroThumbnail));
+      await tester.tapAt(point);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      navigator.currentState!.pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+      await tester.tapAt(point);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(FeedDetailPage), findsNothing);
+      expect(find.byType(ImageGalleryPage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  for (final openedFor in [50, 350]) {
+    testWidgets(
+      'quick gallery return and reentry keeps the image target ($openedFor ms)',
+      (tester) async {
+        final recorder = ui.PictureRecorder();
+        Canvas(recorder).drawColor(Colors.blue, BlendMode.src);
+        final picture = recorder.endRecording();
+        final pixels = (await tester.runAsync(() => picture.toImage(80, 160)))!;
+        picture.dispose();
+        final cacheKeys = <Object>[];
+        for (final width in <int?>[null, 160]) {
+          final provider = ExtendedImage.network(
+            galleryTestPic.originalUrl,
+            cache: true,
+            cacheWidth: width,
+            headers: coolapkImageHeaders(galleryTestPic.originalUrl),
+          ).image;
+          final key = await provider.obtainKey(ImageConfiguration.empty);
+          cacheKeys.add(key);
+          tester.binding.imageCache.putIfAbsent(
+            key,
+            () => OneFrameImageStreamCompleter(
+              Future.value(ImageInfo(image: pixels.clone())),
+            ),
+          );
+        }
+        final navigator = GlobalKey<NavigatorState>();
+        final scope = Object();
+        var articleOpens = 0, galleryOpens = 0;
+        await tester.pumpWidget(
+          MaterialApp(
+            navigatorKey: navigator,
+            home: Scaffold(
+              body: Center(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => articleOpens++,
+                  child: GestureDetector(
+                    onTap: () {
+                      galleryOpens++;
+                      navigator.currentState!.push(
+                        PhysicsSpringGalleryRoute<void>(
+                          child: ImageGalleryPage(
+                            api: const GalleryApi(),
+                            pics: const [galleryTestPic],
+                            initialIndex: 0,
+                            statusId: 'reentry',
+                            heroScope: scope,
+                            useLiquidGlass: false,
+                          ),
+                        ),
+                      );
+                    },
+                    child: ImageGalleryHeroThumbnail(
+                      scope: scope,
+                      index: 0,
+                      pic: galleryTestPic,
+                      child: SizedBox(
+                        width: 120,
+                        height: 160,
+                        child: RawImage(image: pixels, fit: BoxFit.cover),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        final point = tester.getCenter(find.byType(ImageGalleryHeroThumbnail));
+        await tester.tapAt(point);
+        await tester.pump();
+        await tester.pump(Duration(milliseconds: openedFor));
+        for (final cycle in [2, 3, 4]) {
+          navigator.currentState!.pop();
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 10));
+          await tester.tapAt(point);
+          await tester.pump();
+          expect(articleOpens, 0);
+          expect(galleryOpens, cycle);
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(
+            find.byKey(const ValueKey('gallery-image-flight-plane')),
+            findsOneWidget,
+          );
+          for (final step in [1, 16, 33]) {
+            await tester.pump(Duration(milliseconds: step));
+            final plane = find.byKey(
+              const ValueKey('gallery-image-flight-plane'),
+            );
+            final size = tester.getSize(plane);
+            final painter = tester.widget<CustomPaint>(plane).painter!;
+            final center = await tester.runAsync(() async {
+              final recorder = ui.PictureRecorder();
+              painter.paint(Canvas(recorder), size);
+              final picture = recorder.endRecording();
+              final snapshot = await picture.toImage(
+                size.width.ceil(),
+                size.height.ceil(),
+              );
+              picture.dispose();
+              final data = (await snapshot.toByteData(
+                format: ui.ImageByteFormat.rawRgba,
+              ))!;
+              final offset =
+                  ((size.height ~/ 2) * snapshot.width + size.width ~/ 2) * 4;
+              final pixel = data.buffer.asUint8List().sublist(
+                offset,
+                offset + 4,
+              );
+              snapshot.dispose();
+              return pixel;
+            });
+            expect(
+              center,
+              [33, 150, 243, 255],
+              reason: 'the image must stay centered inside the moving Hero viewport',
+            );
+          }
+        }
+        await tester.pump(const Duration(milliseconds: 400));
+        navigator.currentState!.pop();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tapAt(point);
+        await tester.pump();
+        expect(articleOpens, 0);
+        expect(galleryOpens, 5);
+        await tester.pumpWidget(const SizedBox());
+        for (final key in cacheKeys) {
+          tester.binding.imageCache.evict(key);
+        }
+        pixels.dispose();
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
   test('gallery route uses the requested open and return durations', () {
     final route = PhysicsSpringGalleryRoute<void>(child: const SizedBox());
 
@@ -204,6 +405,32 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
     },
   );
+  for (final glass in [false, true]) {
+    testWidgets(
+      'long press chooses a folder without toggling default glass=$glass',
+      (tester) async {
+        final api = GalleryFeedApi();
+        await mountFeedGallery(tester, api, glass: glass);
+        final button = glass
+            ? find.byWidgetPredicate(
+                (widget) => widget is GlassButton && widget.label == '收藏',
+              )
+            : find.byTooltip('收藏');
+        await tester.longPress(button);
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('选择收藏夹'), findsOneWidget);
+        expect(api.actions, isEmpty);
+        await tester.tap(find.text('数码资料'));
+        await tester.tap(find.text('完成'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(api.actions, ['collections:42:1']);
+        expect(find.text('8'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
   testWidgets(
     'server liked state is shown and taps alternate unlike then like',
     (tester) async {

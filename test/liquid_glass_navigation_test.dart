@@ -83,6 +83,14 @@ void main() {
         ),
       );
       final glassBar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+      final primary = AppTheme.darkTheme(colorIndex: 3).colorScheme.primary;
+      expect(glassBar.indicatorColor, const Color(0x26FFFFFF));
+      expect(glassBar.indicatorSettings?.glassColor, const Color(0x26FFFFFF));
+      expect(glassBar.indicatorSettings?.bodyMode, GlassBodyMode.clear);
+      expect(glassBar.selectedIconColor, primary);
+      expect(glassBar.selectedLabelColor, primary);
+      expect(glassBar.unselectedIconColor, Colors.white);
+      expect(glassBar.unselectedLabelColor, Colors.white);
       expect(glassBar.settings?.shadowElevation, 0);
       expect(glassBar.indicatorSettings?.rimLight, 0);
       expect(glassBar.indicatorSettings?.rimShade, 0);

@@ -1,3 +1,5 @@
+import '../../core/utils/shopping_links.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -1382,7 +1384,14 @@ class _DiscoveryGoodsCarousel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           SizedBox(
-            height: 270,
+            height:
+                width +
+                7 +
+                MediaQuery.textScalerOf(context).scale(13) * 2.4 +
+                5 +
+                MediaQuery.textScalerOf(context).scale(14) * 1.5 +
+                8 +
+                32,
             child: protectHorizontalDragFromVerticalRefresh(
               ListView.separated(
                 scrollDirection: Axis.horizontal,
@@ -1423,11 +1432,11 @@ class _DiscoveryGoodsTile extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         InkWell(
-          onTap: _text(row, ['goods_url']).isEmpty
+          onTap: goodsTarget(row).isEmpty
               ? null
               : () => openHeadlineTarget(context, api, {
                   ...row,
-                  'url': _text(row, ['goods_url']),
+                  'url': goodsTarget(row),
                 }),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1460,7 +1469,7 @@ class _DiscoveryGoodsTile extends StatelessWidget {
           ),
         ),
         if (buyText.isNotEmpty && buyUrl.isNotEmpty) ...[
-          const Spacer(),
+          const SizedBox(height: 8),
           SizedBox(
             height: 32,
             child: Material(
@@ -1504,11 +1513,11 @@ class _DiscoveryPearGoodsTile extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         InkWell(
-          onTap: _text(row, ['goods_url']).isEmpty
+          onTap: goodsTarget(row).isEmpty
               ? null
               : () => openHeadlineTarget(context, api, {
                   ...row,
-                  'url': _text(row, ['goods_url']),
+                  'url': goodsTarget(row),
                 }),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

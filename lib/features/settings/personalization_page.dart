@@ -132,7 +132,6 @@ class PersonalizationPage extends ConsumerWidget {
                       .read(appSettingsProvider.notifier)
                       .setThemeMode(ThemeMode.system),
                 ),
-                const Divider(height: 1, indent: 72),
                 ReviewChoiceTile<ThemeMode>(
                   title: '浅色模式',
                   value: ThemeMode.light,
@@ -141,7 +140,6 @@ class PersonalizationPage extends ConsumerWidget {
                       .read(appSettingsProvider.notifier)
                       .setThemeMode(ThemeMode.light),
                 ),
-                const Divider(height: 1, indent: 72),
                 ReviewChoiceTile<ThemeMode>(
                   title: '深色模式',
                   value: ThemeMode.dark,
@@ -150,7 +148,6 @@ class PersonalizationPage extends ConsumerWidget {
                       .read(appSettingsProvider.notifier)
                       .setThemeMode(ThemeMode.dark),
                 ),
-                const Divider(height: 1, indent: 16, endIndent: 16),
                 ReviewSwitchTile(
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 16,
@@ -213,7 +210,6 @@ class PersonalizationPage extends ConsumerWidget {
                     },
                   ),
                   if (!themeState.useDynamicColor) ...[
-                    const Divider(height: 1, indent: 16, endIndent: 16),
                     Padding(
                       padding: const EdgeInsets.only(
                         left: 16,
@@ -354,6 +350,7 @@ class PersonalizationPage extends ConsumerWidget {
                       ),
                       Expanded(
                         child: Slider(
+                          overlayColor: AppTheme.noTouchOverlay,
                           value: themeState.fontScale,
                           min: 0.80,
                           max: 1.25,
@@ -410,7 +407,6 @@ class PersonalizationPage extends ConsumerWidget {
                         }).toList(),
                   ),
                 ),
-                const Divider(height: 1, indent: 16, endIndent: 16),
                 // 字体粗细
                 ListTile(
                   contentPadding: const EdgeInsets.symmetric(
@@ -442,7 +438,6 @@ class PersonalizationPage extends ConsumerWidget {
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => _showFontWeightDialog(context, ref, themeState),
                 ),
-                const Divider(height: 1, indent: 16, endIndent: 16),
                 Container(
                   margin: const EdgeInsets.fromLTRB(16, 12, 16, 14),
                   padding: const EdgeInsets.all(12),

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../services/cache_service.dart';
 import '../utils/haptic_feedback_util.dart';
@@ -310,11 +311,28 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     required String webDavUrl,
     required String webDavUsername,
     required String webDavDirectory,
+    bool includeCredentials = false,
   }) async {
     await _ready;
+    final credentials = includeCredentials
+        ? {
+            // The login Token is part of the stored Coolapk Cookie, not a separate secret.
+            'cookie':
+                await const FlutterSecureStorage().read(
+                  key: 'coolapk_cookie',
+                ) ??
+                '',
+            'webDavPassword':
+                await const FlutterSecureStorage().read(
+                  key: 'greennote.webdav.password',
+                ) ??
+                '',
+          }
+        : null;
     return {
       'app': 'Greennote',
-      'version': 2,
+      'version': includeCredentials ? 3 : 2,
+      'credentials': ?credentials,
       'localAccount': LocalAccount(await _preferences).export(),
       'exported_at': DateTime.now().toIso8601String(),
       'preferences': {
@@ -331,6 +349,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
         'pureBlackDark': state.isPureBlackDark,
         'useCustomFontWeight': state.useCustomFontWeight,
         'customFontWeightDelta': state.customFontWeightDelta,
+        'fontScale': state.fontScale,
         'autoClearCacheThresholdMb': state.autoClearCacheThresholdMb,
         'imageSavePathType': state.imageSavePathType,
         'videoSavePathType': state.videoSavePathType,
@@ -344,10 +363,22 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
   Future<Map<String, String>> restoreBackup(Map<String, dynamic> backup) async {
     await _ready;
     if (backup['app'] != 'Greennote' ||
-        !const [1, 2].contains(backup['version'])) {
+        !const [1, 2, 3].contains(backup['version'])) {
       throw const FormatException('这不是兼容的 Greennote 设置备份');
     }
-    final localData = backup['version'] == 2
+    final credentials = backup['version'] == 3 ? backup['credentials'] : null;
+    if (backup['version'] == 3 &&
+        (credentials is! Map ||
+            credentials['cookie'] is! String ||
+            credentials['webDavPassword'] is! String ||
+            (credentials['cookie'] as String).length > 65536 ||
+            (credentials['cookie'] as String).contains(
+              RegExp(r'[\x00-\x1F\x7F]'),
+            ) ||
+            (credentials['webDavPassword'] as String).length > 16384)) {
+      throw const FormatException('备份中的账号凭据格式无效');
+    }
+    final localData = backup['version'] != 1
         ? LocalAccount.validate(backup['localAccount'])
         : null;
     final raw = backup['preferences'];
@@ -388,6 +419,9 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     final fontDelta = values.containsKey('customFontWeightDelta')
         ? values['customFontWeightDelta']
         : 0;
+    final fontScale = values.containsKey('fontScale')
+        ? values['fontScale']
+        : 1.0;
     final url = values['webDavUrl'] ?? '';
     final username = values['webDavUsername'] ?? '';
     final directory = values['webDavDirectory'] ?? defaultWebDavDirectory;
@@ -405,6 +439,10 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
         customFont is! bool ||
         fontDelta is! int ||
         !const [-100, 0, 100, 200, 300].contains(fontDelta) ||
+        fontScale is! num ||
+        !fontScale.isFinite ||
+        fontScale < 0.8 ||
+        fontScale > 1.3 ||
         url is! String ||
         url.length > 2048 ||
         username is! String ||
@@ -427,6 +465,7 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     await prefs.setBool(_pureBlackKey, pureBlack);
     await prefs.setBool(_customFontKey, customFont);
     await prefs.setInt(_fontDeltaKey, fontDelta);
+    await prefs.setDouble(_fontScaleKey, fontScale.toDouble());
     await prefs.setString(_webDavUrlKey, url);
     await prefs.setString(_webDavUsernameKey, username);
     await prefs.setString(_webDavDirectoryKey, directory);
@@ -434,10 +473,14 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
     final autoClearMb = autoClear is int && autoClear >= 0 ? autoClear : 200;
     await prefs.setInt(_autoClearCacheThresholdKey, autoClearMb);
     final rawImgType = values['imageSavePathType'];
-    final imgType = rawImgType is int && [0, 1, 2].contains(rawImgType) ? rawImgType : 0;
+    final imgType = rawImgType is int && [0, 1, 2].contains(rawImgType)
+        ? rawImgType
+        : 0;
     await prefs.setInt(_imageSavePathTypeKey, imgType);
     final rawVidType = values['videoSavePathType'];
-    final vidType = rawVidType is int && [0, 1, 2].contains(rawVidType) ? rawVidType : 0;
+    final vidType = rawVidType is int && [0, 1, 2].contains(rawVidType)
+        ? rawVidType
+        : 0;
     await prefs.setInt(_videoSavePathTypeKey, vidType);
     final restored = state.copyWith(
       themeMode: switch (mode) {
@@ -453,13 +496,22 @@ class AppSettingsNotifier extends StateNotifier<AppSettingsState> {
       isPureBlackDark: pureBlack,
       useCustomFontWeight: customFont,
       customFontWeightDelta: fontDelta,
+      fontScale: fontScale.toDouble(),
       autoClearCacheThresholdMb: autoClearMb,
       imageSavePathType: imgType,
       videoSavePathType: vidType,
     );
     HapticFeedbackUtil.isEnabled = haptics;
     state = restored;
-    return {'url': url, 'username': username, 'directory': directory};
+    return {
+      'url': url,
+      'username': username,
+      'directory': directory,
+      if (credentials is Map) ...{
+        'cookie': credentials['cookie'] as String,
+        'webDavPassword': credentials['webDavPassword'] as String,
+      },
+    };
   }
 }
 

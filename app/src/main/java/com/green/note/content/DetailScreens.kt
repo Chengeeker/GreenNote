@@ -23,20 +23,15 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class PreparedFeedDetail(val feed: JSONObject, val parts: List<ArticlePart>)
+private data class FeedDetailSnapshot(val feed: JSONObject, val parts: List<ArticlePart>)
 
-internal fun needsFullFeedOnOpen(row: JSONObject): Boolean =
-    secondhandInfo(row) == null && (feedIsArticle(row, detail = false) ||
-        row.text("issummary") in setOf("1", "true") || row.text("is_html_article") in setOf("1", "true") ||
-        row.text("message_length").toIntOrNull()?.let { it > 600 } == true || row.text("message").length > 600)
-
-internal suspend fun prepareFeedDetail(api: ContentApi, id: String, seed: JSONObject?): PreparedFeedDetail {
+private suspend fun loadFeedDetail(api: ContentApi, id: String, seed: JSONObject?): FeedDetailSnapshot {
     val owner = api.imageCacheScope()
     val detail = api.request("/v6/feed/detail", query = mapOf("id" to id)).optJSONObject("data") ?: error("动态详情为空")
     val result = withContext(Dispatchers.Default) {
         check(detail.length() > 0) { "动态详情为空" }
         val merged = mergeFeedDetail(seed, detail)
-        PreparedFeedDetail(merged, articleParts(merged))
+        FeedDetailSnapshot(merged, articleParts(merged))
     }
     check(owner == api.imageCacheScope()) { "账号已变更，请重新打开动态" }
     return result
@@ -45,22 +40,20 @@ internal suspend fun prepareFeedDetail(api: ContentApi, id: String, seed: JSONOb
 @Composable
 internal fun FeedDetailScreen(api: ContentApi, id: String, session: ContentSession,
     onOpen: (JSONObject) -> Unit, onUser: (String) -> Unit, onLink: (String) -> Unit, onGallery: (List<String>, Int, JSONObject?) -> Unit,
-    onLike: (JSONObject) -> Unit, onMore: (JSONObject) -> Unit, onLogin: () -> Unit, initialReplyId: String = "", onBack: () -> Unit = {}, questionId: String = "", initialFeed: JSONObject? = null,
-    prepared: PreparedFeedDetail? = null) {
+    onLike: (JSONObject) -> Unit, onMore: (JSONObject) -> Unit, onLogin: () -> Unit, initialReplyId: String = "", onBack: () -> Unit = {}, questionId: String = "", initialFeed: JSONObject? = null) {
     val reactions = remember(api, id) { ReplyReactionStore() }
     CompositionLocalProvider(LocalReplyReactions provides reactions) {
-        FeedDetailContent(api, id, session, onOpen, onUser, onLink, onGallery, onLike, onMore, onLogin, initialReplyId, onBack, questionId, initialFeed, prepared)
+        FeedDetailContent(api, id, session, onOpen, onUser, onLink, onGallery, onLike, onMore, onLogin, initialReplyId, onBack, questionId, initialFeed)
     }
 }
 
 @Composable
 private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSession,
     onOpen: (JSONObject) -> Unit, onUser: (String) -> Unit, onLink: (String) -> Unit, onGallery: (List<String>, Int, JSONObject?) -> Unit,
-    onLike: (JSONObject) -> Unit, onMore: (JSONObject) -> Unit, onLogin: () -> Unit, initialReplyId: String, onBack: () -> Unit, questionId: String, initialFeed: JSONObject?,
-    prepared: PreparedFeedDetail?) {
+    onLike: (JSONObject) -> Unit, onMore: (JSONObject) -> Unit, onLogin: () -> Unit, initialReplyId: String, onBack: () -> Unit, questionId: String, initialFeed: JSONObject?) {
     val seed = initialFeed?.takeIf { it.text("id", "entityId") == id }
-    var feed by remember(id, seed, prepared) { mutableStateOf(prepared?.feed ?: seed) }
-    var parsedParts by remember(id, prepared) { mutableStateOf(prepared?.parts.orEmpty()) }
+    var feed by remember(id, seed) { mutableStateOf(seed) }
+    var parsedParts by remember(id, seed) { mutableStateOf(emptyList<ArticlePart>()) }
     val trade = remember(feed) { feed?.let(::secondhandInfo) }
     val parts = if (trade == null) parsedParts else emptyList()
     var failure by remember(id) { mutableStateOf<String?>(null) }
@@ -72,7 +65,7 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     var targetReply by remember(initialReplyId) { mutableStateOf<JSONObject?>(null) }
     var targetFailure by remember(initialReplyId) { mutableStateOf<String?>(null) }
     val draft = remember(id) { ReplyDraft() }
-    var menu by remember { mutableStateOf(false) }; var delete by remember { mutableStateOf(false) }; var working by remember { mutableStateOf(false) }; var following by remember(id, seed, prepared) { mutableStateOf((prepared?.feed ?: seed)?.let(api::isUserFollowed) ?: false) }
+    var menu by remember { mutableStateOf(false) }; var delete by remember { mutableStateOf(false) }; var working by remember { mutableStateOf(false) }; var following by remember(id, seed) { mutableStateOf(seed?.let(api::isUserFollowed) ?: false) }
     val scope = rememberCoroutineScope(); val context = androidx.compose.ui.platform.LocalContext.current
     val toast = remember { com.green.note.ui.AppToastState() }
     val replies = remember(api, id, api.imageCacheScope()) { ContentListState() }
@@ -87,17 +80,16 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
             }
         }
     }
-    LaunchedEffect(id, seed, prepared) {
-        if (seed != null && prepared == null) {
+    LaunchedEffect(id, seed) {
+        if (seed != null && trade == null) {
             val preview = withContext(Dispatchers.Default) { articleParts(seed) }
             if (feed === seed) parsedParts = preview
         }
     }
-    LaunchedEffect(api, id, attempt, prepared) {
-        if (attempt == 0 && prepared != null) return@LaunchedEffect
+    LaunchedEffect(api, id, attempt, seed) {
         failure = null
         try {
-            val (next, body) = prepareFeedDetail(api, id, feed ?: seed)
+            val (next, body) = loadFeedDetail(api, id, feed ?: seed)
             parsedParts = body; feed = next; following = api.isUserFollowed(next)
         }
         catch (cancelled: CancellationException) { throw cancelled }
@@ -113,7 +105,7 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
         } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) { targetFailure = "目标评论加载失败：${error.message}" }
     }
     val scroll = androidx.compose.foundation.lazy.rememberLazyListState()
-    val density = androidx.compose.ui.platform.LocalDensity.current
+    val commentsIndex = if (parts.isEmpty()) 1 else parts.size + 2
     val articleImages = remember(parts) { parts.filter { it.type == "image" }.map { it.url } }
     val articleIndices = remember(parts) { articleImageIndices(parts) }
     val articleLead = remember(feed, parts.isNotEmpty()) { feed?.let { row ->
@@ -162,15 +154,20 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
             feed == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { com.green.note.ui.ReviewCircularProgress() }
             else -> ContentList(api, replies, { replyTo = it }, onUser, onLink, onGallery, onLike, onMore, Modifier.weight(1f),
                 scroll = scroll, selectable = true, contentPadding = PaddingValues(bottom = 84.dp), initialBodyAnchor = initialReplyId.isNotEmpty() && (targetReply != null || targetFailure != null),
-                bodyAnchorIndex = if (trade != null) 2 else if (parts.isEmpty()) 1 else parts.size + 2,
-                lazyItemCount = if (trade != null) 1 else if (parts.isEmpty()) 0 else parts.size + 1,
+                bodyAnchorIndex = commentsIndex + 1,
+                lazyItemCount = commentsIndex,
                 refreshAction = { attempt++ }, endText = "已经到底了", loadInitially = false,
                 emptyContent = { FeedRepliesEmpty(displayedOrdering == 3, trade != null) },
                 itemContent = { row -> if (row.text("id") != targetReply?.text("id")) ReplyRow(api, row, onUser, onLink, onGallery, authorUid = feed?.text("uid").orEmpty(), onFilterAuthor = { ordering = 3 }, onReplyRequest = { replyTo = it }, onDeleteRequest = { replyToDelete = it }) },
-                lazyContent = if (trade != null) ({ item(key = "trade:comments") { CommentsHeader() } }) else if (parts.isEmpty()) null else ({
-                    items(parts.size, key = { "article:$it" }, contentType = { parts[it].type }) { index -> ArticleBlock(api, feed!!, parts[index], articleImages, articleIndices[index], onLink, onGallery, Modifier.padding(horizontal = 14.dp)) }
-                    item(key = "article:tail") { FeedRow(api, articleTail!!, true, onOpen, onUser, onLink, onGallery, onLike, onMore); CommentsHeader() }
-                }),
+                lazyContent = {
+                    if (parts.isNotEmpty()) {
+                        items(parts.size, key = { "article:$it" }, contentType = { parts[it].type }) { index ->
+                            ArticleBlock(api, feed!!, parts[index], articleImages, articleIndices[index], onLink, onGallery, Modifier.padding(horizontal = 14.dp))
+                        }
+                        item(key = "article:tail") { FeedRow(api, articleTail!!, true, onOpen, onUser, onLink, onGallery, onLike, onMore) }
+                    }
+                    item(key = "feed:comments") { CommentsHeader() }
+                },
                 beforeRows = if (initialReplyId.isNotEmpty() || failure != null) ({
                     failure?.let { message -> Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("原帖加载失败：$message")
@@ -185,21 +182,14 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
                 }) else null) {
                 val row = feed!!
                 if (trade != null) SecondhandDetailBody(api, row, trade, onLink, onGallery)
-                else {
-                    FeedRow(api, articleLead ?: row, true, onOpen, onUser, onLink, onGallery, onLike, onMore)
-                    if (parts.isEmpty()) CommentsHeader()
-                }
+                else FeedRow(api, articleLead ?: row, true, onOpen, onUser, onLink, onGallery, onLike, onMore)
             }
         }
     }
     }, overlay = {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-            feed?.let { row -> FeedDetailToolbar(api, row, session, onLogin, { replyTo = JSONObject() }, {
-                scope.launch {
-                    if (trade != null) scroll.animateScrollToItem(1)
-                    else scroll.animateScrollToItem(0, with(density) { 600.dp.roundToPx() })
-                }
-            }, xianyu = trade?.destination) }
+            feed?.let { row -> FeedDetailToolbar(api, row, session, onLogin, { replyTo = JSONObject() },
+                { scroll.requestScrollToItem(commentsIndex) }, xianyu = trade?.destination) }
         }
     })
     replyTo?.let { reply -> ReplyComposer(api, id, reply.text("id"), draft, onDismiss = { replyTo = null }, onSent = { replyTo = null; attempt++ }, actionScope = scope) }

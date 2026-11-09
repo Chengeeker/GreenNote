@@ -106,7 +106,6 @@ fun ContentApp(
     var detailProgress by remember { mutableStateOf(false) }
     val currentOwner = api.imageCacheScope()
     val preparedApps = remember(api, currentOwner) { linkedMapOf<String, PreparedAppDetail>() }
-    val preparedFeeds = remember(api, currentOwner) { linkedMapOf<String, PreparedFeedDetail>() }
     val fastAppUpdates = remember(stack) { stack.any { JSONObject(it).text("type") in setOf("market", "market_list", "appmanager") } }
     val appManagement = rememberAppManagement(api, lifecycle, fastAppUpdates)
     val accountHome = rememberAccountHome(api, session, lifecycle)
@@ -146,15 +145,8 @@ fun ContentApp(
     }
     var moreRow by remember { mutableStateOf<JSONObject?>(null) }
     var publishPicker by remember { mutableStateOf(false) }
-    fun push(type: String, title: String = "", id: String = "", route: String = "", feedDetail: PreparedFeedDetail? = null) {
+    fun push(type: String, title: String = "", id: String = "", route: String = "") {
         if (route.length > 8192 || id.length > 1024 || title.length > 1024) { snackbar.showSnackbar("页面参数过长"); return }
-        if (type == "feed") {
-            preparedFeeds.remove(id)
-            if (feedDetail != null) {
-                preparedFeeds[id] = feedDetail
-                if (preparedFeeds.size > 8) preparedFeeds.remove(preparedFeeds.keys.first())
-            }
-        }
         stack = ArrayList((stack + JSONObject().put("type", type).put("title", title).put("id", id).put("route", route).toString()).takeLast(32))
     }
     fun back() { if (stack.isNotEmpty()) stack = ArrayList(stack.dropLast(1)) else selected = 0 }
@@ -285,14 +277,7 @@ fun ContentApp(
         if (id.isBlank()) return
         transientEntities["feed:$currentOwner:$id"] = row
         if (transientEntities.size > 64) transientEntities.remove(transientEntities.keys.first())
-        if (!needsFullFeedOnOpen(row)) {
-            push("feed", "动态详情", id, route)
-            return
-        }
-        openPreparedDetail("无法加载全文，请重试") { canOpen ->
-            val detail = prepareFeedDetail(api, id, row)
-            if (canOpen()) push("feed", "动态详情", id, route, feedDetail = detail)
-        }
+        push("feed", "动态详情", id, route)
     }
     fun openEntity(row: JSONObject) {
         val templateRoute = contentTemplateListRoute(row)
@@ -542,7 +527,7 @@ fun ContentApp(
                 "collections" -> CollectionLibraryScreen(api, current.text("id"), ::back, ::openEntity, onUser, ::openLink, onOpenGallery, title = current.text("title"), route = current.text("route"))
                 "home_destination" -> HomeDestinationScreen(api, current.text("id"), current.text("title"), current.text("route"), ::back, ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }) { if (session.authenticated || session.anonymous) push("publish", "发布动态", "feed") else notice(session.loginRequiredMessage) }
                 "product_selector" -> NativeProductSelector(api, ::back, ::openEntity)
-                "feed" -> { val detailArgs = runCatching { JSONObject(current.text("route")) }.getOrNull(); val id = current.text("id"); FeedDetailScreen(api, id, session, ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, onOpenAccount, initialReplyId = detailArgs?.text("replyId") ?: current.text("route"), onBack = ::back, questionId = detailArgs?.text("questionId").orEmpty(), initialFeed = transientEntities["feed:$currentOwner:$id"], prepared = preparedFeeds[id]) }
+                "feed" -> { val detailArgs = runCatching { JSONObject(current.text("route")) }.getOrNull(); val id = current.text("id"); FeedDetailScreen(api, id, session, ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, onOpenAccount, initialReplyId = detailArgs?.text("replyId") ?: current.text("route"), onBack = ::back, questionId = detailArgs?.text("questionId").orEmpty(), initialFeed = transientEntities["feed:$currentOwner:$id"]) }
                 "user" -> UserScreen(api, current.text("id"), ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, session, ::back, onAccountAction,
                     { partner -> push("chat", partner.name.ifEmpty { "私信" }, partner.uid, JSONObject().put("avatar", partner.avatar).toString()) }, onOpenAccount)
                 "topic" -> TopicScreen(api, current.text("id"), ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, ::back,

@@ -156,3 +156,20 @@ fun ReviewOutlinedTextField(value: String, onValueChange: (String) -> Unit, modi
     }
     if (scale == 1f) field() else CompositionLocalProvider(LocalDensity provides physical, content = field)
 }
+
+@Composable
+internal fun ReviewOutlinedTextField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, modifier: Modifier = Modifier,
+    enabled: Boolean = true, textStyle: TextStyle = LocalTextStyle.current,
+    minLines: Int = 1, maxLines: Int = Int.MAX_VALUE, placeholder: (@Composable () -> Unit)? = null,
+    shape: Shape = OutlinedTextFieldDefaults.shape) {
+    val source = LocalDensity.current
+    val scale = source.fontScale
+    val physical = remember(source.density) { Density(source.density, 1f) }
+    val style = remember(textStyle, scale) { linearTextStyle(textStyle, scale) }
+    val field: @Composable () -> Unit = {
+        androidx.compose.material3.OutlinedTextField(value, onValueChange, modifier, enabled = enabled,
+            textStyle = style, minLines = minLines, maxLines = maxLines,
+            placeholder = if (scale == 1f) placeholder else originalDensitySlot(source, placeholder), shape = shape)
+    }
+    if (scale == 1f) field() else CompositionLocalProvider(LocalDensity provides physical, content = field)
+}

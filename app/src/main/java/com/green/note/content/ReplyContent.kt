@@ -23,14 +23,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import com.green.note.ui.MaterialGlyph
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +46,7 @@ import java.io.File
 
 @Stable
 internal class ReplyDraft {
-    var message by mutableStateOf("")
+    var message by mutableStateOf(TextFieldValue())
     var image by mutableStateOf("")
     var uploaded by mutableStateOf("")
     var forward by mutableStateOf(false)
@@ -66,6 +70,8 @@ internal fun ReplyComposer(api: ContentApi, feedId: String, replyId: String, dra
     val toast = remember { com.green.note.ui.AppToastState() }
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var emojiSelection by remember { mutableStateOf<TextRange?>(null) }
+    val emoji = emojiSelection != null
     var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(error) { error?.let { toast.showSnackbar(it); error = null } }
     var picking by remember { mutableStateOf(false) }
@@ -83,6 +89,7 @@ internal fun ReplyComposer(api: ContentApi, feedId: String, replyId: String, dra
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
         val keyboard = LocalSoftwareKeyboardController.current
+        val focusManager = LocalFocusManager.current
         LaunchedEffect(sheet, focus) {
             snapshotFlow { sheet.currentValue }.first { it == SheetValue.Expanded }
             focus.requestFocus()
@@ -96,7 +103,10 @@ internal fun ReplyComposer(api: ContentApi, feedId: String, replyId: String, dra
                 ContentIcon("close_rounded", "关闭", { if (!busy) onDismiss() })
             }
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(draft.message, { draft.message = it }, Modifier.fillMaxWidth().then(Modifier.focusRequester(focus)), enabled = !busy, textStyle = MaterialTheme.typography.bodyLarge, minLines = 2, maxLines = 5, placeholder = { Text(if (target.isEmpty()) "说点什么吧…" else "回复这条评论…") }, shape = RoundedCornerShape(12.dp))
+            OutlinedTextField(draft.message, { draft.message = it }, Modifier.fillMaxWidth()
+                .onFocusChanged { if (it.isFocused) emojiSelection = null }.focusRequester(focus),
+                enabled = !busy, textStyle = MaterialTheme.typography.bodyLarge, minLines = 2, maxLines = 5,
+                placeholder = { Text(if (target.isEmpty()) "说点什么吧…" else "回复这条评论…") }, shape = RoundedCornerShape(12.dp))
             Spacer(Modifier.height(10.dp))
             if (draft.image.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
                 coil.compose.AsyncImage(File(draft.image), "评论图片", Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
@@ -104,6 +114,19 @@ internal fun ReplyComposer(api: ContentApi, feedId: String, replyId: String, dra
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ContentIcon("image_outlined", "从相册选择图片", { if (!busy && !picking) picker.launch("image/*") })
+                ContentIcon(if (emoji) "dialpad_rounded" else "sentiment_satisfied_alt_outlined", if (emoji) "键盘" else "表情", {
+                    if (!busy) {
+                        if (emojiSelection == null) {
+                            emojiSelection = draft.message.selection
+                            focusManager.clearFocus()
+                            keyboard?.hide()
+                        } else {
+                            emojiSelection = null
+                            focus.requestFocus()
+                            keyboard?.show()
+                        }
+                    }
+                })
                 com.green.note.ui.ReviewTextButton(iconPadding = true, onClick = { draft.forward = !draft.forward }, enabled = !busy) {
                     MaterialGlyph(if (draft.forward) "check_box_rounded" else "check_box_outline_blank_rounded", size = 18.dp)
                     com.green.note.ui.ReviewButtonIconGap(); Text("同时转发", fontSize = 12.sp)
@@ -111,24 +134,30 @@ internal fun ReplyComposer(api: ContentApi, feedId: String, replyId: String, dra
                 Spacer(Modifier.weight(1f))
                 com.green.note.ui.ReviewButton(enabled = !busy, onClick = {
                     onDismiss()
-                    if (draft.message.isBlank() && draft.image.isEmpty()) return@ReviewButton
+                    if (draft.message.text.isBlank() && draft.image.isEmpty()) return@ReviewButton
                     if (!session.authenticated) { toast.showSnackbar("请重新登录后发送评论"); return@ReviewButton }
                     draft.sending = true
                     actionScope.launch { try {
                         check(owner == api.imageCacheScope()) { "账号已变更" }
                         if (draft.image.isNotEmpty() && draft.uploaded.isEmpty()) draft.uploaded = api.uploadFeedImage(withContext(Dispatchers.IO) { prepareUploadPng(File(draft.image)) })
                         check(owner == api.imageCacheScope()) { "账号已变更" }
-                        val body = mutableMapOf("id" to target.ifEmpty { feedId }, "type" to if (target.isEmpty()) "feed" else "reply", "message" to draft.message.trim())
+                        val body = mutableMapOf("id" to target.ifEmpty { feedId }, "type" to if (target.isEmpty()) "feed" else "reply", "message" to draft.message.text.trim())
                         if (draft.uploaded.isNotEmpty()) body["pic"] = draft.uploaded
                         if (draft.forward) body["replyAndForward"] = "1"
                         api.request("/v6/feed/reply", "POST", body = body)
-                        val path = draft.image; draft.image = ""; draft.message = ""; draft.uploaded = ""; draft.forward = false
+                        val path = draft.image; draft.image = ""; draft.message = TextFieldValue(); draft.uploaded = ""; draft.forward = false
                         if (path.isNotEmpty()) withContext(Dispatchers.IO) { File(path).delete() }
                         onSent(); toast.showSnackbar("评论已提交")
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) { toast.showSnackbar(failure.message ?: "发送失败，内容已保留") }
                     finally { draft.sending = false } }
                 }) { Text("发送") }
+            }
+            emojiSelection?.let { selection ->
+                ContentEmojiPicker { token ->
+                    draft.message = draft.message.copy(selection = selection).insertEmoji(token)
+                    emojiSelection = draft.message.selection
+                }
             }
         }
     }

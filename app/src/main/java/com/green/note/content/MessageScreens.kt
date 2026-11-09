@@ -24,10 +24,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.TextRange
 import com.green.note.ui.ReviewBasicTextField as BasicTextField
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -178,7 +179,8 @@ internal fun MessageChatScreen(api: ContentApi, session: ContentSession, partner
     val text = draft.text
     var imagePath by rememberSaveable { mutableStateOf("") }
     var uploaded by remember { mutableStateOf("") }
-    var emoji by remember { mutableStateOf(false) }
+    var emojiSelection by remember { mutableStateOf<TextRange?>(null) }
+    val keyboard = LocalSoftwareKeyboardController.current
     val scroll = rememberLazyListState()
     com.green.note.ui.ReviewScrollActivity(scroll)
     suspend fun load(older: Boolean = false, silent: Boolean = false) {
@@ -283,7 +285,7 @@ internal fun MessageChatScreen(api: ContentApi, session: ContentSession, partner
             com.green.note.ui.ReviewIconButton(onClick={val path=imagePath;imagePath="";uploaded="";scope.launch(Dispatchers.IO){File(path).delete()}},enabled=!sending){MaterialGlyph("close",contentDescription="移除待发图片")}
         }
         Row(Modifier.fillMaxWidth().background(panel).navigationBarsPadding().padding(horizontal=8.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
-            com.green.note.ui.ReviewIconButton(onClick={emoji=true},enabled=!sending){MaterialGlyph("sentiment_satisfied_alt_outlined",size=28.dp,contentDescription="表情")}
+            com.green.note.ui.ReviewIconButton(onClick={emojiSelection=draft.selection;keyboard?.hide()},enabled=!sending){MaterialGlyph("sentiment_satisfied_alt_outlined",size=28.dp,contentDescription="表情")}
             BasicTextField(draft,{draft=it},Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if(dark)Color(0xff262626) else Color(0xfff3f3f3)).padding(horizontal=12.dp,vertical=10.dp),minLines=1,maxLines=5,
                 textStyle=androidx.compose.ui.text.TextStyle(localeList=com.green.note.ui.ReviewTextLocales,fontSize=17.sp,color=MaterialTheme.colorScheme.onSurface),cursorBrush=androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                 decorationBox={field->Box { if(text.isEmpty())Text("写私信…",fontSize=17.sp,color=MaterialTheme.colorScheme.onSurfaceVariant);field() }})
@@ -293,8 +295,13 @@ internal fun MessageChatScreen(api: ContentApi, session: ContentSession, partner
             }
         }
     }
-    if (emoji) com.green.note.ui.ReviewModalBottomSheet(onDismissRequest = { emoji = false }) {
-        listOf("🙂", "😀", "😂", "🥰", "😭", "😅", "😎", "👍", "🙏", "🐶", "🤔", "🎉").chunked(6).forEach { group -> Row(Modifier.fillMaxWidth()) { group.forEach { item -> com.green.note.ui.ReviewTextButton(onClick = { val start=draft.selection.min;draft=TextFieldValue(text.replaceRange(start,draft.selection.max,item),TextRange(start+item.length));emoji = false }, modifier = Modifier.weight(1f).aspectRatio(1f)) { Text(item, fontSize = 26.sp) } } } }
+    emojiSelection?.let { selection ->
+        com.green.note.ui.ReviewModalBottomSheet(onDismissRequest = { emojiSelection = null }) {
+            ContentEmojiPicker(includeUnicode = true) { token ->
+                draft = draft.copy(selection = selection).insertEmoji(token)
+                emojiSelection = null
+            }
+        }
     }
 }
 

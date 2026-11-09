@@ -15,7 +15,10 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
 import com.green.note.settings.AppPreferences
 import com.green.note.settings.NotificationSettingsScreen
+import com.green.note.settings.PersonalizationScreen
 import com.green.note.settings.ReplyReminderSettings
+import com.green.note.settings.SettingsDestination
+import com.green.note.settings.SettingsScreen
 import java.time.Duration
 import org.junit.Assert.*
 import org.junit.Before
@@ -71,6 +74,28 @@ class SettingsHapticInteractionTest {
         nextGesture()
         compose.onNodeWithText(text).performTouchInput { click() }
         compose.waitForIdle()
+    }
+
+    @Test fun personalizationOpensFromSettingsAndDynamicColorCanBeToggled() {
+        var personalization by mutableStateOf(false)
+        var preferences by mutableStateOf(AppPreferences(haptics = false))
+        compose.setContent {
+            Host(false) {
+                if (personalization) PersonalizationScreen(preferences, { preferences = it(preferences) }, { personalization = false })
+                else SettingsScreen({}, "游客（未登录）", false, false, false, {
+                    personalization = it == SettingsDestination.PERSONALIZATION
+                }, {})
+            }
+        }
+        tap("个性化")
+        val dynamic = compose.onNodeWithText("动态取色")
+        dynamic.performScrollTo().assertIsDisplayed().performClick()
+        compose.runOnIdle { assertTrue(preferences.dynamicColor) }
+        dynamic.performClick()
+        compose.runOnIdle { assertFalse(preferences.dynamicColor) }
+        compose.onNodeWithContentDescription("返回").performClick()
+        compose.onNodeWithText("通知中心").assertDoesNotExist()
+        compose.onNodeWithText("回复提醒设置").assertExists()
     }
 
     @Test fun rowsAndButtonsOnlyPulseOnConfirmedEnabledClickIncludingReselection() {

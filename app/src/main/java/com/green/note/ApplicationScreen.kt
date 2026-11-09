@@ -171,7 +171,6 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
                     account.authenticated, account.hasAccount, account.anonymous, onNavigate = { page -> when (page) {
                         SettingsDestination.ACCOUNT -> loginOptions = true
                         SettingsDestination.BLACKLIST -> openContent("blacklist", "屏蔽与黑名单")
-                        SettingsDestination.MESSAGES -> openContent("messages", "消息")
                         else -> push(page.name.lowercase())
                     } }, onLogout = { task { try { graph.api.logoutRemote() } finally { graph.accounts.logout() } } }, working = working)
                 "personalization" -> PersonalizationScreen(preferences, { change -> scope.launch {

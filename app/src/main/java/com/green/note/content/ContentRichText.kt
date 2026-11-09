@@ -6,6 +6,7 @@ import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.text.style.UnderlineSpan
 import android.text.style.URLSpan
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.InlineTextContent
@@ -16,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -135,8 +137,14 @@ internal fun contentEmojiCode(name: String): String? {
 @Composable
 internal fun ContentEmotion(name: String, modifier: Modifier = Modifier, fontSize: TextUnit = 24.sp) {
     val code = contentEmojiCode(name)
+    val drawable = code?.let(contentEmojiDrawables::get)
+    if (drawable != null) {
+        Image(painterResource(drawable), "[$name]", modifier, contentScale = ContentScale.Fit)
+        return
+    }
     var source by remember(code) { mutableIntStateOf(0) }
-    val bases = listOf("https://coolemotion.netlify.app/source/png/", "https://cdn.jsdelivr.net/gh/Coolapk-Dev/Coolapk-Emotion/source/png/", "https://fastly.jsdelivr.net/gh/Coolapk-Dev/Coolapk-Emotion/source/png/")
+    val bases = listOf("https://coolemotion.netlify.app/source/png/",
+        "https://cdn.jsdelivr.net/gh/NitroRCr/coolapk-emotion@44dc75c3368988a6e28756e1cfdd71b54c68a06a/source/png/")
     Box(modifier, contentAlignment = Alignment.Center) {
         if (code == null || source >= bases.size) Text(contentUnicodeEmojiFallback.optString(name).ifEmpty { "[$name]" }, fontSize = fontSize)
         else AsyncImage(bases[source] + code + ".png", "[$name]", Modifier.fillMaxSize(), contentScale = ContentScale.Fit, onError = { source++ })

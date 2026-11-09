@@ -32,7 +32,7 @@ import com.green.note.ui.*
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-enum class SettingsDestination { ACCOUNT, BLACKLIST, PERSONALIZATION, MESSAGES, NOTIFICATIONS, STORAGE, CACHE, WEBDAV }
+enum class SettingsDestination { ACCOUNT, BLACKLIST, PERSONALIZATION, NOTIFICATIONS, STORAGE, CACHE, WEBDAV }
 
 @Composable
 fun SettingsScreen(onBack: () -> Unit, loginLabel: String, hasCookie: Boolean, hasAccount: Boolean, anonymous: Boolean,
@@ -52,7 +52,6 @@ fun SettingsScreen(onBack: () -> Unit, loginLabel: String, hasCookie: Boolean, h
         Spacer(Modifier.height(32.dp)); SectionHeading("偏好与功能"); Spacer(Modifier.height(12.dp))
         SectionCard {
             PreferenceRow("个性化", icon = "palette_outlined", onClick = { onNavigate(SettingsDestination.PERSONALIZATION) })
-            PreferenceRow("通知中心", icon = "notifications_outlined", onClick = { onNavigate(SettingsDestination.MESSAGES) })
             PreferenceRow("回复提醒设置", icon = "notifications_active_outlined", onClick = { onNavigate(SettingsDestination.NOTIFICATIONS) })
         }
         Spacer(Modifier.height(32.dp)); SectionHeading("存储与备份"); Spacer(Modifier.height(12.dp))

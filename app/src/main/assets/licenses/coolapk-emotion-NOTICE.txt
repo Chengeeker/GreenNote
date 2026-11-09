@@ -1,0 +1,3 @@
+The original emoji PNG artwork is from Coolapk.
+The bundled PNGs come from the coolapk-emotion archive at the following revision.
+https://github.com/NitroRCr/coolapk-emotion/tree/44dc75c3368988a6e28756e1cfdd71b54c68a06a/source/png

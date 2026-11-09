@@ -28,9 +28,6 @@ internal val appearanceNames = listOf("经典红", "活力橙", "极光蓝", "�
 private fun appearanceAction(action: () -> Unit): () -> Unit = rememberHapticClick(action)
 
 @Composable
-private fun AppearanceGlyph(name: String, color: Color, size: Int = 24) { MaterialGlyph(name + "_rounded", size = size.dp, color = color) }
-
-@Composable
 internal fun AppearanceTitle(title: String) {
     Text(title, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
         style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
@@ -75,7 +72,7 @@ internal fun AppearanceToggle(title: String, icon: String, value: Boolean, summa
     val action = appearanceAction { change(!value) }
     AppearanceRow(title, Modifier.toggleable(value, enabled = enabled, role = Role.Switch,
         interactionSource = null, indication = null, onValueChange = { action() }).padding(vertical = 3.dp), summary,
-        leading = { AppearanceGlyph(icon, MaterialTheme.colorScheme.primary) },
+        leading = { MaterialGlyph(icon, size = 24.dp, color = MaterialTheme.colorScheme.primary) },
         trailing = { Switch(value, null, modifier = Modifier.padding(horizontal = 4.dp), enabled = enabled) })
 }
 
@@ -90,7 +87,7 @@ internal fun AppearanceModes(mode: Int, onMode: (Int) -> Unit, pureBlack: Boolea
                     leading = { RadioButton(mode == index, null, Modifier.size(40.dp), enabled = enabled) })
             }
         }
-        if (pureBlack != null) AppearanceToggle("纯黑深色模式", "contrast", pureBlack, enabled = enabled, change = onPureBlack)
+        if (pureBlack != null) AppearanceToggle("纯黑深色模式", "contrast_rounded", pureBlack, enabled = enabled, change = onPureBlack)
     }
 }
 
@@ -101,7 +98,7 @@ internal fun AppearancePalette(dynamic: Boolean, onDynamic: (Boolean) -> Unit, s
     val supportsDynamic = Build.VERSION.SDK_INT >= 31
     AppearanceSection("色彩方案") {
         Spacer(Modifier.height(8.dp))
-        AppearanceToggle("动态取色", "auto_awesome", dynamic && supportsDynamic, enabled = enabled && supportsDynamic, change = onDynamic)
+        AppearanceToggle("动态取色", "auto_awesome_outlined", dynamic && supportsDynamic, enabled = enabled && supportsDynamic, change = onDynamic)
         if (!dynamic || !supportsDynamic) {
             Text("Material 3 预置主题色", Modifier.padding(start = 16.dp, top = 14.dp, bottom = 10.dp),
                 fontSize = 14.sp, color = colors.onSurfaceVariant)
@@ -117,7 +114,7 @@ internal fun AppearancePalette(dynamic: Boolean, onDynamic: (Boolean) -> Unit, s
                                 Box(Modifier.size(20.dp).background(Color(seeds[index]), CircleShape), contentAlignment = Alignment.Center) {
                                     if (checked) {
                                         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = .38f), CircleShape))
-                                        AppearanceGlyph("check", colors.onSurfaceVariant, 18)
+                                        MaterialGlyph("check_rounded", size = 18.dp, color = colors.onSurfaceVariant)
                                     }
                                 }
                                 Text(title, Modifier.padding(horizontal = 8.dp), style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)

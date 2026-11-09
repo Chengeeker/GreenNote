@@ -1,0 +1,16 @@
+AppIconPalette.kt contains a Kotlin compatibility port of:
+
+1. Google material_color_utilities 0.13.0 quantize/quantizer_wsmeans.dart and quantizer_wu.dart
+   Copyright 2021 Google LLC, Apache License 2.0.
+   https://pub.dev/packages/material_color_utilities/versions/0.13.0
+   Full license: material-color-utilities-apache-2.0.txt
+
+2. Dart SDK 3.13.1 seeded Random implementation in sdk/lib/_internal/vm/lib/math_patch.dart
+   Revision 852b3e3608906afbe6102573cfd4407aeedd1b78
+   Copyright 2012, the Dart project authors, BSD 3-Clause license.
+   https://github.com/dart-lang/sdk/blob/852b3e3608906afbe6102573cfd4407aeedd1b78/sdk/lib/_internal/vm/lib/math_patch.dart
+   Full license: dart-sdk-bsd-3-clause.txt
+
+Modifications: bounded Kotlin image-palette compatibility implementation; reuse Material
+1.13.0 public Lab, Score, HCT and Fidelity utilities; omit unused debug logging and
+input-to-cluster bookkeeping. Preserve Dart Wu rounding, five-iteration refinement and RNG sequence.

@@ -1,0 +1,319 @@
+[
+  {
+    "name": "window_99",
+    "now": 99,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "报名未开始",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "window_100",
+    "now": 100,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "立即报名",
+      "canRegister": true,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "window_150",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "立即报名",
+      "canRegister": true,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "window_200",
+    "now": 200,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "立即报名",
+      "canRegister": true,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "window_201",
+    "now": 201,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "暂未公布众测名单",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "stage_0",
+    "now": 150,
+    "event": {
+      "stage_status": 0,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "暂不可报名",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "stage_2",
+    "now": 150,
+    "event": {
+      "stage_status": 2,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "暂未公布众测名单",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "stage_3",
+    "now": 150,
+    "event": {
+      "stage_status": 3,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "活动已结束",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "joined",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7",
+      "is_join_status": 1
+    },
+    "expected": {
+      "label": "已报名",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "event_end",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7",
+      "time_end": 149
+    },
+    "expected": {
+      "label": "活动已结束",
+      "canRegister": true,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "winners_precede_stage",
+    "now": 150,
+    "event": {
+      "stage_status": 3,
+      "prizeUserUrl": "#/event/prizeUserList?id=7"
+    },
+    "expected": {
+      "label": "查看众测名单",
+      "canRegister": false,
+      "actionUrl": "",
+      "winnersUrl": "#/event/prizeUserList?id=7"
+    }
+  },
+  {
+    "name": "aliases",
+    "now": 150,
+    "event": {
+      "stageStatus": "1",
+      "registrationStart": "100",
+      "registrationEnd": "200",
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "立即报名",
+      "canRegister": true,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "skip_invalid_first_time",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": "bad",
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7",
+      "registration_start": 100
+    },
+    "expected": {
+      "label": "立即报名",
+      "canRegister": true,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "missing_end",
+    "now": 150,
+    "event": {
+      "time_reg_start": 100,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "暂不可报名",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "missing_start",
+    "now": 150,
+    "event": {
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "暂不可报名",
+      "canRegister": false,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "unknown_stage",
+    "now": 150,
+    "event": {
+      "stage_status": "unavailable",
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https://m.coolapk.com/activity/register?id=7"
+    },
+    "expected": {
+      "label": "立即报名",
+      "canRegister": true,
+      "actionUrl": "https://m.coolapk.com/activity/register?id=7",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "invalid_url_",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": ""
+    },
+    "expected": {
+      "label": "暂不可报名",
+      "canRegister": false,
+      "actionUrl": "",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "invalid_url_http://example.test/form",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "http://example.test/form"
+    },
+    "expected": {
+      "label": "暂不可报名",
+      "canRegister": false,
+      "actionUrl": "http://example.test/form",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "invalid_url_javascript:void(0)",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "javascript:void(0)"
+    },
+    "expected": {
+      "label": "暂不可报名",
+      "canRegister": false,
+      "actionUrl": "javascript:void(0)",
+      "winnersUrl": ""
+    }
+  },
+  {
+    "name": "invalid_url_https:/relative",
+    "now": 150,
+    "event": {
+      "stage_status": 1,
+      "time_reg_start": 100,
+      "time_reg_end": 200,
+      "action_url": "https:/relative"
+    },
+    "expected": {
+      "label": "暂不可报名",
+      "canRegister": false,
+      "actionUrl": "https:/relative",
+      "winnersUrl": ""
+    }
+  }
+]

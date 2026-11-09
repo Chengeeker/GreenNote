@@ -1,0 +1,18 @@
+<!doctype html><html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>:root{color-scheme:light dark}body{font:16px sans-serif;margin:24px;line-height:1.6;color:CanvasText;background:Canvas}</style>
+</head><body><p id="status">正在加载验证组件…</p><div id="captcha"></div>
+<script>
+function statusText(s){document.getElementById('status').textContent=s;}
+var timeout=setTimeout(function(){statusText('加载超时，请点击右上角重新加载');},15000);
+var script=document.createElement('script');script.src='https://cstaticdun.126.net/load.min.js';
+script.onerror=function(){clearTimeout(timeout);statusText('加载失败，请检查网络后重新加载');};
+script.onload=function(){try{initNECaptcha({captchaId:'%CAPTCHA_ID%',element:'#captcha',
+protocol:'https',mode:'embed',apiVersion:2,width:Math.min(320,window.innerWidth-48)+'px',lang:'zh-CN',
+onVerify:function(err,data){if(!err&&data&&data.validate){CoolapkCaptcha.postMessage(data.validate);}
+else{statusText('验证未通过，请按提示重试');}}},
+function(){clearTimeout(timeout);statusText('请按下方提示完成人机验证');},
+function(){clearTimeout(timeout);statusText('验证组件不可用，请重新加载');});}
+catch(e){clearTimeout(timeout);statusText('验证组件初始化失败，请重新加载');}};
+document.head.appendChild(script);
+</script></body></html>

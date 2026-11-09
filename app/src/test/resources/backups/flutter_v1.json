@@ -1,0 +1,23 @@
+{
+  "app": "Greennote",
+  "version": 1,
+  "exported_at": "2026-11-05T00:00:00.000",
+  "preferences": {
+    "themeMode": 0,
+    "dynamicColor": false,
+    "themeSeedArgb": 4281236786,
+    "enableHaptics": true,
+    "floatingNavBar": true,
+    "liquidGlassNavBar": true,
+    "pureBlackDark": false,
+    "useCustomFontWeight": false,
+    "customFontWeightDelta": 0,
+    "fontScale": 1.2,
+    "autoClearCacheThresholdMb": 200,
+    "imageSavePathType": 0,
+    "videoSavePathType": 0,
+    "webDavUrl": "https://dav.example.com/",
+    "webDavUsername": "test-user",
+    "webDavDirectory": "GreenNote"
+  }
+}

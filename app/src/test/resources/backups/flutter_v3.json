@@ -1,0 +1,69 @@
+{
+  "app": "Greennote",
+  "version": 3,
+  "credentials": {
+    "cookie": "uid=10; token=synthetic-login-token",
+    "webDavPassword": "synthetic-dav-password"
+  },
+  "localAccount": {
+    "version": 2,
+    "activeProfileId": "anon_1",
+    "profiles": [
+      {
+        "id": "anon_1",
+        "name": "导出资料",
+        "avatar": "",
+        "publicIdentity": {
+          "uid": "12345",
+          "username": "公开主页",
+          "userAvatar": "https://example.com/avatar.png"
+        },
+        "follows": {},
+        "productFollows": {},
+        "favorites": {
+          "9": {
+            "id": "9",
+            "message": "正文",
+            "pic": "https://example.com/a.png,https://example.com/b.png"
+          }
+        },
+        "createdAt": 1793874611540
+      }
+    ],
+    "name": "导出资料",
+    "avatar": "",
+    "publicIdentity": {
+      "uid": "12345",
+      "username": "公开主页",
+      "userAvatar": "https://example.com/avatar.png"
+    },
+    "follows": {},
+    "productFollows": {},
+    "favorites": {
+      "9": {
+        "id": "9",
+        "message": "正文",
+        "pic": "https://example.com/a.png,https://example.com/b.png"
+      }
+    }
+  },
+  "exported_at": "2026-11-05T00:00:00.000",
+  "preferences": {
+    "themeMode": 0,
+    "dynamicColor": false,
+    "themeSeedArgb": 4281236786,
+    "enableHaptics": true,
+    "floatingNavBar": true,
+    "liquidGlassNavBar": true,
+    "pureBlackDark": false,
+    "useCustomFontWeight": false,
+    "customFontWeightDelta": 0,
+    "fontScale": 1.2,
+    "autoClearCacheThresholdMb": 200,
+    "imageSavePathType": 0,
+    "videoSavePathType": 0,
+    "webDavUrl": "https://dav.example.com/",
+    "webDavUsername": "test-user",
+    "webDavDirectory": "GreenNote"
+  }
+}

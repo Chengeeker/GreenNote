@@ -5,6 +5,7 @@ import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
 import com.green.note.account.AccountRepository
+import com.green.note.content.DigitalBrandAssets
 import com.green.note.network.ApiClient
 import com.green.note.network.ApiSession
 import com.green.note.network.OfficialDeviceIdentity
@@ -39,6 +40,7 @@ class AppGraph private constructor(val context: Context) {
         withContext(Dispatchers.IO) {
             accounts.initialize()
             settings.initialize()
+            DigitalBrandAssets.get(context).warm()
             val guest = accounts.readSecret("guest_device_code") ?: run {
                 val legacy = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
                     .all["flutter.guest_device_code"] as? String

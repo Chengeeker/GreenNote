@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,14 +57,15 @@ internal fun DigitalLibraryScreen(api: ContentApi, initialCategory: String = "10
     var expanded by remember { mutableStateOf(setOf<String>()) }
     var sort by rememberSaveable { mutableStateOf("热度") }
     var selectedBrand by rememberSaveable(selected) { mutableStateOf<String?>(null) }
-    var brands by remember(selected) { mutableStateOf(if (selected == "1000") JSONArray(digitalFallbackBrands).objects() else emptyList()) }
+    val brandAssets = DigitalBrandAssets.get(LocalContext.current)
+    var brands by remember(selected) { mutableStateOf(brandAssets.rows(selected)) }
     var sortUrls by remember(selected) { mutableStateOf(mapOf<String, String>()) }
     var specs by remember { mutableStateOf<JSONObject?>(null) }
     var tabletBrandError by remember{mutableStateOf<String?>(null)}
     var brandRevision by remember{mutableIntStateOf(0)}
     val scope = rememberCoroutineScope()
-    LaunchedEffect(api,tabletPresentation,brandRevision) {
-        if(tabletPresentation)try {
+    LaunchedEffect(api,tabletPresentation,selected,brandRevision) {
+        if(tabletPresentation && brands.isEmpty())try {
             val root=api.request("/v6/product/brandList");val values=root.optJSONArray("data").objects().flatMap{if(it.text("entityType").equals("card",true))cardChildren(it)else listOf(it)}.map{digitalTabletBrand(it)}.filter{it.text("title","name").isNotEmpty()&&it.text("url").isNotEmpty()}
             if(brands.isEmpty()&&values.isNotEmpty()){brands=values;tabletBrandError=null}
         }catch(cancelled:CancellationException){throw cancelled}catch(error:Exception){if(brands.isEmpty())tabletBrandError=error.message}

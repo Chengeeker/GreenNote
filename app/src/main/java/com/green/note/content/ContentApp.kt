@@ -372,7 +372,7 @@ fun ContentApp(
     }
     @Composable fun Page(current: JSONObject?) {
     val todayPage = current?.text("type") == "list" && (current.text("title").trim().startsWith("今日酷安") || Uri.parse(current.text("route")).path in setOf("/v6/main/headline", "/main/headline"))
-    val edgeTop = current?.text("type") in setOf("event", "user", "topic", "apk")
+    val edgeTop = current?.text("type") in setOf("event", "user", "topic", "apk", "product")
     val ownsToolbar = current?.text("type") in setOf("search", "searchresults", "publish", "blacklist", "browser", "activity_document", "topic", "home_destination", "product_selector", "user", "apk", "product", "community", "community_library", "messages", "sessions", "chat", "market", "feed", "relations", "appmanager", "collections", "event", "account_topics") || current?.text("id") == "rating"
     val backdropSource = if (current == null) selected to when (selected) {
         0 -> home
@@ -384,7 +384,7 @@ fun ContentApp(
     Scaffold(
         containerColor = com.green.note.ui.LocalScaffoldColor.current,
         contentWindowInsets = when {
-            current?.text("type") == "apk" -> WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            current?.text("type") in setOf("apk", "product") -> WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
             edgeTop -> WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
             else -> ScaffoldDefaults.contentWindowInsets
         },

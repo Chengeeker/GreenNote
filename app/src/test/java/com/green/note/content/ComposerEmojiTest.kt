@@ -15,6 +15,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import coil.Coil
 import coil.ImageLoader
+import com.green.note.R
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
@@ -58,10 +59,12 @@ class ComposerEmojiTest {
         assertEquals(0, networkAttempts.get())
     }
 
-    @Test fun allEightyOnePickerImagesDecodeFromPackagedResources() {
+    @Test fun pickerAndLegacyNumberedImagesDecodeFromPackagedResources() {
         val resources = compose.activity.resources
-        assertEquals(81, contentEmojiDrawables.size)
-        assertEquals(81, contentEmojiDrawables.values.toSet().size)
+        assertEquals(81, contentEmojiCodes.keys().asSequence().mapNotNull(::contentEmojiCode).filter { it in contentEmojiDrawables }.toSet().size)
+        assertEquals(121, contentEmojiDrawables.size)
+        assertEquals(121, contentEmojiDrawables.values.toSet().size)
+        assertEquals(R.drawable.coolapk_emoji_40, contentEmojiDrawables[contentEmojiCode("[40]")])
         for ((code, drawable) in contentEmojiDrawables) {
             val bitmap = resources.openRawResource(drawable).use { BitmapFactory.decodeStream(it) }
             assertNotNull(code, bitmap)

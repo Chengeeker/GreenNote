@@ -40,14 +40,15 @@ internal fun FeedTargetOrTags(api:ContentApi,row:JSONObject,detail:Boolean,onLin
     val target=row.optJSONObject("targetRow");val title=target?.text("title").orEmpty().ifEmpty{row.text("ttitle")}
     val logo=target?.text("logo").orEmpty().ifEmpty{row.text("tpic")};val url=target?.text("url").orEmpty().ifEmpty{row.text("turl")}
     val product=target?.text("targetType")=="product"||url.contains("/product/")
+    val productDiscussion = !detail && row.optBoolean("_composeProductDiscussion")
     if(title.isNotEmpty()) {
         if(detail)FeedDetailTarget(api,row,target,title,logo,url,onLink)
-        else FeedTargetPill(api,title,logo,if(product)"devices_rounded"else"tag_rounded"){onLink(feedTargetRoute(title,url,target))}
+        else FeedTargetPill(api,title,logo,if(product)"devices_rounded"else"tag_rounded",productDiscussion){onLink(feedTargetRoute(title,url,target))}
         return
     }
     val relation=row.optJSONArray("relationRows").objects().firstOrNull{it.text("title").isNotEmpty()}
-    if(relation!=null){FeedTargetPill(api,relation.text("title"),relation.text("logo"),""){onLink(feedTargetRoute(relation.text("title"),relation.text("url"),null))};return}
-    if(!detail) {val device=row.text("device_title","device_name");if(device.isNotEmpty())FeedTargetPill(api,device,"","smartphone_rounded",null);return}
+    if(relation!=null){FeedTargetPill(api,relation.text("title"),relation.text("logo"),"",productDiscussion){onLink(feedTargetRoute(relation.text("title"),relation.text("url"),null))};return}
+    if(!detail) {val device=row.text("device_title","device_name");if(device.isNotEmpty() && !productDiscussion)FeedTargetPill(api,device,"","smartphone_rounded",onClick=null);return}
     val tags=linkedSetOf<String>();val raw=row.opt("tags")
     val entries=when(raw){is String->raw.split(',');is JSONArray->(0 until raw.length()).map{raw.optString(it)};else->emptyList()}
     (entries+row.optJSONArray("tagRows").objects().map{it.text("title")}).forEach{val tag=it.replace("#","").trim();if(tag.isNotEmpty()&&!tag.startsWith("http"))tags.add(tag)}
@@ -57,12 +58,17 @@ internal fun FeedTargetOrTags(api:ContentApi,row:JSONObject,detail:Boolean,onLin
 }
 
 @Composable
-private fun FeedTargetPill(api:ContentApi,title:String,logo:String,icon:String,onClick:(()->Unit)?) {
+private fun FeedTargetPill(api:ContentApi,title:String,logo:String,icon:String,productDiscussion:Boolean=false,onClick:(()->Unit)?) {
     val scheme=MaterialTheme.colorScheme
-    Row(Modifier.padding(top=8.dp).background(scheme.surfaceContainerHighest.copy(alpha=.5f),RoundedCornerShape(12.dp)).then(if(onClick==null)Modifier else Modifier.clickable(onClick=onClick)).padding(horizontal=8.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
+    val accent = if (scheme.surface.red + scheme.surface.green + scheme.surface.blue < 1.5f) Color(0xff53d3c9) else Color(0xff00796b)
+    val background = if (productDiscussion) accent.copy(alpha = .18f) else scheme.surfaceContainerHighest.copy(alpha=.5f)
+    Row(Modifier.padding(top=if(productDiscussion)12.dp else 8.dp)
+        .background(background,RoundedCornerShape(if(productDiscussion)3.dp else 12.dp))
+        .then(if(onClick==null)Modifier else Modifier.clickable(onClick=onClick))
+        .padding(horizontal=if(productDiscussion)4.dp else 8.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
         if(logo.isNotEmpty()){ContentImage(api,logo,null,Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)),heroCornerRadius=4.dp);Spacer(Modifier.width(4.dp))}
         else if(icon.isNotEmpty()){MaterialGlyph(icon,size=13.dp,color=scheme.primary);Spacer(Modifier.width(4.dp))}
-        Text(title,fontSize=12.sp,fontWeight=FontWeight.Medium,color=scheme.onSurfaceVariant)
+        Text(title,fontSize=12.sp,fontWeight=if(productDiscussion)FontWeight.Normal else FontWeight.Medium,color=if(productDiscussion)accent else scheme.onSurfaceVariant)
     }
 }
 

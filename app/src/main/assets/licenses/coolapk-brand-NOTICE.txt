@@ -1,0 +1,8 @@
+The digital brand catalog is a snapshot of Coolapk's public digital library
+category data on 2026-11-10. The catalog lists the source URL for each logo.
+
+https://api.coolapk.com/v6/product/categoryList
+https://api.coolapk.com/v6/page/dataList
+
+Bundled thumbnails come from the catalog's image.coolapk.com/product_logo URLs.
+Brand names and logos are marks of their respective owners.

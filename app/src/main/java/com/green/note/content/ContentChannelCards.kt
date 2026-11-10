@@ -91,7 +91,13 @@ internal fun BrandHorizonCard(api:ContentApi,items:List<JSONObject>,onOpen:(JSON
     LazyRow(Modifier.padding(horizontal=10.dp,vertical=4.dp).height(126.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
         items(items.chunked(2)){group->Column(verticalArrangement=Arrangement.spacedBy(8.dp)){group.forEach{brand->Column(Modifier.width(68.dp).clickable(onClick=rememberHapticClick{onOpen(brand)}),horizontalAlignment=Alignment.CenterHorizontally) {
             Surface(shape=RoundedCornerShape(8.dp),color=Color.White,shadowElevation=1.dp){Box(Modifier.size(68.dp,38.dp).padding(horizontal=6.dp,vertical=3.dp),contentAlignment=Alignment.Center) {
-                CardImage(api,cardImage(brand),Modifier.fillMaxSize(),ContentScale.Fit){Text(cardTitle(brand),fontSize=11.sp,fontWeight=FontWeight.Bold,color=Color.Black.copy(alpha=.87f))}
+                val logo = cardImage(brand)
+                val fallback: @Composable () -> Unit = { Text(cardTitle(brand),fontSize=11.sp,fontWeight=FontWeight.Bold,color=Color.Black.copy(alpha=.87f)) }
+                val route = brand.text("url")
+                if (brand.text("entityType").equals("productBrand", true) ||
+                    route.contains("/product/seriesList", true) || route.contains("product%2FseriesList", true)) {
+                    DigitalBrandLogo(api, brand, logo, Modifier.fillMaxSize(), fallback)
+                } else CardImage(api, logo, Modifier.fillMaxSize(), ContentScale.Fit, fallback = fallback)
             }}
             Spacer(Modifier.height(4.dp));Text(cardTitle(brand),Modifier.width(68.dp),fontSize=12.sp,textAlign=TextAlign.Center,maxLines=1,overflow=TextOverflow.Ellipsis)
         }}}}

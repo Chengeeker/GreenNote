@@ -6,6 +6,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NativeEntityDetailsTest {
+    @Test fun onlyReleasedPhonesUseFourFooterActions() {
+        fun labels(category: Int, released: Int, url: String = "", compare: Int = 0) =
+            productFooterActions(JSONObject().put("category_id", category).put("release_status", released)
+                .put("sell_url", url).put("is_can_compare", compare)).map { it.label }
+        val store = "https://item.jd.com/123.html"
+        assertEquals(listOf("对比", "关注", "打分", "购买"), labels(1000, 1))
+        assertEquals(listOf("对比", "关注", "未发布"), labels(1000, 0, store, compare = 1))
+        assertEquals(listOf("关注", "打分", "购买"), labels(1001, 1, store, compare = 1))
+        assertEquals(listOf("关注", "打分"), labels(1005, 1))
+        assertEquals(listOf("关注", "未发布"), labels(1001, 0, store, compare = 1))
+    }
+
+    @Test fun tabletUsesServerDimensionsInOrderWithOwnerScores() {
+        val tablet = JSONObject("""{"category_id":1001,"rating_item_info":[
+            {"id":"v4_score_item_1","name":"屏幕","average_score":"7.9","owner_average_score":"8.1"},
+            {"id":"v4_score_item_2","name":"续航","average_score":"9.3","owner_average_score":"9.3"},
+            {"id":"v4_score_item_7","name":"音质","average_score":"7.6","owner_average_score":"7.8"}
+        ]}""")
+        assertEquals(listOf("屏幕" to 8.1f, "续航" to 9.3f, "音质" to 7.8f), productDimensionScores(tablet))
+    }
+
     @Test fun productRatingUsesPublishedOwnerDimensionsAndKeepsMissingScoresEmpty() {
         val detail = JSONObject("""{
             "owner_star_total_count":1551,"owner_star_average_score":"9.0","rating_average_score":"8.5",

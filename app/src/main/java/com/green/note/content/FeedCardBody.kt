@@ -61,10 +61,12 @@ internal fun FeedCardBody(api:ContentApi,row:JSONObject,username:String,detail:B
             row.optBoolean("_composeArticleLayout")->ContentRichText(summary,maxLines=3,secondary=true,onLink=onLink,fontSize=16.sp,lineHeight=23.2.sp,letterSpacing=.1.sp,maxCharacters=1000,flutterArticleMetrics=true)
             official->FeedOfficialMessage(message.trimEnd(),6,false,22.08.sp,onLink){onOpen(row)}
             else->{val prefix=if(price!=null)buildAnnotatedString{withStyle(SpanStyle(color=Color(0xFF009688))){append("¥ 到手价 | ")}}else null
-                val darkProfile = profileCard && scheme.surface.red + scheme.surface.green + scheme.surface.blue < 1.5f
-                ContentRichText(message,maxLines=8,onLink=onLink,fontSize=16.sp,lineHeight=when{headline->22.08.sp;price!=null->22.4.sp;else->20.8.sp},prefix=prefix,
+                val productDiscussion = row.optBoolean("_composeProductDiscussion")
+                val darkProfile = (profileCard || productDiscussion) && scheme.surface.red + scheme.surface.green + scheme.surface.blue < 1.5f
+                ContentRichText(message,maxLines=8,onLink=onLink,fontSize=16.sp,lineHeight=when{headline->22.08.sp;price!=null||productDiscussion->22.4.sp;else->20.8.sp},prefix=prefix,
+                    letterSpacing = if (productDiscussion) .22.sp else 0.sp,
                     color = if (darkProfile) Color(0xFFD2D2D2) else Color.Unspecified,
-                    linkColor = if (darkProfile) darkProfileAccent else if (profileCard) Color(0xFF00796B) else scheme.primary)}
+                    linkColor = if (darkProfile) darkProfileAccent else if (profileCard || productDiscussion) Color(0xFF00796B) else scheme.primary)}
         }
     }
     if(!(before&&images.isNotEmpty()&&!inlineArticle)) {

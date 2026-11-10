@@ -20,7 +20,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectableGroup
 import com.green.note.ui.tapToggleable as toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import com.green.note.ui.ReviewRefreshBox
@@ -45,7 +47,11 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -394,6 +400,28 @@ private fun AppRating(data: JSONObject, foreground: Color, card: Color) {
 }
 
 internal data class ProductDetailTab(val title: String, val type: String, val route: String = "", val subId: String = "")
+private val productAccent = Color(0xff009688)
+private val productWatchHeader = Color(0xff3f535a)
+private val productTabletHeader = Color(0xff3c4e5c)
+private val productPreviewHeader = Color(0xff39505f)
+
+internal enum class ProductFooterAction(val label: String, val icon: String) {
+    Compare("对比", ""), Follow("关注", "favorite_border_rounded"), Rate("打分", "star_border_rounded"),
+    Unreleased("未发布", "star_border_rounded"), Buy("购买", "shopping_bag_outlined"),
+}
+
+internal fun productFooterActions(raw: JSONObject): List<ProductFooterAction> = buildList {
+    val phone = raw.text("category_id") == "1000"
+    val unreleased = raw.text("release_status") == "0"
+    if (phone) add(ProductFooterAction.Compare)
+    add(ProductFooterAction.Follow)
+    add(if (unreleased) ProductFooterAction.Unreleased else ProductFooterAction.Rate)
+    val canBuy = if (phone) raw.text("release_status") == "1" else productBuyUrl(raw).isNotEmpty()
+    if (!unreleased && canBuy) {
+        add(ProductFooterAction.Buy)
+    }
+}
+
 internal fun productDetailTabs(raw: JSONArray?, id: String): List<ProductDetailTab> {
     val defaults = listOf("参数" to "main", "讨论" to "feed", "点评" to "rating", "图文" to "article", "问答" to "answer", "视频" to "video", "二手" to "trade").map { ProductDetailTab(it.first, it.second) }
     val parsed = raw.objects().mapNotNull { value ->
@@ -456,7 +484,6 @@ private fun NativeProductDetail(api: ContentApi, id: String, onLink: (String) ->
     val scroll = rememberLazyListState()
     com.green.note.ui.ReviewScrollActivity(scroll)
     val compact by remember { derivedStateOf { scroll.firstVisibleItemIndex > 0 } }
-    val green = Color(0xff00b074)
     val tabs = remember(detail) { productDetailTabs(detail?.optJSONArray("tabList"), id) }
     LaunchedEffect(api, id, reload) {
         loading = true; error = null
@@ -494,7 +521,7 @@ private fun NativeProductDetail(api: ContentApi, id: String, onLink: (String) ->
     fun toast(value: String) { com.green.note.ui.AppToastState().showSnackbar(value) }
     fun buy() {
         val value = detail ?: return
-        val explicit = value.text("buy_url", "goods_buy_url", "jd_url", "mall_url", "shop_url")
+        val explicit = productBuyUrl(value)
         val title = value.text("title").ifEmpty { "手机" }
         val fallback = "https://so.m.jd.com/ware/search.action?keyword=${Uri.encode(title)}"
         val jd = "openapp.jdmobile://virtual?params=${Uri.encode(JSONObject().put("category", "jump").put("des", "search").put("keyWord", title).toString())}"
@@ -507,11 +534,23 @@ private fun NativeProductDetail(api: ContentApi, id: String, onLink: (String) ->
     val raw = detail ?: JSONObject()
     val title = raw.text("title").ifEmpty { "数码产品" }
     val unreleased = raw.optString("release_status") == "0"
-    val actionHeight = maxOf(44f, 12 * androidx.compose.ui.platform.LocalDensity.current.fontScale * 1.4f + 22).dp
-    val actionWidth = with(androidx.compose.ui.platform.LocalDensity.current) { androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.width.toDp() }.minus(82.dp).coerceIn(0.dp, 176.dp)
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
-            com.green.note.ui.ReviewIconButton(onClick = onBack, modifier = Modifier.width(56.dp)) { MaterialGlyph("arrow_back_rounded") }; Spacer(Modifier.width(4.dp))
+    val scheme = MaterialTheme.colorScheme
+    val dark = scheme.background.luminance() < .5f
+    val pureBlack = com.green.note.ui.LocalAppPreferences.current.pureBlackDark
+    val pageColor = if (dark && !pureBlack) Color(0xff101010) else com.green.note.ui.LocalScaffoldColor.current
+    val headerColor = if (!dark || pureBlack) com.green.note.ui.LocalScaffoldColor.current else when (raw.text("category_id")) {
+        "1000" -> if (unreleased) productPreviewHeader else com.green.note.ui.LocalScaffoldColor.current
+        "1001" -> productTabletHeader
+        "1005" -> productWatchHeader
+        else -> com.green.note.ui.LocalScaffoldColor.current
+    }
+    val tabColor = if (dark) Color(0xff1c1c1e) else scheme.surfaceContainerLowest
+    val actions = remember(raw) { productFooterActions(raw) }
+    val actionHeight = maxOf(46f, 28 + 13 * androidx.compose.ui.platform.LocalDensity.current.fontScale).dp
+    Column(Modifier.fillMaxSize().background(pageColor)) {
+        Row(Modifier.fillMaxWidth().background(if (compact) tabColor else headerColor).statusBarsPadding().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+            com.green.note.ui.ReviewIconButton(onClick = onBack, modifier = Modifier.width(56.dp)) { MaterialGlyph("arrow_back_rounded", contentDescription = "返回") }
+            Spacer(Modifier.width(4.dp))
             if (compact) {
                 if (raw.text("logo", "cover", "pic").isNotEmpty()) { ContentImage(api, raw.text("logo", "cover", "pic"), null, Modifier.size(28.dp, 34.dp), ContentScale.Fit); Spacer(Modifier.width(10.dp)) }
                 Column(Modifier.weight(1f)) {
@@ -526,10 +565,9 @@ private fun NativeProductDetail(api: ContentApi, id: String, onLink: (String) ->
             }
             else Spacer(Modifier.weight(1f))
             com.green.note.ui.ReviewIconButton(onClick = { onLink("https://www.coolapk.com/search?q=${Uri.encode(title)}") }) { MaterialGlyph("search_rounded", contentDescription = "搜索机型") }
-            Spacer(Modifier.width(4.dp))
         }
         GlassBackdropHost(Modifier.weight(1f), content = {
-            ReviewRefreshBox(isRefreshing = loading && detail != null || list.refreshing, failed = error != null || list.error != null, onRefresh = { reload++; scope.launch { if (selected.type != "main") list.load(true) } }, modifier = Modifier.fillMaxSize().background(com.green.note.ui.LocalScaffoldColor.current)) {
+            ReviewRefreshBox(isRefreshing = loading && detail != null || list.refreshing, failed = error != null || list.error != null, onRefresh = { reload++; scope.launch { if (selected.type != "main") list.load(true) } }, modifier = Modifier.fillMaxSize().background(pageColor)) {
                 LazyColumn(Modifier.fillMaxSize().pointerInput(tabs, selected) {
                     var distance = 0f
                     detectHorizontalDragGestures(onDragStart = { distance = 0f }, onDragCancel = { distance = 0f }, onDragEnd = {
@@ -539,18 +577,27 @@ private fun NativeProductDetail(api: ContentApi, id: String, onLink: (String) ->
                         }
                     }) { change, amount -> change.consume(); distance += amount }
                 }, state = scroll, contentPadding = PaddingValues(bottom = 90.dp)) {
-                    item { if (detail == null) LoadingFailure(loading, error) { reload++ } else ProductHeader(api, raw, following, followBusy, ::follow, ::toast) }
+                    item {
+                        if (detail == null) LoadingFailure(loading, error) { reload++ }
+                        else ProductHeader(api, raw, headerColor, following, followBusy, ::follow, ::toast)
+                    }
                     if (detail != null) {
                         stickyHeader {
-                            val scheme = MaterialTheme.colorScheme
-                            Box(Modifier.fillMaxWidth().height(69.dp).background(com.green.note.ui.LocalScaffoldColor.current).padding(top = 12.dp)) {
-                                Box(Modifier.fillMaxSize().clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                                    .background(if (scheme.background.luminance() < .5f) Color(0xff1e1e1e) else scheme.surfaceContainer), contentAlignment = Alignment.CenterStart) {
-                                    Row(Modifier.horizontalScroll(rememberScrollState())) {
-                                        tabs.forEach { tab -> Box(Modifier.height(49.dp).clickable { selected = tab }.padding(horizontal = 12.dp)) {
-                                            Box(Modifier.height(46.dp), contentAlignment = Alignment.Center) { Text(tab.title, style = MaterialTheme.typography.titleSmall, fontSize = 16.sp, softWrap = false, color = if (tab == selected) green else scheme.onSurfaceVariant, fontWeight = if (tab == selected) FontWeight.Bold else MaterialTheme.typography.titleSmall.fontWeight) }
-                                            if (tab == selected) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp).size(12.dp, 3.dp).background(Color(0xff009688), RoundedCornerShape(2.dp)))
-                                        } }
+                            BoxWithConstraints(Modifier.fillMaxWidth().background(headerColor)) {
+                                val minTabWidth = ((maxWidth - 12.dp) / tabs.size).coerceAtLeast(56.dp)
+                                val radius = if (compact) 0.dp else 12.dp
+                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = radius, topEnd = radius))
+                                    .background(tabColor).horizontalScroll(rememberScrollState()).padding(horizontal = 6.dp).selectableGroup()) {
+                                    tabs.forEach { tab ->
+                                        val active = tab == selected
+                                        Box(Modifier.widthIn(min = minTabWidth).heightIn(min = 49.dp)
+                                            .semantics { this.selected = active }.clickable(role = Role.Tab) { selected = tab }
+                                            .padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+                                            Text(tab.title, Modifier.padding(vertical = 10.dp), fontSize = 16.sp, lineHeight = 20.sp, softWrap = false,
+                                                color = if (active) productAccent else scheme.onSurfaceVariant, fontWeight = if (active) FontWeight.Medium else FontWeight.Normal)
+                                            if (active) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)
+                                                .size(10.dp, 3.dp).background(productAccent, CircleShape))
+                                        }
                                     }
                                 }
                             }
@@ -563,25 +610,51 @@ private fun NativeProductDetail(api: ContentApi, id: String, onLink: (String) ->
                             if (selected.type in listOf("feed", "rating") || selected.type == "subTabFeed" && selected.subId == "6") item(key = "product-sort") {
                                 ProductSortRow(selected.type, sort) { sort = it }
                             }
-                            items(list.rows, key = ::entityKey) { row -> EntityRow(api, row, onOpen, { onLink("/u/$it") }, onLink, onGallery, onLike, onMore) }
+                            items(list.rows, key = ::entityKey) { row ->
+                                val card = remember(row, selected.type) {
+                                    if (selected.type == "feed" && contentEntityIsFeed(row)) JSONObject(row.toString()).put("_composeProductDiscussion", true) else row
+                                }
+                                EntityRow(api, card, onOpen, { onLink("/u/$it") }, onLink, onGallery, onLike, onMore)
+                            }
                             item(key = "product-list-status") { LoadingFailure(list.busy, list.error, if (list.rows.isEmpty()) "暂无内容" else if (!list.more) "已经到底了" else "") { scope.launch { list.load(list.rows.isEmpty()) } } }
                         }
                     }
                 }
             }
         }, overlay = { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-            Row(Modifier.fillMaxWidth().padding(start = 18.dp, top = 4.dp, end = 18.dp, bottom = 16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                GlassSurface(Modifier.width(actionWidth).height(actionHeight), cornerRadius = 9999.dp, liquid = true, interactive = false, material = com.green.note.ui.GlassMaterial.NAVIGATION) {
-                    Row(Modifier.fillMaxSize()) {
-                        listOf("对比" to "compare_arrows_rounded", (if (following) "已关注" else "关注") to (if (following) "favorite_rounded" else "favorite_border_rounded"), (if (unreleased) "未发布" else "打分") to "star_border_rounded").plus(if (unreleased) emptyList() else listOf("购买" to "shopping_bag_outlined")).forEachIndexed { index, (label, icon) ->
-                            Column(Modifier.weight(1f).fillMaxHeight().clickable(enabled = !(index == 2 && unreleased)) { when (index) { 0 -> comparison = true; 1 -> follow(); 2 -> toast("评分功能需登录机主账号"); 3 -> buy() } }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                                val color = if (index == 1 && following) green else if (index == 2 && unreleased || MaterialTheme.colorScheme.surface.luminance() >= .5f) MaterialTheme.colorScheme.onSurfaceVariant else Color.White
-                                MaterialGlyph(icon, size = 18.dp, color = color); Spacer(Modifier.height(2.dp)); Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, color = color)
+            val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().coerceAtLeast(20.dp)
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = bottom), verticalAlignment = Alignment.CenterVertically) {
+                if (detail != null) GlassSurface(Modifier.width((18 + actions.size * 40 + if (unreleased) 7 else 0).dp).height(actionHeight),
+                    cornerRadius = 9999.dp, liquid = true, interactive = false, material = com.green.note.ui.GlassMaterial.NAVIGATION,
+                    tintColor = if (dark) Color(0xf0000000) else null) {
+                    Row(Modifier.fillMaxSize().padding(horizontal = 9.dp)) {
+                        actions.forEach { action ->
+                            val disabled = action == ProductFooterAction.Unreleased
+                            val followed = action == ProductFooterAction.Follow && following
+                            Column(Modifier.weight(if (disabled) 47f else 40f).fillMaxHeight().clickable(enabled = !disabled) {
+                                when (action) {
+                                    ProductFooterAction.Compare -> comparison = true
+                                    ProductFooterAction.Follow -> follow()
+                                    ProductFooterAction.Rate -> toast("评分功能需登录机主账号")
+                                    ProductFooterAction.Buy -> buy()
+                                    ProductFooterAction.Unreleased -> Unit
+                                }
+                            },
+                                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                val foreground = if (followed) productAccent else if (dark) Color(0xffd4d4d4) else scheme.onSurfaceVariant
+                                val color = if (disabled) foreground.copy(alpha = .58f) else foreground
+                                if (action == ProductFooterAction.Compare) {
+                                    Box(Modifier.height(20.dp), contentAlignment = Alignment.Center) {
+                                        Text("PK", fontSize = 18.sp, lineHeight = 20.sp, fontStyle = FontStyle.Italic, fontWeight = FontWeight.Black, color = color)
+                                    }
+                                } else MaterialGlyph(if (followed) "favorite_rounded" else action.icon, size = 20.dp, color = color)
+                                Text(if (followed) "已关注" else action.label, fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1, color = color)
                             }
                         }
                     }
                 }
-                com.green.note.ui.GreenComposeFab(onCompose, useLiquidGlass = true)
+                Spacer(Modifier.weight(1f))
+                com.green.note.ui.GreenComposeFab(onCompose, size = 46.dp, color = productAccent, iconColor = if (dark) Color(0xff072c28) else Color.White)
             }
         } })
     }
@@ -592,22 +665,26 @@ private fun NativeProductDetail(api: ContentApi, id: String, onLink: (String) ->
 private fun ProductSortRow(type: String, sort: String, onSort: (String) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() < .5f
-    Row(Modifier.fillMaxWidth().padding(start = feedCardAvatarStart, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(when (type) { "feed" -> "全部讨论"; "rating" -> "全部点评"; else -> "排序规则" }, Modifier.weight(1f), fontSize = 14.sp)
-        Box(Modifier.height(48.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.matchParentSize().padding(vertical = 8.dp).background(if (dark) Color(0xff2c2c2c) else scheme.surfaceContainerHighest, RoundedCornerShape(18.dp)))
-            Row {
-                listOf("default" to "默认", "latest" to "最新", "hot" to "热度").forEach { (key, label) ->
-                    Box(Modifier.height(48.dp).clickable { onSort(key) }, contentAlignment = Alignment.Center) {
-                        Box(Modifier.background(if (sort == key) { if (dark) Color(0xff1e1e1e) else scheme.surface } else Color.Transparent, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 6.dp)) {
-                            AppDetailStaticText(label, LocalTextStyle.current.copy(color = if (sort == key) scheme.onSurface else scheme.onSurfaceVariant, fontSize = 13.sp))
-                        }
-                    }
+    Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(when (type) { "feed" -> "全部讨论"; "rating" -> "全部点评"; else -> "排序规则" }, Modifier.weight(1f), fontSize = 14.sp, lineHeight = 18.sp)
+        Row(Modifier.background(if (dark) Color(0xff2c2c2e) else scheme.surfaceContainerHighest, CircleShape)
+            .padding(1.dp).selectableGroup()) {
+            listOf("default" to "默认", "latest" to "最新", "hot" to "热度").forEach { (key, label) ->
+                val active = sort == key
+                Box(Modifier.widthIn(min = 43.dp).heightIn(min = 25.dp).clip(CircleShape)
+                    .background(if (active) { if (dark) Color(0xff1c1c1e) else scheme.surface } else Color.Transparent)
+                    .semantics { selected = active }.clickable(role = Role.RadioButton) { onSort(key) }.padding(horizontal = 5.dp),
+                    contentAlignment = Alignment.Center) {
+                    Text(label, color = if (active) scheme.onSurface else scheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 16.sp, softWrap = false)
                 }
             }
         }
     }
 }
+
+private fun productBuyUrl(raw: JSONObject): String =
+    raw.text("sell_url", "buy_url", "goods_buy_url", "jd_url", "mall_url", "shop_url")
+        .takeIf { it.startsWith("https://") || it.startsWith("http://") || it.startsWith("openapp.jdmobile://") }.orEmpty()
 
 private val productRatingFields = listOf(
     "续航" to "score_battery", "影像" to "score_camera", "性能" to "score_performance",
@@ -617,9 +694,14 @@ private val productRatingFields = listOf(
 internal fun productDimensionScores(raw: JSONObject): List<Pair<String, Float?>> {
     val dimensions = raw.optJSONArray("rating_item_info").objects()
     fun score(vararg values: String) = values.firstNotNullOfOrNull { it.toFloatOrNull()?.takeIf { value -> value > 0f && value <= 10f } }
+    val named = dimensions.filter { it.text("name").isNotBlank() }
+    if (raw.text("category_id") !in setOf("", "1000") && named.isNotEmpty()) {
+        return named.map { it.text("name") to score(it.text("owner_average_score"), it.text("average_score")) }
+    }
     return productRatingFields.mapIndexed { index, (label, legacyKey) ->
         val number = index + 1
-        val dimension = dimensions.firstOrNull { it.text("id") == "v4_score_item_$number" || it.text("name") == label }
+        val dimension = named.firstOrNull { it.text("name") == label }
+            ?: dimensions.firstOrNull { it.text("name").isEmpty() && it.text("id") == "v4_score_item_$number" }
         label to score(
             dimension?.text("owner_average_score").orEmpty(), dimension?.text("average_score").orEmpty(),
             raw.text(legacyKey), raw.text("score_$number"), raw.text("rating_average_score_$number"),
@@ -648,116 +730,195 @@ private fun ProductPriceSummary(raw: JSONObject) {
 }
 
 @Composable
-private fun ProductHeader(api: ContentApi, raw: JSONObject, following: Boolean, busy: Boolean, follow: () -> Unit, toast: (String) -> Unit) {
+private fun ProductHeader(api: ContentApi, raw: JSONObject, headerColor: Color, following: Boolean, busy: Boolean,
+    follow: () -> Unit, toast: (String) -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() < .5f
-    val green = Color(0xff00b074)
-    val unreleased = raw.optString("release_status") == "0"
-    val score = remember(raw) { ratingScore(raw).takeIf { it > 0 } ?: raw.text("score").toDoubleOrNull() ?: 0.0 }
+    val foreground = if (dark) Color(0xffededed) else scheme.onSurface
+    val cardColor = when {
+        headerColor == productWatchHeader -> Color(0xff304346)
+        headerColor == productTabletHeader -> Color(0xff303e49)
+        headerColor == productPreviewHeader -> Color(0xff2e404c)
+        dark -> Color(0xff222222)
+        else -> scheme.surfaceContainerHighest.copy(alpha = .5f)
+    }
+    val unreleased = raw.text("release_status") == "0"
+    val score = ratingScore(raw).takeIf { it > 0 && it <= 10 }
+        ?: raw.text("score").toDoubleOrNull()?.takeIf { it > 0 && it <= 10 }
+    val tablet = raw.text("category_id") == "1001"
     val dimensions = remember(raw) { productDimensionScores(raw) }
     val officialTags = remember(raw) { EntityDetails.values(raw, "product_specs", "productSpecs", "tagArr", "tag_arr", "specTags", "spec_tags", "specs_tags") }
+    val release = raw.text("release_time_txt", "release_time")
+        .takeIf { it.isNotBlank() && it != "0" && it != "-" }?.removeSuffix("上市")?.trimEnd()
     var headerConfig by remember(raw) { mutableStateOf(JSONObject()) }
     LaunchedEffect(api, raw) {
-        if (officialTags.isEmpty() && (productSpecValue(raw, listOf("chip", "soc", "processor", "处理器", "CPU型号")).isEmpty() ||
-                productSpecValue(raw, listOf("screen_size", "screen", "屏幕尺寸")).isEmpty())) {
+        if (officialTags.isEmpty()) {
             val configId = raw.optJSONArray("configRows").objects().firstOrNull()?.text("id").orEmpty()
             if (configId.isNotEmpty()) try {
                 val config = EntityDetails.objectValue(api.request("/v6/product/config", query = mapOf("id" to configId)).opt("data"))
                 headerConfig = EntityDetails.objectValue(config.opt("config_data"))
-            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { /* Optional header metadata; preserve the server header on failure. */ }
+            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { /* Optional metadata. */ }
         }
     }
-    Column(Modifier.padding(start = 16.dp, top = 4.dp, end = 16.dp, bottom = 12.dp)) {
-        Row(verticalAlignment = Alignment.Top) {
-            EntityImage(api, raw.text("logo", "cover", "pic"), Modifier.size(76.dp).background(if (dark) Color(0xff282828) else scheme.surfaceContainerHighest.copy(alpha = .5f), RoundedCornerShape(14.dp)).border(.8.dp, scheme.outlineVariant.copy(alpha = .2f), RoundedCornerShape(14.dp)).padding(.8.dp).clip(RoundedCornerShape(14.dp)), ContentScale.Fit) { MaterialGlyph("phone_android_rounded", size = 36.dp, color = green) }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { AppDetailStaticText(raw.text("title").ifEmpty { "数码产品" }, LocalTextStyle.current.copy(fontSize = 19.5.sp, fontWeight = FontWeight.Bold, letterSpacing = (-.2).sp), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.width(8.dp))
-                    Box(Modifier.clip(RoundedCornerShape(18.dp)).background(if (following) Color.Transparent else green).border(1.dp, if (following) scheme.outlineVariant.copy(alpha = .6f) else green, RoundedCornerShape(18.dp)).clickable(enabled = !busy, onClick = follow).padding(horizontal = 15.dp, vertical = 6.dp)) {
-                        AppDetailStaticText(if (following) "已关注" else "关注", LocalTextStyle.current.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold, color = if (following) scheme.onSurfaceVariant else Color.White))
+    val tags = officialTags.ifEmpty {
+        fun spec(vararg aliases: String) = productSpecValue(raw, aliases.toList()).ifEmpty { productSpecValue(headerConfig, aliases.toList()) }
+        listOf(spec("chip", "soc", "processor", "CPU型号", "处理器", "芯片", "soc型号", "处理器型号"),
+            spec("screen_size", "screen", "屏幕尺寸", "主屏尺寸"), raw.text("screen_type"), raw.text("battery"), raw.text("charging"))
+            .filter { it.isNotEmpty() && it != "-" }
+    }
+    val specs = if (unreleased) tags else
+        (listOfNotNull(release?.replace('年', '-')?.replace('月', '-')?.trimEnd('日', '-')?.let { "$it 上市" }) + tags).distinct()
+    val followers = remember(raw) { raw.optJSONArray("recent_follow_list").objects().take(3) }
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    Column(Modifier.fillMaxWidth().background(headerColor).padding(top = 12.dp, bottom = 12.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.Top) {
+            EntityImage(api, raw.text("logo", "cover", "pic"), Modifier.size(80.dp).clip(RoundedCornerShape(8.dp))
+                .background(if (unreleased || tablet) Color.Transparent else cardColor), ContentScale.Fit) {
+                MaterialGlyph("devices_rounded", size = 32.dp, color = productAccent)
+            }
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.weight(1f)) {
+                Column(Modifier.fillMaxWidth().heightIn(min = 80.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                    Text(raw.text("title").ifEmpty { "数码产品" },
+                        Modifier.padding(end = if (tablet || fontScale > 1.1f) 64.dp else 0.dp),
+                        color = if (dark) Color.White else foreground, fontSize = 21.6.sp, lineHeight = 28.sp,
+                        maxLines = if (tablet) 2 else 1, overflow = TextOverflow.Ellipsis, letterSpacing = 0.sp)
+                    if (tablet) Spacer(Modifier.height(1.dp))
+                    Column(Modifier.fillMaxWidth().padding(end = 64.dp)) {
+                        val heat = raw.text("hot_num_txt", "hot_num")
+                        val posts = raw.text("feed_comment_num_txt", "feed_comment_num", "feed_num_txt", "feed_num")
+                        Text(listOfNotNull(heat.takeIf(String::isNotEmpty)?.let { "${it}热度" },
+                            posts.takeIf(String::isNotEmpty)?.let { "${it}讨论" }).joinToString("  "),
+                            color = foreground.copy(alpha = .58f), fontSize = 12.sp, lineHeight = 16.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (followers.isNotEmpty()) {
+                                Row(horizontalArrangement = Arrangement.spacedBy((-7).dp)) {
+                                    followers.forEach { follower ->
+                                        val avatar = follower.text("userAvatar", "avatar").ifEmpty {
+                                            follower.optJSONObject("userInfo")?.text("userAvatar", "avatar").orEmpty()
+                                        }
+                                        ContentImage(api, avatar, null, Modifier.size(20.dp).clip(CircleShape)
+                                            .background(cardColor).border(1.dp, foreground, CircleShape), ContentScale.Crop)
+                                    }
+                                }
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            val count = raw.text("follow_num_txt", "follow_num")
+                            if (count.isNotEmpty()) {
+                                Text("${count}关注", color = foreground.copy(alpha = .82f), fontSize = 12.sp,
+                                    lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                MaterialGlyph("chevron_right_rounded", size = 14.dp, color = foreground.copy(alpha = .82f))
+                            }
+                        }
                     }
                 }
-                Spacer(Modifier.height(5.dp))
-                fun count(vararg keys: String) = raw.text(*keys).let { value -> value.toLongOrNull()?.let { String.format(Locale.ROOT, "%.1f万", it / 10000f) } ?: value }
-                AppDetailStaticText("${count("hot_num_txt", "hot_num")}热度  ${count("feed_num_txt", "feed_num")}讨论", LocalTextStyle.current.copy(fontSize = 12.sp, color = scheme.onSurfaceVariant.copy(alpha = .8f)))
-                Spacer(Modifier.height(6.dp)); Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(44.dp, 20.dp)) { listOf(Color(0xff64b5f6), Color(0xffffb74d), Color(0xffe57373)).forEachIndexed { index, color ->
-                        Box(Modifier.offset(x = (index * 12).dp).size(20.dp).background(color, androidx.compose.foundation.shape.CircleShape), contentAlignment = Alignment.Center) { MaterialGlyph("person", size = 12.dp, color = Color.White) }
-                    } }
-                    Spacer(Modifier.width(6.dp)); AppDetailStaticText("${count("follow_num_txt", "follow_num")}关注 >", LocalTextStyle.current.copy(fontSize = 11.5.sp, fontWeight = FontWeight.Medium, color = scheme.onSurfaceVariant))
+                Box(Modifier.align(Alignment.TopEnd).padding(top = 25.dp).widthIn(min = 60.dp).heightIn(min = 30.dp)
+                    .clip(RoundedCornerShape(7.dp)).background(if (following) cardColor else productAccent)
+                    .clickable(enabled = !busy, onClick = follow).padding(horizontal = 6.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center) {
+                    Text(if (following) "已关注" else "关注", color = if (following) foreground else Color.White,
+                        fontSize = 14.sp, lineHeight = 18.sp, maxLines = 1)
                 }
             }
         }
-        Spacer(Modifier.height(14.dp))
-        Column(Modifier.fillMaxWidth().background(if (dark) Color(0xff222222) else scheme.surfaceContainerHighest.copy(alpha = .45f), RoundedCornerShape(16.dp)).border(.6.dp, scheme.outlineVariant.copy(alpha = if (dark) .2f else .3f), RoundedCornerShape(16.dp)).padding(14.6.dp)) {
+        Spacer(Modifier.height(12.dp))
+        Column(Modifier.padding(horizontal = 12.dp).fillMaxWidth().background(cardColor, RoundedCornerShape(8.dp))
+            .padding(start = 16.dp, end = 16.dp, top = 11.dp, bottom = 6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AppDetailStaticText("酷安评分", LocalTextStyle.current.copy(fontSize = 14.5.sp, fontWeight = FontWeight.Bold), modifier = Modifier.weight(1f))
-                AppDetailStaticText(if (unreleased) raw.text("release_time_txt", "release_time").let { if (it.isEmpty()) "未发布" else "${it}上市" } else "详细数据 >", LocalTextStyle.current.copy(fontSize = 11.5.sp, color = scheme.onSurfaceVariant.copy(alpha = .8f)))
+                Text("酷安评分", Modifier.weight(1f), color = foreground, fontSize = 14.sp, lineHeight = 17.sp,
+                    fontWeight = FontWeight.ExtraBold, style = LocalTextStyle.current.copy(
+                        textGeometricTransform = androidx.compose.ui.text.style.TextGeometricTransform(scaleX = 1.23f)))
+                Text(if (unreleased) release?.let { "${it}上市" } ?: "未发布" else "详细数据",
+                    color = foreground.copy(alpha = .6f), fontSize = if (unreleased) 12.sp else 10.sp, lineHeight = 16.sp)
+                if (!unreleased) MaterialGlyph("chevron_right_rounded", size = 15.dp, color = foreground.copy(alpha = .6f))
             }
-            Spacer(Modifier.height(10.dp))
-            if (unreleased) Box(Modifier.fillMaxWidth().height(112.dp), contentAlignment = Alignment.Center) {
-                Text(buildAnnotatedString {
-                    withStyle(SpanStyle(fontSize = 28.sp, fontWeight = FontWeight.Medium)) { append(EntityDetails.count(raw.optString("wish_count", "0"))) }
-                    withStyle(SpanStyle(fontSize = 16.sp)) { append(" 人想买") }
-                }, fontSize = 28.sp, color = scheme.onSurfaceVariant)
-            }
-            else Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.width(108.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    AppDetailStaticText(String.format(Locale.ROOT, "%.1f", score), LocalTextStyle.current.copy(fontSize = 38.sp, lineHeight = 1.1.em, fontWeight = FontWeight.Black))
-                    Spacer(Modifier.height(3.dp))
-                    Row { repeat(5) { MaterialGlyph(if (it < (score / 2).roundToInt()) "star_rounded" else "star_outline_rounded", size = 15.dp, color = if (it < (score / 2).roundToInt()) Color(0xffffa000) else scheme.outlineVariant) } }
-                    Spacer(Modifier.height(3.dp))
-                    AppDetailStaticText("机主评分", LocalTextStyle.current.copy(fontSize = 11.sp, color = scheme.onSurfaceVariant.copy(alpha = .7f)))
+            Spacer(Modifier.height(7.dp))
+            val ownerCount = raw.text("owner_star_total_count").toIntOrNull() ?: 0
+            val ownerRating = ownerCount > 0 || unreleased && raw.text("category_id") == "1000"
+            val gold = Color(0xffda9d15)
+            if (unreleased) {
+                Box(Modifier.fillMaxWidth().heightIn(min = 72.dp), contentAlignment = Alignment.Center) {
+                    Text(buildAnnotatedString {
+                        withStyle(SpanStyle(fontSize = 21.sp)) { append(EntityDetails.count(raw.optString("wish_count", "0"))) }
+                        append(" 人想买")
+                    }, color = foreground.copy(alpha = .6f), fontSize = 14.sp, lineHeight = 28.sp)
                 }
-                VerticalDivider(Modifier.padding(horizontal = 10.dp).height(90.dp), color = scheme.outlineVariant.copy(alpha = .2f))
-                Column(Modifier.weight(1f)) {
-                    dimensions.forEach { (label, actual) ->
-                        val value = actual ?: 0f
-                        Row(Modifier.fractionalVerticalPadding(1.5.dp), verticalAlignment = Alignment.CenterVertically) {
-                            AppDetailStaticText(label, LocalTextStyle.current.copy(fontSize = 10.5.sp, color = scheme.onSurfaceVariant.copy(alpha = .85f)), modifier = Modifier.width(48.dp))
-                            Spacer(Modifier.width(4.dp))
-                            com.green.note.ui.ReviewLinearProgress(progress = { (value / 10).coerceIn(0f, 1f) }, Modifier.weight(1f).height(5.dp).clip(RoundedCornerShape(3.dp)), color = Color(0xffffa000), trackColor = scheme.surfaceContainerHighest.copy(alpha = .5f))
-                            Spacer(Modifier.width(6.dp))
-                            AppDetailStaticText(if (actual == null) "-" else String.format(Locale.ROOT, "%.1f", value), LocalTextStyle.current.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.End), modifier = Modifier.width(22.dp))
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(.4f).offset(y = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(score?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—", color = foreground.copy(alpha = .9f),
+                            fontSize = 34.sp, lineHeight = 38.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                        Spacer(Modifier.height(2.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            repeat(5) { index ->
+                                val lit = score != null && index < (score / 2).roundToInt()
+                                Box(Modifier.size(12.dp).background(if (lit) gold else foreground.copy(alpha = .28f), RoundedCornerShape(2.dp)),
+                                    contentAlignment = Alignment.Center) {
+                                    MaterialGlyph("star_rounded", size = 9.dp, color = Color.White.copy(alpha = if (lit) 1f else .55f))
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        Text(if (ownerRating) "机主评分" else "用户评分", color = foreground.copy(alpha = .6f), fontSize = 10.sp, lineHeight = 13.sp)
+                    }
+                    Column(Modifier.weight(.6f)) {
+                        dimensions.forEach { (label, value) ->
+                            Row(Modifier.height((14.3f * fontScale.coerceAtLeast(1f)).dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, Modifier.widthIn(min = 44.dp), color = foreground.copy(alpha = .62f), textAlign = TextAlign.End,
+                                    fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(Modifier.width(8.dp))
+                                Box(Modifier.weight(1f).height(8.dp).background(foreground.copy(alpha = .075f), CircleShape)) {
+                                    if (value != null) Box(Modifier.fillMaxWidth(value / 10f).fillMaxHeight().background(gold, CircleShape))
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Text(value?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "—", Modifier.widthIn(min = 24.dp),
+                                    color = foreground.copy(alpha = .9f), fontSize = 10.sp, lineHeight = 13.sp, maxLines = 1)
+                            }
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp), contentAlignment = Alignment.Center) { HorizontalDivider(thickness = .5.dp, color = scheme.outlineVariant.copy(alpha = .2f)) }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(thickness = 1.dp, color = foreground.copy(alpha = .07f))
+            Spacer(Modifier.height(6.dp))
+            val total = raw.text("star_total_count", "rating_total_num_txt", "rating_total_num")
+            val detailed = raw.text(if (ownerRating) "v4_rating_owner_total_count" else "v4_rating_total_count", "rating_total_num_txt", "rating_total_num")
+            val counts = listOfNotNull(if (ownerRating) "${ownerCount}机主点评" else total.takeIf(String::isNotEmpty)?.let { "${it}用户点评" },
+                detailed.takeIf(String::isNotEmpty)?.let { "${it}详细点评" }).joinToString(" ")
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AppDetailStaticText(raw.text("comment_num_txt").ifEmpty { "${raw.optString("owner_star_total_count", "0")}机主点评 ${raw.optString("rating_total_num", "0")}详细点评" }, LocalTextStyle.current.copy(fontSize = 11.5.sp, color = scheme.onSurfaceVariant.copy(alpha = .8f)), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.width(8.dp))
-                ProductCapsuleAction("想买") { toast("已加入想买清单") }
-                Spacer(Modifier.width(8.dp))
-                ProductCapsuleAction(if (unreleased) "未发布" else "打分", outlined = unreleased) { if (!unreleased) toast("评分功能需登录机主账号") }
+                Text(counts, Modifier.weight(1f), color = foreground.copy(alpha = .61f), fontSize = 12.sp, lineHeight = 16.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.width(6.dp))
+                ProductCapsuleAction("想买", foreground) { toast("已加入想买清单") }
+                Spacer(Modifier.width(12.dp))
+                ProductCapsuleAction(if (unreleased) "未发布" else "打分", foreground, enabled = !unreleased) { toast("评分功能需登录机主账号") }
             }
         }
-        val tags = officialTags.ifEmpty {
-            fun spec(vararg aliases: String) = productSpecValue(raw, aliases.toList()).ifEmpty { productSpecValue(headerConfig, aliases.toList()) }
-            listOf(raw.text("release_time_txt", "release_time").takeIf(String::isNotEmpty)?.let { "$it 上市" }.orEmpty(), spec("chip", "soc", "processor", "CPU型号", "处理器", "芯片", "soc型号", "处理器型号"), spec("screen_size", "screen", "屏幕尺寸", "主屏尺寸"), raw.text("screen_type"), raw.text("battery"), raw.text("charging")).filter { it.isNotEmpty() && it != "-" }
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.height(32.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            tags.forEach { Box(Modifier.fillMaxHeight().background(if (dark) Color(0xff262626) else scheme.surfaceContainerHighest.copy(alpha = .5f), RoundedCornerShape(16.dp)).border(.5.dp, scheme.outlineVariant.copy(alpha = .2f), RoundedCornerShape(16.dp)).padding(horizontal = 12.5.dp, vertical = 5.5.dp), contentAlignment = Alignment.Center) {
-                AppDetailStaticText(it, LocalTextStyle.current.copy(fontSize = 12.sp, color = scheme.onSurface.copy(alpha = .85f)))
-            } }
+        if (specs.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                specs.forEach { tag ->
+                    Box(Modifier.heightIn(min = 30.dp).background(cardColor, RoundedCornerShape(8.dp)).padding(horizontal = 11.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center) {
+                        Text(tag, color = foreground.copy(alpha = .88f), fontSize = 14.sp, lineHeight = 18.sp, maxLines = 1)
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun ProductCapsuleAction(label: String, outlined: Boolean = false, onClick: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    Box(Modifier.clip(RoundedCornerShape(14.dp)).background(if (outlined) Color.Transparent else scheme.surfaceContainerHighest.copy(alpha = .5f))
-        .border(.5.dp, scheme.outlineVariant.copy(alpha = if (outlined) .6f else .3f), RoundedCornerShape(14.dp))
-        .clickable(enabled = !outlined, onClick = onClick).padding(horizontal = 12.5.dp).fractionalVerticalPadding(4.5.dp)) {
-        AppDetailStaticText(label, LocalTextStyle.current.copy(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = scheme.onSurfaceVariant))
+private fun ProductCapsuleAction(label: String, foreground: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(Modifier.widthIn(min = 48.dp).heightIn(min = 22.dp).clip(CircleShape)
+        .then(if (enabled) Modifier.background(foreground.copy(alpha = .23f)) else Modifier.border(1.dp, foreground.copy(alpha = .23f), CircleShape))
+        .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 5.dp, vertical = 2.dp), contentAlignment = Alignment.Center) {
+        Text(label, color = foreground.copy(alpha = if (enabled) .9f else .56f), fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1)
     }
 }
-
 internal fun productSpecValue(source: JSONObject, aliases: List<String>, depth: Int = 0): String {
     if (depth > 8) return ""
     fun normalized(value: String) = value.replace(Regex("[\\s_./-]"), "").lowercase(Locale.ROOT)

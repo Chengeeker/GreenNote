@@ -3,12 +3,15 @@ package com.green.note.settings
 import com.green.note.ui.ReviewText as Text
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -28,9 +31,13 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
     var password by remember { mutableStateOf("") }; var directory by remember { mutableStateOf("GreenNote") }
     var includeCredentials by remember { mutableStateOf(false) }; var busy by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }; var status by remember { mutableStateOf<String?>(null) }
+    var statusTitle by remember { mutableStateOf("WebDAV 提示") }
     var restoreDialog by remember { mutableStateOf(false) }
+    var restoredLocal by remember { mutableStateOf<String?>(null) }
+    val account by accounts.state.collectAsState()
     var fieldErrors by remember {mutableStateOf<Map<String,String>>(emptyMap())}
     val scope = rememberCoroutineScope()
+    val focus = LocalFocusManager.current
     val service = remember { WebDavService() }
     val backups = remember(settings, accounts) { WebDavBackups(settings, accounts, validateCookie) }
     LaunchedEffect(settings, accounts) {
@@ -43,8 +50,12 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
     }
     fun execute(operation: String) {
         if (busy.isNotEmpty() || loading) return
+        focus.clearFocus()
+        status = null
+        statusTitle = when (operation) { "test" -> "连接测试结果"; "backup" -> "备份结果"; else -> "恢复结果" }
+        restoredLocal = null
         fieldErrors=webDavFieldErrors(url,username,password,directory)
-        if(fieldErrors.isNotEmpty())return
+        if(fieldErrors.isNotEmpty()) { status = fieldErrors.values.distinct().joinToString("\n"); return }
         val config = try {
             WebDavConfig(WebDavAddress.normalize(url).toString(), username.trim(), WebDavAddress.segments(directory).joinToString("/"))
         } catch (error: IllegalArgumentException) { status = error.message; return }
@@ -54,21 +65,20 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
                 settings.saveWebDavConfig(config)
                 accounts.writeSecret(WebDavBackups.PASSWORD_KEY, password.ifEmpty { null })
                 when (operation) {
-                    "test" -> { status = "正在测试连接…"; status = if (service.test(config, password)) "连接成功。" else "连接失败，请检查服务器地址、账号、密码和 WebDAV 权限。" }
+                    "test" -> { status = if (service.test(config, password)) "连接成功。" else "连接失败，请检查服务器地址、账号、密码和 WebDAV 权限。" }
                     "backup" -> {
-                        status = "正在备份设置…"
                         status = if (service.upload(config, password, backups.export(config, includeCredentials))) {
                             if (includeCredentials) "全量备份已上传，包含账号凭据与 WebDAV 密码。" else "全量安全备份已上传，未包含 Cookie、Token 与 WebDAV 密码。"
                         } else "备份失败，请检查连接、目录权限和服务器空间。"
                     }
                     "restore" -> {
-                        status = "正在读取云端备份…"
                         val data = service.download(config, password)
-                        if (data == null) status = "没有找到兼容的 Greennote 备份。"
+                        if (data == null) status = "未找到备份文件（404，已兼容检查旧版路径），请核对服务器地址和备份文件夹是否与原手机一致：\n${WebDavAddress.backupUrl(config).encodedPath}"
                         else {
                             val (restored, message) = backups.restore(data)
                             url = restored.url; username = restored.username; directory = restored.directory
                             password = accounts.readSecret(WebDavBackups.PASSWORD_KEY).orEmpty(); status = message
+                            if (data.has("localAccount")) restoredLocal = accounts.state.value.localJson
                         }
                     }
                 }
@@ -145,10 +155,32 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
                 }
             }
         }
-        status?.let { Spacer(Modifier.height(12.dp)); Text(it, Modifier.semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite }) }
+    }
+    if (enabled) status?.let { message ->
+        val canActivate = restoredLocal != null && account.localJson == restoredLocal && account.mode == com.green.note.account.AccountMode.GUEST
+        ReviewAlertDialog(appDialog = true, onDismissRequest = { status = null },
+            title = { Text(statusTitle) },
+            text = { Text(message, Modifier.verticalScroll(rememberScrollState())
+                .semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite }) },
+            confirmButton = {
+                ReviewButton(onClick = {
+                    status = null
+                    if (canActivate) {
+                        busy = "activate"
+                        scope.launch {
+                            try { accounts.activateAnonymous(); status = "已进入恢复的匿名账户。" }
+                            catch (cancelled: CancellationException) { throw cancelled }
+                            catch (_: Exception) { status = "匿名账户启用失败，已恢复的资料保留，请重试。" }
+                            finally { busy = "" }
+                        }
+                    }
+                }) { Text(if (canActivate) "使用已恢复的匿名账户" else "知道了") }
+            },
+            dismissButton = if (canActivate) { { ReviewTextButton(onClick = { status = null }) { Text("暂不启用") } } } else null,
+        )
     }
     if (restoreDialog) com.green.note.ui.ReviewAlertDialog(appDialog=true,onDismissRequest = { restoreDialog = false }, title = { Text("恢复 WebDAV 备份？") },
-        text = { Text("将覆盖应用设置和匿名资料，原匿名资料会留存。全量备份还会恢复 WebDAV 密码，酷安凭据验证通过后才会切换账号。") },
+        text = { Text("将恢复设置、匿名资料和备份中记录的匿名登录状态，原匿名资料会留存。全量备份还会恢复 WebDAV 密码，账号凭据验证通过后才会恢复账号登录。") },
         confirmButton = { com.green.note.ui.ReviewButton(onClick = { restoreDialog = false; execute("restore") }) { Text("恢复设置") } },
         dismissButton = { com.green.note.ui.ReviewTextButton(onClick = { restoreDialog = false }) { Text("取消") } })
 }

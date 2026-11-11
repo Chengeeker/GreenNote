@@ -68,11 +68,20 @@ class MainActivity : ComponentActivity() {
             var ready by remember { mutableStateOf(false) }
             var error by remember { mutableStateOf<String?>(null) }
             var attempt by remember { mutableIntStateOf(0) }
+            var recoveryAvailable by remember { mutableStateOf(false) }
+            var recover by remember { mutableStateOf(false) }
             LaunchedEffect(attempt) {
                 error = null
-                try { graph.initialize(); ready = true }
+                try {
+                    if (recover) graph.accounts.recoverAfterTransfer()
+                    graph.initialize(); ready = true
+                }
                 catch (cancelled: CancellationException) { throw cancelled }
-                catch (failure: Exception) { error = failure.message ?: "初始化失败，请重试" }
+                catch (failure: Exception) {
+                    recoveryAvailable = recoveryAvailable || failure is com.green.note.account.AccountKeyUnavailableException
+                    error = failure.message ?: "初始化失败，请重试"
+                }
+                finally { recover = false }
             }
             val preferences by graph.settings.state.collectAsState()
             GreenNoteTheme(preferences) {
@@ -84,6 +93,12 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                         if (error == null) com.green.note.ui.ReviewCircularProgress() else {
                             Text(error!!)
+                            if (recoveryAvailable) {
+                                Spacer(Modifier.height(12.dp))
+                                Text("继续后需重新登录。原加密文件将保留，匿名收藏等本地资料可在原手机通过应用内备份导出后恢复。")
+                                Spacer(Modifier.height(16.dp))
+                                com.green.note.ui.ReviewButton(onClick = { recover = true; attempt++ }) { Text("保留旧资料并继续") }
+                            }
                             com.green.note.ui.ReviewButton(onClick = { attempt++ }) { Text("重试") }
                         }
                     }

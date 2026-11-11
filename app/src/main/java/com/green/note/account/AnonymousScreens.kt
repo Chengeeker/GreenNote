@@ -136,12 +136,13 @@ fun LocalProfileScreen(repository: AccountRepository, activate: Boolean, request
     val state by repository.state.collectAsState()
     val local = remember(state.localJson) { JSONObject(state.localJson) }
     val activeId = local.getString("activeProfileId")
-    var name by remember(activeId) { mutableStateOf(local.getString("name")) }
+    var name by remember(activeId, local.getString("name")) { mutableStateOf(local.getString("name")) }
     // Flutter's controller edits rebuild only TextField. The avatar reads the draft
     // again when the parent rebuilds for pick/save/manage, not on each keystroke.
-    var avatarName by remember(activeId) { mutableStateOf(local.getString("name")) }
-    var uid by remember(activeId) { mutableStateOf(local.optJSONObject("publicIdentity")?.optString("uid").orEmpty()) }
-    var avatar by remember(activeId) { mutableStateOf(local.getString("avatar")) }
+    var avatarName by remember(activeId, local.getString("name")) { mutableStateOf(local.getString("name")) }
+    val savedUid = local.optJSONObject("publicIdentity")?.optString("uid").orEmpty()
+    var uid by remember(activeId, savedUid) { mutableStateOf(savedUid) }
+    var avatar by remember(activeId, local.getString("avatar")) { mutableStateOf(local.getString("avatar")) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current

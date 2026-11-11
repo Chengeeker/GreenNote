@@ -68,7 +68,7 @@ internal class FlutterAccountImport(private val context: Context) {
             ?: error("旧安全存储密钥缺失，原数据已保留")
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val privateKey = store.getKey("${context.packageName}.FlutterSecureStoragePluginKeyOAEP", null)
-            ?: error("旧安全存储密钥不可用，原数据已保留")
+            ?: throw AccountKeyUnavailableException()
         val rsa = Cipher.getInstance("RSA/ECB/OAEPPadding", "AndroidKeyStoreBCWorkaround")
         rsa.init(Cipher.UNWRAP_MODE, privateKey, OAEPParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA1, PSource.PSpecified.DEFAULT))
         val key = rsa.unwrap(wrapped.decodeBase64()?.toByteArray() ?: error("旧密钥编码无效"), "AES", Cipher.SECRET_KEY)

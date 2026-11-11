@@ -16,9 +16,8 @@ android {
         applicationId = "com.green.note"
         minSdk = 24
         targetSdk = 36
-        // Keep the promoted 2.0.0 build compatible with the same-version rollback package.
-        versionCode = 192
-        versionName = "2.0.0"
+        versionCode = 197
+        versionName = "2.0.5"
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {

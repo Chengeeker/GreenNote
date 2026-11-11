@@ -1,9 +1,12 @@
 package com.green.note.settings
 
 import com.green.note.account.AccountRepository
+import com.green.note.account.AccountMode
 import com.green.note.account.LocalAccounts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.NonCancellable
@@ -14,6 +17,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -40,14 +44,20 @@ object WebDavAddress {
         return parts
     }
 
-    fun backupUrl(config: WebDavConfig): HttpUrl = normalize(config.url).newBuilder().apply {
-        segments(config.directory).forEach { addPathSegment(it) }
-        addPathSegment("greennote_settings_latest.json")
-    }.build()
+    fun backupUrl(config: WebDavConfig, legacyFlutter: Boolean = false): HttpUrl {
+        val base = normalize(config.url)
+        return base.newBuilder().apply {
+            // Flutter's Uri.pathSegments retained a trailing empty segment below a non-root base.
+            if (legacyFlutter && base.encodedPath != "/") encodedPath(base.encodedPath + "/")
+            segments(config.directory).forEach { addPathSegment(it) }
+            addPathSegment("greennote_settings_latest.json")
+        }.build()
+    }
 }
 
-class WebDavService(private val client: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
-    .readTimeout(20, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()) {
+class WebDavService(client: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
+    .readTimeout(20, TimeUnit.SECONDS).build()) {
+    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
     suspend fun test(config: WebDavConfig, password: String): Boolean = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(WebDavAddress.normalize(config.url)).header("Authorization", Credentials.basic(config.username, password, Charsets.UTF_8))
             .header("Depth", "0").method("PROPFIND", ByteArray(0).toRequestBody()).build()
@@ -71,29 +81,67 @@ class WebDavService(private val client: OkHttpClient = OkHttpClient.Builder().co
     }
 
     suspend fun download(config: WebDavConfig, password: String): JSONObject? = withContext(Dispatchers.IO) {
-        client.newCall(Request.Builder().url(WebDavAddress.backupUrl(config))
-            .header("Authorization", Credentials.basic(config.username, password, Charsets.UTF_8)).build()).execute().use { response ->
-            if (response.code != 200) return@withContext null
-            val body = response.body ?: return@withContext null
-            require(body.contentLength() <= MAX_BACKUP_BYTES) { "备份超过 20 MB，无法恢复" }
-            val output = ByteArrayOutputStream()
-            body.byteStream().use { input ->
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    require(output.size().toLong() + count <= MAX_BACKUP_BYTES) { "备份超过 20 MB，无法恢复" }
-                    output.write(buffer, 0, count)
+        val locations = listOf(WebDavAddress.backupUrl(config), WebDavAddress.backupUrl(config, legacyFlutter = true)).distinct()
+        for (location in locations) {
+            val backup = downloadResponse(location, Credentials.basic(config.username, password, Charsets.UTF_8)).use { response ->
+                when (response.code) {
+                    200 -> Unit
+                    404 -> return@use null
+                    401 -> error("WebDAV 身份验证失败（401），请检查账号和应用密码 / Token")
+                    403 -> error("WebDAV 拒绝读取备份（403），请检查文件读取权限")
+                    in 300..399 -> error("WebDAV 返回不支持的下载响应（${response.code}），未恢复任何资料")
+                    429 -> error("WebDAV 请求过于频繁（429），请稍后重试")
+                    else -> error("WebDAV 读取失败（HTTP ${response.code}），请检查服务状态后重试")
                 }
+                val body = response.body ?: error("WebDAV 返回空内容，未恢复任何资料")
+                require(body.contentLength() <= MAX_BACKUP_BYTES) { "备份超过 20 MB，无法恢复" }
+                val output = ByteArrayOutputStream()
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        require(output.size().toLong() + count <= MAX_BACKUP_BYTES) { "备份超过 20 MB，无法恢复" }
+                        output.write(buffer, 0, count)
+                    }
+                }
+                try { JSONObject(output.toString("UTF-8")) }
+                catch (_: org.json.JSONException) { error("下载内容不是有效的 JSON 备份，未恢复任何资料") }
             }
-            JSONObject(output.toString("UTF-8"))
+            if (backup != null) return@withContext backup
         }
+        null
+    }
+
+    private suspend fun downloadResponse(location: HttpUrl, authorization: String): Response {
+        var request = Request.Builder().url(location).header("Authorization", authorization).build()
+        val visited = mutableSetOf<HttpUrl>()
+        for (hop in 0..5) {
+            coroutineContext.ensureActive()
+            check(visited.add(request.url)) { "WebDAV 下载地址循环跳转，未恢复任何资料" }
+            val response = client.newCall(request).execute()
+            if (response.code !in listOf(301, 302, 303, 307, 308)) return response
+            response.use {
+                check(hop < 5) { "WebDAV 下载跳转次数过多，未恢复任何资料" }
+                val target = response.header("Location")?.takeIf { it.isNotBlank() }?.let(request.url::resolve)
+                    ?.newBuilder()?.fragment(null)?.build()
+                    ?: error("WebDAV 下载跳转缺少有效地址（${response.code}），未恢复任何资料")
+                check(target.username.isEmpty() && target.password.isEmpty()) { "WebDAV 下载跳转地址包含账号信息，已停止恢复" }
+                val sameOrigin = target.scheme == request.url.scheme && target.host == request.url.host && target.port == request.url.port
+                check(target.isHttps || sameOrigin) { "WebDAV 下载跳转未使用 HTTPS，已停止恢复" }
+                // Signed CDN downloads need no DAV credentials; never reattach them after leaving the origin.
+                val auth = request.header("Authorization").takeIf { sameOrigin }
+                request = Request.Builder().url(target).apply { if (auth != null) header("Authorization", auth) }.build()
+            }
+        }
+        error("WebDAV 下载跳转次数过多，未恢复任何资料")
     }
 
     companion object { const val MAX_BACKUP_BYTES = 20L * 1024 * 1024 }
 }
 
-data class CheckedBackup(val settings: AppPreferences, val config: WebDavConfig, val local: JSONObject?, val credentials: Pair<String, String>?)
+data class CheckedBackup(val settings: AppPreferences, val config: WebDavConfig, val local: JSONObject?, val credentials: Pair<String, String>?, val accountMode: AccountMode? = null)
 
 object BackupFormat {
     fun validate(backup: JSONObject): CheckedBackup {
@@ -141,22 +189,30 @@ object BackupFormat {
             require(cookie is String && cookie.length <= 65536 && cookie.none { it.code < 32 || it.code == 127 } && password is String && password.length <= 16384) { "备份中的账号凭据格式无效" }
             cookie to password
         } else null
-        return CheckedBackup(settings, config, local, credentials)
+        val mode = if (version >= 2 && backup.has("accountMode")) {
+            AccountMode.entries.firstOrNull { it.name == backup.opt("accountMode") }
+                ?: throw IllegalArgumentException("备份中的登录模式无效")
+        } else null
+        return CheckedBackup(settings, config, local, credentials, mode)
     }
 }
 
 class WebDavBackups(private val settings: SettingsStore, private val accounts: AccountRepository, private val validateCookie: suspend (String) -> JSONObject) {
-    suspend fun export(config: WebDavConfig, includeCredentials: Boolean): JSONObject {
+    suspend fun export(config: WebDavConfig, includeCredentials: Boolean): JSONObject = withContext(Dispatchers.IO) {
+        val account = accounts.state.value
+        val password = if (includeCredentials) accounts.readSecret(PASSWORD_KEY).orEmpty() else null
+        check(accounts.state.value.revision == account.revision) { "账号资料已改变，请重新备份" }
         val preferences = JSONObject(settings.state.value.asMap()).put("webDavUrl", config.url).put("webDavUsername", config.username).put("webDavDirectory", config.directory)
-        return JSONObject().put("app", "Greennote").put("version", if (includeCredentials) 3 else 2)
-            .put("preferences", preferences).put("localAccount", LocalAccounts.validate(accounts.exportLocal()))
+        JSONObject().put("app", "Greennote").put("version", if (includeCredentials) 3 else 2)
+            .put("preferences", preferences).put("localAccount", LocalAccounts.validate(JSONObject(account.localJson)))
+            .put("accountMode", account.mode.name)
             .put("exported_at", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.ROOT).format(Date()))
-            .apply { if (includeCredentials) put("credentials", JSONObject().put("cookie", accounts.state.value.cookie)
-                .put("webDavPassword", accounts.readSecret(PASSWORD_KEY).orEmpty())) }
+            .apply { if (includeCredentials) put("credentials", JSONObject().put("cookie", account.requestCookie)
+                .put("webDavPassword", password)) }
     }
 
     suspend fun restore(backup: JSONObject): Pair<WebDavConfig, String> = restoreMutex.withLock {
-        val checked = BackupFormat.validate(backup)
+        val checked = withContext(Dispatchers.IO) { BackupFormat.validate(backup) }
         val before=settings.backupSnapshot()
         val oldSettings=before.preferences;val oldConfig=before.config
         val oldAccount=accounts.state.value
@@ -166,13 +222,17 @@ class WebDavBackups(private val settings: SettingsStore, private val accounts: A
         var appliedPassword:String?=null;var passwordWritten=false
         BackupRestoreWrites(
             writePreferences = { preferences, config -> withContext(NonCancellable){appliedSettings=settings.replaceBackup(before,preferences,config)} },
-            writeLocal = { local -> withContext(NonCancellable){appliedAccount=accounts.restoreLocalFromBackup(local,oldAccount)} },
-            rollbackLocal = { appliedAccount?.let{accounts.restoreLocalBackupIfUnchanged(oldAccount.localJson,it)} },
+            writeLocal = { local -> withContext(NonCancellable){appliedAccount=accounts.restoreLocalFromBackup(local,oldAccount,
+                activateAnonymous = checked.accountMode == AccountMode.ANONYMOUS && (checked.credentials != null || !oldAccount.authenticated))} },
+            rollbackLocal = { appliedAccount?.let{accounts.restoreLocalBackupIfUnchanged(oldAccount,it)} },
             writePassword = { next -> withContext(NonCancellable){check(accounts.compareAndSetSecret(PASSWORD_KEY,oldPassword,next)){"WebDAV 密码已改变，请重新恢复备份"};appliedPassword=next;passwordWritten=true} },
             rollbackPreferences = { appliedSettings?.let{settings.replaceBackup(it,before.preferences,before.config)} },
             rollbackPassword = { if(passwordWritten)check(accounts.compareAndSetSecret(PASSWORD_KEY,appliedPassword,oldPassword)){"WebDAV 密码已改变，已保留最新密码"} },
         ).apply(checked, oldSettings, oldConfig, oldPassword)
-        val message = if (checked.credentials != null && checked.credentials.first.isNotEmpty()) {
+        val message = if (checked.accountMode == AccountMode.ANONYMOUS) {
+            if (accounts.state.value.anonymous) "匿名账户及头像、用户名、UID、关注和收藏已恢复，已进入原匿名账户。"
+            else "匿名账户资料已恢复，当前账号登录保持不变，可在匿名账户管理中切换。"
+        } else if (checked.credentials != null && checked.credentials.first.isNotEmpty() && checked.accountMode != AccountMode.GUEST) {
             try {
                 accounts.acceptCookie(checked.credentials.first) { cookie ->
                     com.green.note.account.requireLocalRestoreOwnership(appliedAccount ?: oldAccount,accounts.state.value)
@@ -180,10 +240,11 @@ class WebDavBackups(private val settings: SettingsStore, private val accounts: A
                 }
                 "全量备份已恢复。酷安登录凭据已验证并恢复。"
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (_: Exception) { "全量备份已恢复。酷安登录凭据验证失败，当前登录态未替换；可稍后重新恢复。" }
-        } else if (checked.credentials != null) "全量备份已恢复。备份未包含酷安登录凭据。"
+            catch (_: Exception) { "设置和匿名资料已恢复，但账号登录未恢复：登录凭据未通过验证，请检查网络后重试或重新登录。" }
+        } else if (checked.credentials != null) "设置和匿名资料已恢复。备份未包含有效的账号登录凭据，匿名资料可切换后使用。"
+        else if (checked.accountMode == AccountMode.COOKIE) "设置和匿名资料已恢复。安全备份不包含登录凭据，请重新登录账号。"
         else if (oldConfig.url != checked.config.url || oldConfig.username != checked.config.username) "设置已恢复；服务器或用户名已更改，请重新输入 WebDAV 密码。"
-        else "备份已恢复；匿名数据副本可在匿名账户页找回。"
+        else "设置和匿名资料已恢复，匿名资料可切换后使用。"
         checked.config to message
     }
 

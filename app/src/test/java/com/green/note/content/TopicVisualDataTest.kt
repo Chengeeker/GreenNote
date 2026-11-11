@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TopicVisualDataTest {
+    @Test fun creatorReadsNestedUserAndKeepsLegacyStringFallback() {
+        val creator = JSONObject().put("userAvatar", "https://example.com/creator.jpg")
+            .put("userInfo", JSONObject().put("username", "话题创建者"))
+        val row = JSONObject().put("creator", creator).put("username", "话题管理者")
+        assertEquals("话题创建者" to "https://example.com/creator.jpg", topicCreator(row))
+        assertEquals("" to "", topicCreator(row.put("hidden_creator", 1)))
+        assertEquals("话题管理者" to "", topicCreator(row.put("hidden_creator", 0).put("creator", JSONObject())))
+        assertEquals("旧版创建者" to "https://example.com/legacy.jpg", topicCreator(JSONObject()
+            .put("creator", "旧版创建者").put("creator_avatar", "https://example.com/legacy.jpg")))
+    }
+
     @Test fun emptyStatisticsDoNotCreateSeparatorsOrInventCounts() {
         assertEquals("", topicStats(JSONObject()))
         assertEquals("3 关注", topicStats(JSONObject().put("follow_num", "3")))

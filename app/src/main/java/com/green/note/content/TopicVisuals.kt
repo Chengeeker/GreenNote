@@ -33,6 +33,23 @@ internal fun topicStats(row: JSONObject): String = listOf(
     row.text("comment_num", "feed_num", "feedNum", "total_num").takeIf(String::isNotEmpty)?.let { "${topicCount(it)} 讨论" },
 ).filterNotNull().joinToString(" · ")
 
+internal fun topicCreator(row: JSONObject): Pair<String, String> {
+    if (row.text("hidden_creator") in setOf("1", "true")) return "" to ""
+    fun JSONObject?.firstString(vararg keys: String): String = keys.firstNotNullOfOrNull { key ->
+        (this?.opt(key) as? String)?.trim()?.takeIf(String::isNotEmpty)
+    }.orEmpty()
+
+    val creator = row.optJSONObject("creator")
+    val userInfo = creator?.optJSONObject("userInfo")
+    val name = creator.firstString("displayUsername", "username")
+        .ifEmpty { userInfo.firstString("displayUsername", "username") }
+        .ifEmpty { row.firstString("creator", "creator_name", "username", "author", "nickName", "nickname") }
+    val avatar = creator.firstString("userAvatar", "avatar")
+        .ifEmpty { userInfo.firstString("userAvatar", "avatar") }
+        .ifEmpty { row.firstString("creator_avatar", "userAvatar", "avatar", "author_avatar") }
+    return name to avatar
+}
+
 @Composable
 internal fun TopicAtmosphere(api: ContentApi, cover: String, background: Color, accent: Color) {
     Box(Modifier.fillMaxSize().background(background)) {
@@ -70,10 +87,10 @@ private fun TopicMiniAvatar(api: ContentApi, color: Color, letter: String, url: 
 
 @Composable
 internal fun TopicCreatorRow(api: ContentApi, row: JSONObject, background: Color) {
-    val name = row.text("creator", "creator_name", "username", "author", "nickName", "nickname")
+    val (name, avatar) = remember(row) { topicCreator(row) }
     val followers = topicCount(row.text("follow_num", "followNum", "follownum", "follownum_txt")).ifEmpty { "—" }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        if (name.isNotEmpty()) TopicMiniAvatar(api, Color(0xFF00B075), communityTextLimit(name, 1).text, row.text("creator_avatar", "userAvatar", "avatar", "author_avatar"), background)
+        if (name.isNotEmpty()) TopicMiniAvatar(api, Color(0xFF00B075), communityTextLimit(name, 1).text, avatar, background)
         else Box(Modifier.width(44.dp).height(18.dp)) { listOf(Color(0xFFFF5722) to "C", Color(0xFF00B075) to "K", Color(0xFF2196F3) to "A").forEachIndexed { index, item -> TopicMiniAvatar(api, item.first, item.second, "", background, Modifier.offset(x = (12 * index).dp)) } }
         Spacer(Modifier.width(6.dp))
         Text(if (name.isNotEmpty()) "$name 创建 | ${followers}关注" else "${followers}关注", fontSize = 12.sp, color = Color.White.copy(alpha = .7f))

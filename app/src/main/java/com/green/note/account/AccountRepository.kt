@@ -15,6 +15,7 @@ import java.io.File
 import java.security.KeyStore
 import java.util.UUID
 import javax.crypto.Cipher
+import javax.crypto.AEADBadTagException
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -37,8 +38,11 @@ data class AccountState(
     override fun toString() = "AccountState(mode=$mode, revision=$revision)"
 }
 
+class AccountKeyUnavailableException : IllegalStateException("此设备缺少可用的账号密钥，请重新登录或从原手机恢复应用内备份")
+
 /** Independent encrypted state; existing Flutter preferences and keys are never modified. */
-class AccountRepository(context: Context) {
+class AccountRepository internal constructor(context: Context, private val accountKey: (Boolean) -> SecretKey) {
+    constructor(context: Context) : this(context, ::loadAccountKey)
     private val app = context.applicationContext
     private val file = AtomicFile(File(app.filesDir, "greennote-compose-account-v1.bin"))
     private val mutex = Mutex()
@@ -48,47 +52,69 @@ class AccountRepository(context: Context) {
     private var rollback: String? = null
     private var secrets = JSONObject()
     private var initialized = false
+    private var recoveryAvailable = false
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
         mutex.withLock {
             if (initialized) return@withLock
-            if (file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()) {
-                val recoverable = File(file.baseFile.path + ".bak").takeIf { it.exists() } ?: file.baseFile
-                require(recoverable.length() in 30..(80L * 1024 * 1024)) { "账户存储格式无效，原文件已保留" }
-                val encrypted = file.readFully()
-                require(encrypted.size in 30..(80 * 1024 * 1024)) { "账户存储格式无效，原文件已保留" }
-                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, key(create = false), GCMParameterSpec(128, encrypted.copyOfRange(1, 13)))
-                require(encrypted[0] == 1.toByte()) { "账户存储版本无效" }
-                val saved = JSONObject(String(cipher.doFinal(encrypted.copyOfRange(13, encrypted.size)), Charsets.UTF_8))
-                val local = LocalAccounts.validate(saved.getJSONObject("local"))
-                rollback = saved.optJSONObject("rollback")?.let { LocalAccounts.validate(it).toString() }
-                secrets = saved.optJSONObject("secrets") ?: JSONObject()
-                val mode = AccountMode.valueOf(saved.getString("mode"))
-                val cookie = saved.optString("cookie")
-                require(mode != AccountMode.COOKIE || OfficialLoginSession.hasAccountCookie(cookie)) { "保存的账号凭据无效" }
-                mutable.value = AccountState(mode, cookie, saved.optString("uid"), saved.optString("username"), saved.optString("avatar"), local.toString())
-            } else {
-                val legacy = FlutterAccountImport(app).read()
-                if (legacy != null) {
-                    initialized = true
-                    try { persist(legacy.state, legacy.backup ?: legacy.state.localJson, legacy.secrets) }
-                    catch (failure: Exception) { initialized = false; throw failure }
+            recoveryAvailable = false
+            try {
+                if (file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()) {
+                    val recoverable = File(file.baseFile.path + ".bak").takeIf { it.exists() } ?: file.baseFile
+                    require(recoverable.length() in 30..(80L * 1024 * 1024)) { "账户存储格式无效，原文件已保留" }
+                    val encrypted = file.readFully()
+                    require(encrypted.size in 30..(80 * 1024 * 1024)) { "账户存储格式无效，原文件已保留" }
+                    require(encrypted[0] == 1.toByte()) { "账户存储版本无效" }
+                    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                    cipher.init(Cipher.DECRYPT_MODE, accountKey(false), GCMParameterSpec(128, encrypted.copyOfRange(1, 13)))
+                    val saved = JSONObject(String(cipher.doFinal(encrypted.copyOfRange(13, encrypted.size)), Charsets.UTF_8))
+                    val local = LocalAccounts.validate(saved.getJSONObject("local"))
+                    rollback = saved.optJSONObject("rollback")?.let { LocalAccounts.validate(it).toString() }
+                    secrets = saved.optJSONObject("secrets") ?: JSONObject()
+                    val mode = AccountMode.valueOf(saved.getString("mode"))
+                    val cookie = saved.optString("cookie")
+                    require(mode != AccountMode.COOKIE || OfficialLoginSession.hasAccountCookie(cookie)) { "保存的账号凭据无效" }
+                    mutable.value = AccountState(mode, cookie, saved.optString("uid"), saved.optString("username"), saved.optString("avatar"), local.toString())
+                } else {
+                    val legacy = FlutterAccountImport(app).read()
+                    if (legacy != null) {
+                        initialized = true
+                        try { persist(legacy.state, legacy.backup ?: legacy.state.localJson, legacy.secrets) }
+                        catch (failure: Exception) { initialized = false; throw failure }
+                    }
                 }
+                initialized = true
+            } catch (failure: AccountKeyUnavailableException) {
+                recoveryAvailable = true
+                throw failure
+            } catch (_: AEADBadTagException) {
+                recoveryAvailable = true
+                throw AccountKeyUnavailableException()
             }
-            initialized = true
         }
     }
 
-    private fun key(create: Boolean): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val alias = "greennote.compose.account.v1"
-        (store.getKey(alias, null) as? SecretKey)?.let { return it }
-        check(create) { "账户密钥不可用，原文件已保留" }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
-            init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).setKeySize(256).build())
-        }.generateKey()
+    suspend fun recoverAfterTransfer() {
+        try { initialize(); return } catch (_: AccountKeyUnavailableException) { }
+        withContext(Dispatchers.IO) { mutex.withLock {
+            if (initialized) return@withLock
+            check(recoveryAvailable) { "请先重新读取账号资料" }
+            if (file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()) {
+                val encrypted = file.readFully()
+                val directory = File(app.noBackupFilesDir, "account-recovery")
+                check(directory.isDirectory || directory.mkdirs()) { "无法保留旧账号文件，请检查存储空间" }
+                val archive = AtomicFile(File(directory, "account-${UUID.randomUUID()}.bin"))
+                val stream = archive.startWrite()
+                try { stream.write(encrypted); archive.finishWrite(stream) }
+                catch (failure: Exception) { archive.failWrite(stream); throw failure }
+                check(archive.readFully().contentEquals(encrypted)) { "旧账号文件备份校验失败" }
+            }
+            initialized = true
+            try {
+                persist(AccountState(), backup = null, secretValues = JSONObject())
+                recoveryAvailable = false
+            } catch (failure: Exception) { initialized = false; throw failure }
+        } }
     }
 
     private fun persist(next: AccountState, backup: String? = rollback, secretValues: JSONObject = secrets) {
@@ -99,7 +125,7 @@ class AccountRepository(context: Context) {
         val plain = root.toString().toByteArray(Charsets.UTF_8)
         require(plain.size <= 80 * 1024 * 1024 - 29) { "账户资料超过存储限制" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key(create = true))
+        cipher.init(Cipher.ENCRYPT_MODE, accountKey(true))
         val bytes = byteArrayOf(1) + cipher.iv + cipher.doFinal(plain)
         val stream = file.startWrite()
         try { stream.write(bytes); file.finishWrite(stream) } catch (error: Exception) { file.failWrite(stream); throw error }
@@ -169,19 +195,19 @@ class AccountRepository(context: Context) {
     suspend fun restoreLocal(raw: JSONObject) {
         restoreLocalFromBackup(raw, state.value)
     }
-    suspend fun restoreLocalFromBackup(raw: JSONObject, expected: AccountState): AccountState = withContext(Dispatchers.IO) {
+    suspend fun restoreLocalFromBackup(raw: JSONObject, expected: AccountState, activateAnonymous: Boolean = false): AccountState = withContext(Dispatchers.IO) {
         val candidate = LocalAccounts.validate(raw).toString()
         mutex.withLock {
             requireAccountGeneration(expected, state.value)
-            persist(state.value.copy(localJson = candidate), state.value.localJson)
+            persist(state.value.copy(localJson = candidate, mode = if (activateAnonymous) AccountMode.ANONYMOUS else state.value.mode), state.value.localJson)
             state.value
         }
     }
-    suspend fun restoreLocalBackupIfUnchanged(previous: String, applied: AccountState) = withContext(Dispatchers.IO) {
-        val candidate = LocalAccounts.validate(JSONObject(previous)).toString()
+    suspend fun restoreLocalBackupIfUnchanged(previous: AccountState, applied: AccountState) = withContext(Dispatchers.IO) {
+        val candidate = LocalAccounts.validate(JSONObject(previous.localJson)).toString()
         mutex.withLock {
             requireLocalRestoreOwnership(applied, state.value)
-            persist(state.value.copy(localJson = candidate), state.value.localJson)
+            persist(state.value.copy(localJson = candidate, mode = previous.mode), state.value.localJson)
         }
     }
     suspend fun rollbackLocal() {
@@ -246,6 +272,17 @@ class AccountRepository(context: Context) {
         if (entries.has(id)) entries.remove(id) else entries.put(id, item)
         active
     }
+}
+
+private fun loadAccountKey(create: Boolean): SecretKey {
+    val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    val alias = "greennote.compose.account.v1"
+    (store.getKey(alias, null) as? SecretKey)?.let { return it }
+    if (!create) throw AccountKeyUnavailableException()
+    return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+        init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).setKeySize(256).build())
+    }.generateKey()
 }
 
 // Local list/profile edits retain navigation and in-flight reads; authentication/profile switches do not.

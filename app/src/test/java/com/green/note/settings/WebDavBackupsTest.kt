@@ -43,6 +43,8 @@ class WebDavBackupsTest {
             val overflow=fixture(2);overflow.getJSONObject("preferences").put(key,4294967296L)
             assertThrows(IllegalArgumentException::class.java) { BackupFormat.validate(overflow) }
         }
+        assertThrows(IllegalArgumentException::class.java) { BackupFormat.validate(fixture(3).put("accountMode", "unknown")) }
+        assertNull(BackupFormat.validate(fixture(3)).accountMode)
     }
 
     @Test fun failedAccountSettingsOrPasswordWritesRestoreBothStores() = runBlocking {
@@ -104,6 +106,46 @@ class WebDavBackupsTest {
             assertFalse(service.test(config, "synthetic"))
             assertEquals(1, server.requestCount)
             try { service.download(config, "synthetic"); fail("Expected size rejection") } catch (_: IllegalArgumentException) { }
+        }
+    }
+
+    @Test fun downloadOnlyTreats404AsMissingAndKeepsAuthenticationErrorsDistinct() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val service = WebDavService()
+            val config = WebDavConfig(server.url("/dav/").toString(), "synthetic-user", "备份")
+            server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setResponseCode(404))
+            assertNull(service.download(config, "synthetic-password"))
+            for (code in listOf(401, 403, 302, 429, 500)) {
+                server.enqueue(MockResponse().setResponseCode(code))
+                try { service.download(config, "synthetic-password"); fail("HTTP $code must not masquerade as missing") }
+                catch (error: IllegalStateException) { assertTrue(error.message.orEmpty().contains(code.toString())) }
+            }
+            assertEquals(7, server.requestCount)
+            server.enqueue(MockResponse().setBody("<html>login</html>"))
+            try { service.download(config, "synthetic-password"); fail("Expected format error") }
+            catch (error: IllegalStateException) { assertTrue(error.message.orEmpty().contains("JSON")) }
+            assertEquals("/dav/%E5%A4%87%E4%BB%BD/greennote_settings_latest.json", server.takeRequest().path)
+        }
+    }
+
+    @Test fun readsTheExactFlutterDoubleSlashLocationOnlyWhenTheCurrentFileIsMissing() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val service = WebDavService()
+            val config = WebDavConfig(server.url("/dav/").toString(), "synthetic-user", "备份/sub")
+            server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setBody(fixture(3).toString()))
+            val backup = checkNotNull(service.download(config, "synthetic-password"))
+            assertEquals("12345", BackupFormat.validate(backup).local!!.getJSONObject("publicIdentity").getString("uid"))
+            assertEquals("/dav/%E5%A4%87%E4%BB%BD/sub/greennote_settings_latest.json", server.takeRequest().path)
+            assertEquals("/dav//%E5%A4%87%E4%BB%BD/sub/greennote_settings_latest.json", server.takeRequest().path)
+            server.enqueue(MockResponse().setBody(fixture(2).toString()))
+            assertEquals(2, service.download(config, "synthetic-password")!!.getInt("version"))
+            assertEquals(3, server.requestCount)
+            val root = config.copy(url = server.url("/").toString())
+            assertEquals(WebDavAddress.backupUrl(root), WebDavAddress.backupUrl(root, legacyFlutter = true))
         }
     }
 }

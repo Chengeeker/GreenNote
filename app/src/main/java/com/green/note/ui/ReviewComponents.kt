@@ -128,7 +128,7 @@ fun ReviewPage(title: String, onBack: () -> Unit, topPadding: Dp = 12.dp, conten
     actions: @Composable RowScope.() -> Unit = {}, bottomPadding: Dp = 12.dp, content: @Composable ColumnScope.() -> Unit) {
     val scroll = rememberScrollState()
     ReviewScrollActivity(scroll)
-    Column(Modifier.fillMaxSize().background(LocalScaffoldColor.current)) {
+    Column(Modifier.fillMaxSize().background(LocalScaffoldColor.current).imePadding()) {
         // Flutter's childless flexibleSpace DecoratedBox has zero height here, so no bottom border is painted.
         Column(Modifier.background(LocalScaffoldColor.current).statusBarsPadding()) {
             ReviewToolbarIcons { Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {

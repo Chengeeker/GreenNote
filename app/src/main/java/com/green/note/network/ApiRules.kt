@@ -75,3 +75,5 @@ data class CaptchaChallenge(val id: String, val field: String) {
 }
 
 class CaptchaRequired(val challenge: CaptchaChallenge, val context: String, message: String) : ApiException(message)
+
+internal class UnsupportedCaptcha : ApiException("当前访问需要验证码")

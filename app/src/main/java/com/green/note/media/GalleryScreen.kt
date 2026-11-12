@@ -305,7 +305,13 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                         scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y
                     }) { hdr = it }
                     val badge = galleryBadge(url, feed, hdr || url in knownHdr)
-                    if (badge.isNotEmpty() && chrome) Text(badge, Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = badgeBottom).background(Color.Black.copy(alpha = .72f), RoundedCornerShape(6.dp)).border(if (badge == "HDR") 1.dp else .6.dp, Color.White.copy(alpha = if (badge == "HDR") .55f else .25f), RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp), color = Color.White, fontSize = 11.sp, fontWeight = if (badge == "HDR") FontWeight.Black else FontWeight.Bold, letterSpacing = .6.sp)
+                    if (badge.isNotEmpty() && chrome) {
+                        val badgeModifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = badgeBottom)
+                        if (badge == "HDR") HdrBadge(badgeModifier)
+                        else Text(badge, badgeModifier.background(Color.Black.copy(alpha = .72f), RoundedCornerShape(6.dp))
+                            .border(.6.dp, Color.White.copy(alpha = .25f), RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
+                            color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
+                    }
                     if (loading && openingPreview == null && previewDrawable == null) com.green.note.ui.ReviewCircularProgress(color = Color.White)
                     if (failed) com.green.note.ui.ReviewTextButton(onClick = { retry++ }) { Text("图片加载失败，点击重试", color = Color.White) }
                 }
@@ -356,7 +362,12 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                         Box(Modifier.fillMaxSize().padding(horizontal = 3.dp, vertical = 2.dp).clip(RoundedCornerShape(8.dp)).border(2.dp, if (index == pager.currentPage) Color.White else Color.Transparent, RoundedCornerShape(8.dp)).clickable { thumbnailUserScroll = false; scope.launch { thumbnails.scrollToPage(index); pager.scrollToPage(index) } }) {
                             if (previewDrawable != null) AsyncImage(previewDrawable, "第 ${index + 1} 张图片", modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)), imageLoader = galleryImageLoader, contentScale = ContentScale.Crop)
                             val badge = galleryBadge(url, feed, url in knownHdr)
-                            if (badge.isNotEmpty()) Text(badge, Modifier.align(Alignment.BottomEnd).padding(end = 2.dp, bottom = 2.dp).background(Color.Black.copy(alpha = .75f), RoundedCornerShape(3.dp)).then(if (badge == "HDR") Modifier.border(.5.dp, Color.White.copy(alpha = .5f), RoundedCornerShape(3.dp)) else Modifier).padding(horizontal = 3.dp, vertical = 1.dp), color = Color.White, fontSize = 7.5.sp, fontWeight = if (badge == "HDR") FontWeight.Black else FontWeight.Bold)
+                            if (badge.isNotEmpty()) {
+                                val badgeModifier = Modifier.align(Alignment.BottomEnd).padding(end = 2.dp, bottom = 2.dp)
+                                if (badge == "HDR") HdrBadge(badgeModifier, description = "第 ${index + 1} 张 HDR 图片", compact = true)
+                                else Text(badge, badgeModifier.background(Color.Black.copy(alpha = .75f), RoundedCornerShape(3.dp))
+                                    .padding(horizontal = 3.dp, vertical = 1.dp), color = Color.White, fontSize = 7.5.sp, fontWeight = FontWeight.Bold)
+                            }
                             if (index != pager.currentPage) Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = .5f)))
                         }
                     }

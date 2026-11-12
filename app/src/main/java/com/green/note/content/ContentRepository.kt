@@ -84,7 +84,9 @@ data class ContentPage(val rows: List<JSONObject>, val page: Int, val first: Str
 class ContentRepository(private val api: ContentApi) {
     suspend fun page(request: ContentRequest, page: Int, first: String = "", last: String = ""): ContentPage {
         val root = api.request(request.path, query = request.query + mapOf("page" to "$page", "firstItem" to first, "lastItem" to last))
-        return parsePage(root, page)
+        val replies = request.path in setOf("/v6/feed/replyList", "/v6/feed/hotReplyList", "/v6/album/replyList")
+        val result = parsePage(root, page, allowShort = replies)
+        return if (replies) result.copy(first = root.text("firstItem").ifEmpty { first.ifEmpty { result.first } }) else result
     }
 
     suspend fun home(route: String, page: Int, first: String = "", last: String = ""): ContentPage {

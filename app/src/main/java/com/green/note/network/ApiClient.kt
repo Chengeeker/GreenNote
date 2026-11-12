@@ -68,19 +68,12 @@ class ApiClient(
 
     override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
         val owner = session()
-        suspend fun fetch(target: String): JSONObject {
-            try { return execute(target, method, query, body, owner, owner, true) }
-            catch (failure: ApiException) {
-                if (owner != session() || !method.equals("GET", true) ||
-                    ApiRules.resolve(target, emptyMap()).encodedPath != "/v6/feed/replyList" ||
-                    failure.message?.contains("评论接口异常") != true || failure.message?.contains("升级") != true) throw failure
-                return execute(target, method, query, body, owner, owner, true, modernReplies = true)
-            }
-        }
+        suspend fun fetch(target: String) = execute(target, method, query, body, owner, owner, true)
         if (method.equals("GET", true) && path in setOf("/v6/feed/replyList", "/v6/feed/hotReplyList")) {
             try { return fetch("https://api2.coolapk.com$path") }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (challenge: CaptchaRequired) { throw challenge }
+            catch (challenge: UnsupportedCaptcha) { throw challenge }
             catch (failure: Exception) { if (owner != session()) throw failure }
         }
         return fetch(path)
@@ -172,7 +165,6 @@ class ApiClient(
     private suspend fun execute(
         path: String, method: String, query: Map<String, String>, body: Map<String, String>?,
         owner: ApiSession, requestSession: ApiSession, rememberSession: Boolean, explicitProof: String? = null, extraBody: RequestBody? = null,
-        modernReplies: Boolean = false,
     ): JSONObject = withContext(Dispatchers.IO) {
         require(method.uppercase() in setOf("GET", "POST")) { "接口方法无效" }
         var requestPath = path
@@ -183,6 +175,7 @@ class ApiClient(
             when (params["type"]) { "picture" -> params["type"] = "article"; "ershou" -> params["type"] = "trade" }
         }
         val url = ApiRules.resolve(requestPath, params)
+        val modernReplies = method.equals("GET", true) && url.encodedPath == "/v6/feed/replyList"
         ApiRules.allow(requestSession, method, url.encodedPath)
         val remembered = if (rememberSession) sessionCookie?.takeIf { it.owner == owner } else null
         val requestContext = context(owner)
@@ -231,6 +224,12 @@ class ApiClient(
                 if (proof != null) acceptedValidation = null
                 throw CaptchaRequired(challenge, context(owner), root.optString("message").ifBlank { "当前访问需要验证码" })
             }
+            val message = root.optString("message")
+            if (root.optString("messageStatus") == "err_request_captcha_v2" || root.isNull("data") &&
+                (message.contains("验证码") || message.contains("captcha", ignoreCase = true))) {
+                if (proof != null) acceptedValidation = null
+                throw UnsupportedCaptcha()
+            }
             val code = (root.opt("status") ?: root.opt("code"))?.toString()?.toIntOrNull()
             if (!response.isSuccessful || code != null && code !in setOf(0, 200)) {
                 throw ApiException(root.optString("message").ifBlank { "接口返回错误（${code ?: response.code}）" })
@@ -240,7 +239,7 @@ class ApiClient(
     }
 
     private fun headers(owner: ApiSession, replyList: Boolean = false): Map<String, String> {
-        // Upgrade only after the reply endpoint explicitly rejects the existing client version.
+        // Match the regular comment endpoint's version requirement from the first request.
         val version = if (replyList) "16.6.4" else "16.2.0"
         val code = if (replyList) "2609291" else "2604201"
         return mapOf(

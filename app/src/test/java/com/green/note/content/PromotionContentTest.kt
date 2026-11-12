@@ -45,6 +45,58 @@ import java.util.concurrent.atomic.AtomicInteger
 class PromotionContentTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun feedHydrationKeepsExistingBodyWithoutCaptchaNotices() {
+        val challenge = com.green.note.network.ApiException("当前访问需要验证码")
+        val verifications = AtomicInteger()
+        val commentPaths = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val seed = JSONObject("""{"id":"42","uid":"8","username":"作者","message":"可以继续阅读的正文"}""")
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                if (path == "/v6/feed/detail") throw challenge
+                commentPaths += path
+                return JSONObject("""{"data":[{"id":"17","uid":"8","username":"作者","message":"可以继续阅读的评论"}],"hasMore":false}""")
+            }
+            override suspend fun verifyFeedDetail(id: String, challenge: com.green.note.network.CaptchaRequired): JSONObject {
+                verifications.incrementAndGet()
+                return JSONObject().put("data", JSONObject(seed.toString()).put("message", "验证后的完整正文"))
+            }
+        }
+        compose.setContent { MaterialTheme {
+            FeedDetailScreen(api, "42", ContentSession(uid = "1", authenticated = true), {}, {}, {}, { _, _, _ -> }, {}, {}, {}, initialFeed = seed)
+        } }
+        compose.waitUntil(5000) { commentPaths.isNotEmpty() }
+        compose.waitForIdle()
+        assertEquals(0, verifications.get())
+        compose.onNodeWithText("可以继续阅读的正文").assertIsDisplayed()
+        assertEquals("/v6/feed/hotReplyList", commentPaths.first())
+        compose.onNodeWithText("验证码", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("重新加载原帖").assertDoesNotExist()
+        compose.onNodeWithText("完成验证并重试").assertDoesNotExist()
+    }
+
+    @Test fun missingFeedStillOffersExplicitVerification() {
+        val challenge = com.green.note.network.CaptchaRequired(com.green.note.network.CaptchaChallenge("abcdefghijklmnop", ""), "fixture", "当前访问需要验证码")
+        val verifications = AtomicInteger()
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                if (path == "/v6/feed/detail") throw challenge
+                return JSONObject("""{"data":[],"hasMore":false}""")
+            }
+            override suspend fun verifyFeedDetail(id: String, challenge: com.green.note.network.CaptchaRequired): JSONObject {
+                verifications.incrementAndGet()
+                return JSONObject("""{"data":{"id":"42","uid":"8","username":"作者","message":"验证后的完整正文"}}""")
+            }
+        }
+        compose.setContent { MaterialTheme {
+            FeedDetailScreen(api, "42", ContentSession(uid = "1", authenticated = true), {}, {}, {}, { _, _, _ -> }, {}, {}, {})
+        } }
+        compose.waitUntil(5000) { compose.onAllNodesWithText("完成验证并重试").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(0, verifications.get())
+        compose.onNodeWithText("完成验证并重试").performClick()
+        compose.waitUntil(5000) { compose.onAllNodesWithText("验证后的完整正文").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(1, verifications.get())
+    }
+
     @Test fun longArticleOpensBeforeTheFullBodyReturns() {
         val seed = JSONObject("""{"id":"8","entityType":"feedarticle","uid":"80","username":"文章作者","title":"长文卡片","description":"列表摘要","issummary":1,"message":"已有正文","message_raw_output":[{"type":"text","text":"已有正文"}]}""")
         val fullBody = """<p>完整正文</p><img src="https://example.invalid/full.jpg">""" +

@@ -1,6 +1,7 @@
 package com.green.note.content
 
 import com.green.note.network.CaptchaRequired
+import com.green.note.network.UnsupportedCaptcha
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -9,8 +10,16 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 
-internal fun embeddedReplies(feed: JSONObject?): List<JSONObject> = listOf("topReplyRows", "top_reply_rows", "replyMeRows", "reply_me_rows", "replyRows", "reply_rows")
-    .flatMap { feed?.optJSONArray(it).objects() }.filter(::visibleReply).distinctBy(::replyId)
+internal val embeddedReplyFields = listOf("topReplyRows", "top_reply_rows", "replyMeRows", "reply_me_rows", "replyRows", "reply_rows")
+
+internal fun embeddedReplies(feed: JSONObject, feedId: String, authorOnly: Boolean): List<JSONObject> {
+    val author = replyAuthor(feed).uid
+    return embeddedReplyFields.flatMap { feed.optJSONArray(it).objects() }
+        .filter { visibleReply(it) && replyMatchesFeed(it, feedId) &&
+            (!authorOnly || author.isNotEmpty() && replyAuthor(it).uid == author) }
+        .distinctBy(::replyId)
+        .map { normalizeReply(it, feedId) }
+}
 
 private val replyTypes = setOf("feed_reply", "reply", "feedreply")
 private val nonReplyTypes = setOf("card", "header", "card_title", "banner", "placeholder", "feed_detail_reply_sponsor_card")
@@ -71,74 +80,88 @@ private suspend fun fetchReplyDetails(api: ContentApi, ids: List<String>, feedId
             val row = response.optJSONObject("data") ?: response
             row.takeIf { replyId(it) == id && replyMatchesFeed(it, feedId, parentReplyId) && visibleReply(it) }
         } catch (error: Exception) {
-            if (error is CancellationException || error is CaptchaRequired || owner != api.imageCacheScope()) throw error
+            if (error is CancellationException || error is CaptchaRequired || error is UnsupportedCaptcha || owner != api.imageCacheScope()) throw error
             null
         }
     } } }.awaitAll().filterNotNull() }
 }
 
-internal suspend fun loadReplyPage(api: ContentApi, request: ContentRequest, feedId: String, page: Int, first: String, last: String): ContentPage {
+internal fun recentReplyIds(feed: JSONObject?): List<String> = feed?.text("recent_reply_ids", "recentReplyIds").orEmpty()
+    .trim('[', ']').split(',').map { it.trim().trim('"') }
+    .filter { (it.toLongOrNull() ?: 0) > 0 }.distinct().take(15)
+
+internal suspend fun loadRecentReplyPreview(api: ContentApi, ids: List<String>, feedId: String): List<JSONObject> {
+    val owner = api.imageCacheScope()
+    return try {
+        val rows = fetchReplyDetails(api, ids, feedId, owner)
+        if (owner == api.imageCacheScope()) rows.map { normalizeReply(it, feedId) } else emptyList()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+internal suspend fun loadReplyPage(api: ContentApi, request: ContentRequest, feedId: String, page: Int, first: String, last: String, authorUid: String? = null): ContentPage {
     val owner = api.imageCacheScope()
     val parentReplyId = request.query["id"].orEmpty().takeIf { request.query["feedType"] == "feed_reply" }.orEmpty()
     suspend fun requestPage(number: Int, before: String, after: String): ContentPage {
-        val root = api.request(request.path, query = request.query + mapOf("page" to "$number", "firstItem" to before, "lastItem" to after))
+        val query = request.query + buildMap {
+            put("page", "$number")
+            if (request.path != "/v6/feed/hotReplyList") {
+                if (before.isNotEmpty()) put("firstItem", before)
+                if (after.isNotEmpty()) put("lastItem", after)
+            }
+        }
+        val root = api.request(request.path, query = query)
         val raw = collectEntities(root, ::replyRecord)
-        val pageData = parsePage(root, number, raw)
+        val pageData = parsePage(root, number, raw, allowShort = true)
         val records = raw.filter(::replyRecord)
         return pageData.copy(
-            first = root.text("firstItem").ifEmpty { records.firstOrNull()?.let(::replyId) ?: pageData.first },
+            first = root.text("firstItem").ifEmpty { before.ifEmpty { records.firstOrNull()?.let(::replyId) ?: pageData.first } },
             last = root.text("lastItem").ifEmpty { records.lastOrNull()?.let(::replyId) ?: pageData.last },
         )
     }
     var result = requestPage(page, first, last)
-    // A page can contain only service rows. Follow an advancing server cursor, within a bounded window.
-    for (attempt in 0 until 2) {
-        if (result.rows.any { replyRecord(it) && (visibleReply(it) || replyType(it) in replyTypes) } ||
-            !result.more || result.last.isEmpty() || result.last == last) break
-        val next = requestPage(result.page + 1, result.first, result.last)
-        if (next.last == result.last) break
-        result = next
+    var previousCursor = last
+    repeat(3) { attempt ->
+        val records = result.rows.filter { replyRecord(it) && replyMatchesFeed(it, feedId, parentReplyId) }
+        val unresolved = records.filter { if (visibleReply(it)) replyAuthor(it).name.isEmpty() else replyType(it) in replyTypes }
+            .map(::replyId).distinct().take(6)
+        var challenge: Exception? = null
+        val details = try { fetchReplyDetails(api, unresolved, feedId, owner, parentReplyId).associateBy(::replyId) }
+            catch (error: Exception) {
+                if (error !is CaptchaRequired && error !is UnsupportedCaptcha) throw error
+                challenge = error
+                emptyMap()
+            }
+        check(owner == api.imageCacheScope()) { "账号已变化" }
+        val replies = records.map { row ->
+            val normalized = normalizeReply(row, feedId)
+            details[replyId(row)]?.let { detail ->
+                val full = normalizeReply(detail, feedId)
+                full.keys().forEach { key -> if (normalized.text(key).isEmpty()) normalized.put(key, full.opt(key)) }
+            }
+            normalized
+        }.filter { visibleReply(it) && (authorUid == null || authorUid.isNotEmpty() && replyAuthor(it).uid == authorUid) }.distinctBy(::replyId)
+        if (replies.isNotEmpty()) return result.copy(rows = replies)
+        challenge?.let { throw it }
+        if (!result.more) return result.copy(rows = emptyList())
+        // Filtered service rows are not the end of the comments; keep the retry bounded.
+        check(attempt < 2 && result.last.isNotEmpty() && result.last != previousCursor) { "评论暂未加载完整，请重试" }
+        previousCursor = result.last
+        result = requestPage(result.page + 1, result.first, result.last)
     }
-    val records = result.rows.filter { replyRecord(it) && replyMatchesFeed(it, feedId, parentReplyId) }
-    val unresolved = records.filter { if (visibleReply(it)) replyAuthor(it).name.isEmpty() else replyType(it) in replyTypes }
-        .map(::replyId).distinct().take(6)
-    val details = try { fetchReplyDetails(api, unresolved, feedId, owner, parentReplyId).associateBy(::replyId) }
-        catch (_: CaptchaRequired) { emptyMap() }
-    check(owner == api.imageCacheScope()) { "账号已变化" }
-    val replies = records.map { row ->
-        val normalized = normalizeReply(row, feedId)
-        details[replyId(row)]?.let { detail ->
-            val full = normalizeReply(detail, feedId)
-            full.keys().forEach { key -> if (normalized.text(key).isEmpty()) normalized.put(key, full.opt(key)) }
-        }
-        normalized
-    }.filter(::visibleReply).distinctBy(::replyId)
-    return result.copy(rows = replies)
+    error("评论暂未加载完整，请重试")
 }
 
 internal suspend fun loadContentReplies(api: ContentApi, feed: JSONObject?, id: String, order: Int, authorOnly: Boolean, page: Int, first: String, last: String): ContentPage {
     val scope = api.imageCacheScope()
     val author = feed?.let(::replyAuthor)?.uid.orEmpty()
     val query = mapOf("id" to id, "listType" to if (order >= 2) "dateline_desc" else "lastupdate_desc", "discussMode" to "1", "feedType" to "feed", "blockStatus" to "0", "fromFeedAuthor" to if (authorOnly) "1" else "0")
-    suspend fun request(hot: Boolean): ContentPage = loadReplyPage(api, ContentRequest(if (hot) "/v6/feed/hotReplyList" else "/v6/feed/replyList", query), id, page, first, last)
-    fun guard(error: Exception) { if (error is CancellationException || error is CaptchaRequired || scope != api.imageCacheScope()) throw error }
-    var failure: Exception? = null
-    var result = try { request(order == 1) } catch (error: Exception) { guard(error); failure = error; ContentPage(emptyList(), page, "", "", false) }
-    if (page == 1 && result.rows.isEmpty() && !authorOnly) {
-        if (failure != null && order != 1) try { result = request(true) } catch (error: Exception) { guard(error) }
-        if (result.rows.isEmpty()) {
-            val recent = feed?.text("recent_reply_ids").orEmpty().split(',').map(String::trim).filter { it.toLongOrNull()?.let { n -> n > 0 } == true }.distinct().take(15)
-            val fetched = fetchReplyDetails(api, recent, id, scope)
-            if (fetched.isNotEmpty()) result = ContentPage(fetched, 1, replyId(fetched.first()), replyId(fetched.last()), false)
-        }
-        if (result.rows.isEmpty() && order == 1) try { result = request(false) } catch (error: Exception) { guard(error) }
-    }
-    if (result.rows.isEmpty() && page == 1) {
-        val embedded = embeddedReplies(feed).filter { replyMatchesFeed(it, id) && (!authorOnly || author.isNotEmpty() && replyAuthor(it).uid == author) }
-        if (embedded.isNotEmpty()) result = ContentPage(embedded, page, replyId(embedded.first()), replyId(embedded.last()), false)
-        else if (failure != null) throw failure
-    }
+    val request = if (order == 1) ContentRequest("/v6/feed/hotReplyList", mapOf("id" to id, "discussMode" to "1"))
+        else ContentRequest("/v6/feed/replyList", query)
+    val result = loadReplyPage(api, request, id, page, first, last, author.takeIf { authorOnly })
     check(scope == api.imageCacheScope()) { "账号已变化" }
-    return result.copy(rows = result.rows.filter { visibleReply(it) && (!authorOnly || author.isNotEmpty() && replyAuthor(it).uid == author) }
-        .map { if (it.text("entityType") == "feed_reply" && it.text("feedid") == id && it.text("id").isNotEmpty()) it else normalizeReply(it, id) })
+    return result
 }

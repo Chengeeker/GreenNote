@@ -57,12 +57,10 @@ class ContentActions(private val api: ApiClient, private val accounts: AccountRe
         check(owner == session()) { "账号已变更，请重新加载" }
         rows
     }
-    override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
-        return try { api.request(path, method, query, body) } catch (error: CaptchaRequired) {
-            if (path != "/v6/feed/detail" || method != "GET") throw error
-            val validate = solveCaptcha(error) ?: throw error
-            api.verifyFeedDetail(query["id"].orEmpty(), error, validate)
-        }
+    // Background detail hydration must never open an interactive verification page.
+    override suspend fun verifyFeedDetail(id: String, challenge: CaptchaRequired): JSONObject {
+        val validate = solveCaptcha(challenge) ?: throw challenge
+        return api.verifyFeedDetail(id, challenge, validate)
     }
     override suspend fun submitMultipart(path: String, fields: Map<String, String>, query: Map<String, String>): JSONObject = api.multipart(path, fields, query)
     private val collectionScopes = ConcurrentHashMap<String, ApiSession>()

@@ -12,12 +12,15 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -25,9 +28,10 @@ import org.json.JSONObject
 
 private data class FeedDetailSnapshot(val feed: JSONObject, val parts: List<ArticlePart>)
 
-private suspend fun loadFeedDetail(api: ContentApi, id: String, seed: JSONObject?): FeedDetailSnapshot {
+private suspend fun loadFeedDetail(api: ContentApi, id: String, seed: JSONObject?, challenge: com.green.note.network.CaptchaRequired? = null): FeedDetailSnapshot {
     val owner = api.imageCacheScope()
-    val detail = api.request("/v6/feed/detail", query = mapOf("id" to id)).optJSONObject("data") ?: error("动态详情为空")
+    val response = if (challenge == null) api.request("/v6/feed/detail", query = mapOf("id" to id)) else api.verifyFeedDetail(id, challenge)
+    val detail = response.optJSONObject("data") ?: error("动态详情为空")
     val result = withContext(Dispatchers.Default) {
         check(detail.length() > 0) { "动态详情为空" }
         val merged = mergeFeedDetail(seed, detail)
@@ -57,9 +61,10 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     val trade = remember(feed) { feed?.let(::secondhandInfo) }
     val parts = if (trade == null) parsedParts else emptyList()
     var failure by remember(id) { mutableStateOf<String?>(null) }
+    var challenge by remember(id) { mutableStateOf<com.green.note.network.CaptchaRequired?>(null) }
+    var requestedVerification by remember(id) { mutableStateOf<com.green.note.network.CaptchaRequired?>(null) }
     var attempt by remember(id) { mutableIntStateOf(0) }
-    var ordering by rememberSaveable(id) { mutableIntStateOf(0) }
-    var authorOnly by rememberSaveable(id) { mutableStateOf(false) }
+    var ordering by rememberSaveable(id) { mutableIntStateOf(1) }
     var replyTo by remember { mutableStateOf<JSONObject?>(null) }
     var replyToDelete by remember { mutableStateOf<JSONObject?>(null) }
     var targetReply by remember(initialReplyId) { mutableStateOf<JSONObject?>(null) }
@@ -68,16 +73,55 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     var menu by remember { mutableStateOf(false) }; var delete by remember { mutableStateOf(false) }; var working by remember { mutableStateOf(false) }; var following by remember(id, seed) { mutableStateOf(seed?.let(api::isUserFollowed) ?: false) }
     val scope = rememberCoroutineScope(); val context = androidx.compose.ui.platform.LocalContext.current
     val toast = remember { com.green.note.ui.AppToastState() }
-    val replies = remember(api, id, api.imageCacheScope()) { ContentListState() }
+    val replyLists = remember(api, id, api.imageCacheScope()) { List(4) { ContentListState() } }
+    val removedReplies = remember(replyLists) { mutableStateListOf<String>() }
+    val replies = replyLists[ordering]
+    val hotReplies = replyLists[1]
     val requestedOrdering = ordering
-    val requestedAuthorOnly = authorOnly || ordering == 3
-    val replySource = Triple(attempt, requestedOrdering, requestedAuthorOnly)
-    val displayedOrdering = (replies.appliedSource as? Triple<*, *, *>)?.second as? Int ?: ordering
-    LaunchedEffect(replies, replySource, feed != null) {
-        if (feed != null) {
+    val requestedAuthorOnly = ordering == 3
+    val authorUid = feed?.let(::replyAuthor)?.uid.orEmpty()
+    val replySource = Triple(attempt, requestedOrdering, authorUid.takeIf { requestedAuthorOnly }.orEmpty())
+    val hotSource = Triple(attempt, 1, "")
+    val previewFeed = feed
+    val restricted = replies.accessRestricted && replies.rows.isEmpty()
+    val emptyHotPage = hotReplies.appliedSource == hotSource && !hotReplies.busy &&
+        hotReplies.error == null && hotReplies.rows.isEmpty() && !hotReplies.more
+    val checkingHot = restricted && ordering in listOf(0, 2) && hotReplies.rows.isEmpty() &&
+        !emptyHotPage && hotReplies.error == null
+    val embedded = remember(previewFeed, id, requestedAuthorOnly) {
+        previewFeed?.let { embeddedReplies(it, id, requestedAuthorOnly) }.orEmpty()
+    }
+    val needsRecentFallback = embedded.isEmpty() && (ordering == 1 && emptyHotPage ||
+        restricted && !requestedAuthorOnly && !checkingHot && hotReplies.rows.isEmpty())
+    val recentIds = if (needsRecentFallback) recentReplyIds(previewFeed) else emptyList()
+    val recentPreview by key(replyLists, recentIds, attempt) {
+        produceState<List<JSONObject>?>(null) {
+            if (recentIds.isNotEmpty()) value = loadRecentReplyPreview(api, recentIds, id)
+        }
+    }
+    val loadingRecent = recentIds.isNotEmpty() && recentPreview == null
+    val hotPreview = restricted && ordering in listOf(0, 2) && hotReplies.rows.isNotEmpty()
+    val fallbackReplies = when {
+        hotPreview -> hotReplies.rows
+        restricted || ordering == 1 && emptyHotPage -> embedded.ifEmpty { recentPreview.orEmpty() }
+        else -> emptyList()
+    }.filterNot { replyId(it) in removedReplies }
+    LaunchedEffect(replies, replySource) {
+        if (requestedOrdering != 1) {
             replies.bind(replySource) { page, first, last ->
+                check(!requestedAuthorOnly || authorUid.isNotEmpty()) { "暂时无法确认原帖作者" }
                 loadContentReplies(api, feed, id, requestedOrdering, requestedAuthorOnly, page, first, last)
             }
+        }
+    }
+    LaunchedEffect(hotReplies, hotSource) {
+        // Keep one hot request alive across a switch between the selected list and its preview.
+        snapshotFlow {
+            val selected = replyLists[ordering]
+            ordering == 1 || ordering in listOf(0, 2) && selected.accessRestricted && selected.rows.isEmpty()
+        }.first { it }
+        hotReplies.bind(hotSource) { page, first, last ->
+            loadContentReplies(api, null, id, 1, false, page, first, last)
         }
     }
     LaunchedEffect(id, seed) {
@@ -87,14 +131,19 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
         }
     }
     LaunchedEffect(api, id, attempt, seed) {
+        val verification = requestedVerification
+        requestedVerification = null
+        challenge = null
         failure = null
         try {
-            val (next, body) = loadFeedDetail(api, id, feed ?: seed)
+            val (next, body) = loadFeedDetail(api, id, feed ?: seed, verification)
             parsedParts = body; feed = next; following = api.isUserFollowed(next)
         }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { failure = error.message }
+        catch (error: Exception) { challenge = error as? com.green.note.network.CaptchaRequired; failure = error.message }
     }
+    fun retryDetail() { requestedVerification = challenge; attempt++ }
+    val inlineFailure = failure?.takeIf { feed != null && challenge == null && !isContentAccessError(it) }
     LaunchedEffect(initialReplyId, attempt) {
         if (initialReplyId.isEmpty()) return@LaunchedEffect
         try {
@@ -119,11 +168,14 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
         Spacer(Modifier.height(if (trade != null) 10.dp else 7.75.dp))
         if (trade == null) { HorizontalDivider(thickness = .5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .25f)); Spacer(Modifier.height(7.75.dp)) }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            val count = feed?.text("replynum", "replyNum")?.takeIf { it.isNotEmpty() && it != "0" } ?: replies.rows.size
+            val count = feed?.text("replynum", "replyNum")?.takeIf { it.isNotEmpty() && it != "0" }
+                ?: replies.rows.ifEmpty { fallbackReplies }.size
             Text(if (trade != null) "共${count}回复" else "共 $count 回复", fontSize = if (trade != null) 14.sp else 15.5.sp,
                 fontWeight = if (trade != null) FontWeight.Normal else FontWeight.Bold)
-            Row(Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = .5f), androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).padding(2.5.dp)) {
-                listOf("默认" to 0, "最新" to 2, "热门" to 1, "楼主" to 3).forEach { (label, value) -> Text(label, Modifier.background(if (displayedOrdering == value) MaterialTheme.colorScheme.surface else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).clickable { ordering = value; authorOnly = false }.padding(horizontal = 9.dp, vertical = 4.dp), fontSize = 12.sp, color = if (displayedOrdering == value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+            androidx.compose.foundation.text.selection.DisableSelection {
+              Row(Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = .5f), androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).padding(2.5.dp)) {
+                listOf("默认" to 0, "最新" to 2, "热门" to 1, "楼主" to 3).forEach { (label, value) -> Text(label, Modifier.semantics { selected = ordering == value }.background(if (ordering == value) MaterialTheme.colorScheme.surface else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).clickable { if (ordering == value) scope.launch { replies.load(true) } else ordering = value }.padding(horizontal = 9.dp, vertical = 4.dp), fontSize = 12.sp, color = if (ordering == value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+              }
             }
         }
     }
@@ -147,17 +199,39 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
                 com.green.note.ui.ReviewPopupMenuItem(text = { Text("查看主页") }, leadingIcon = { com.green.note.ui.MaterialGlyph("person_outline_rounded", size = 20.dp) }, onClick = { menu = false; if (author.isNotEmpty()) onUser(author) })
             } }; Spacer(Modifier.width(4.dp))
         }
-        when {
-            feed == null && failure != null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(failure!!); com.green.note.ui.ReviewTextButton(onClick = { attempt++ }) { Text("重试") } }
-            }
-            feed == null -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { com.green.note.ui.ReviewCircularProgress() }
-            else -> ContentList(api, replies, { replyTo = it }, onUser, onLink, onGallery, onLike, onMore, Modifier.weight(1f),
+        ContentList(api, replies, { replyTo = it }, onUser, onLink, onGallery, onLike, onMore, Modifier.weight(1f),
                 scroll = scroll, selectable = true, contentPadding = PaddingValues(bottom = 84.dp), initialBodyAnchor = initialReplyId.isNotEmpty() && (targetReply != null || targetFailure != null),
                 bodyAnchorIndex = commentsIndex + 1,
                 lazyItemCount = commentsIndex,
-                refreshAction = { attempt++ }, endText = "已经到底了", loadInitially = false,
-                emptyContent = { FeedRepliesEmpty(displayedOrdering == 3, trade != null) },
+                refreshAction = { attempt++ }, endText = if (emptyHotPage && fallbackReplies.isNotEmpty()) "已显示原帖附带的部分评论" else "已经到底了", loadInitially = false,
+                emptyContent = {
+                    if (ordering == 1 && emptyHotPage && (loadingRecent || feed == null ||
+                            (feed?.text("replynum", "replyNum")?.toIntOrNull() ?: 0) > 0)) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
+                            Text(if (loadingRecent) "正在补读原帖附带评论" else "暂无热门评论",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        }
+                    } else FeedRepliesEmpty(ordering == 3, trade != null)
+                },
+                fallbackRows = fallbackReplies,
+                accessErrorContent = { hasRows, retry ->
+                    androidx.compose.foundation.text.selection.DisableSelection {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(when {
+                                hotPreview -> "当前排序暂不可用，已显示热门评论"
+                                hasRows -> "已显示部分评论，完整列表暂不可用"
+                                checkingHot -> "正在加载热门评论"
+                                loadingRecent -> "正在补读原帖附带评论"
+                                else -> "暂时无法加载评论"
+                            },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                            Row {
+                                if (ordering != 1) com.green.note.ui.ReviewTextButton(onClick = { ordering = 1 }) { Text("查看热门评论") }
+                                com.green.note.ui.ReviewTextButton(onClick = retry) { Text("重试") }
+                            }
+                        }
+                    }
+                },
                 itemContent = { row -> if (row.text("id") != targetReply?.text("id")) ReplyRow(api, row, onUser, onLink, onGallery, authorUid = feed?.text("uid").orEmpty(), onFilterAuthor = { ordering = 3 }, onReplyRequest = { replyTo = it }, onDeleteRequest = { replyToDelete = it }) },
                 lazyContent = {
                     if (parts.isNotEmpty()) {
@@ -168,10 +242,10 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
                     }
                     item(key = "feed:comments") { CommentsHeader() }
                 },
-                beforeRows = if (initialReplyId.isNotEmpty() || failure != null) ({
-                    failure?.let { message -> Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                beforeRows = if (initialReplyId.isNotEmpty() || inlineFailure != null) ({
+                    inlineFailure?.let { message -> Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("原帖加载失败：$message")
-                        com.green.note.ui.ReviewTextButton(onClick = { attempt++ }) { Text("重新加载原帖") }
+                        com.green.note.ui.ReviewTextButton(onClick = ::retryDetail) { Text("重新加载原帖") }
                     } }
                     if (initialReplyId.isNotEmpty()) {
                     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) { Column {
@@ -180,11 +254,23 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
                     } }
                     }
                 }) else null) {
-                val row = feed!!
-                if (trade != null) SecondhandDetailBody(api, row, trade, onLink, onGallery)
-                else FeedRow(api, articleLead ?: row, true, onOpen, onUser, onLink, onGallery, onLike, onMore)
+                val row = feed
+                val bodyFailure = failure
+                when {
+                    row == null -> Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(when {
+                            bodyFailure == null -> "正在加载原帖…"
+                            challenge != null || isContentAccessError(bodyFailure) -> "原帖暂不可用"
+                            else -> bodyFailure
+                        })
+                        if (bodyFailure != null) com.green.note.ui.ReviewTextButton(onClick = ::retryDetail) {
+                            Text(if (challenge == null) "重新加载原帖" else "完成验证并重试")
+                        }
+                    }
+                    trade != null -> SecondhandDetailBody(api, row, trade, onLink, onGallery)
+                    else -> FeedRow(api, articleLead ?: row, true, onOpen, onUser, onLink, onGallery, onLike, onMore)
+                }
             }
-        }
     }
     }, overlay = {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
@@ -196,7 +282,12 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     replyToDelete?.let { reply -> com.green.note.ui.ReviewAlertDialog(appDialog = true, onDismissRequest = { replyToDelete = null }, title = { Text("删除这条评论？") },
         dismissButton = { com.green.note.ui.ReviewTextButton(onClick = { replyToDelete = null }) { Text("取消") } }, confirmButton = { com.green.note.ui.ReviewButton(onClick = {
             replyToDelete = null
-            scope.launch { try { api.request("/v6/feed/deleteReply", "POST", query = mapOf("id" to reply.text("id"))); replies.remove(reply); attempt++ }
+            scope.launch { try {
+                api.request("/v6/feed/deleteReply", "POST", query = mapOf("id" to replyId(reply)))
+                removedReplies.add(replyId(reply))
+                replyLists.forEach { it.remove(reply) }
+                attempt++
+            }
                 catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { toast.showSnackbar(failure.message ?: "操作失败") } }
         }) { Text("删除") } }) }
     if (delete) com.green.note.ui.ReviewAlertDialog(appDialog = true, onDismissRequest = { if (!working) delete = false }, title = { Text("删除这条动态？") }, text = { Text("此操作会直接请求酷安删除动态。") }, dismissButton = { com.green.note.ui.ReviewTextButton(enabled = !working, onClick = { delete = false }) { Text("取消") } }, confirmButton = { com.green.note.ui.ReviewButton(enabled = !working, onClick = { working = true; scope.launch { try { api.request("/v6/feed/deleteFeed", "POST", body = mapOf("id" to id)); delete = false; onBack() } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { toast.showSnackbar(failure.message ?: "删除失败") } finally { working = false } } }) { Text("删除") } })
@@ -218,7 +309,7 @@ internal fun FeedRepliesEmpty(authorOnly: Boolean, secondhand: Boolean) {
 
 internal fun mergeFeedDetail(seed: JSONObject?, detail: JSONObject): JSONObject {
     val result = if (seed == null) JSONObject() else JSONObject(seed, seed.keys().asSequence().toList().toTypedArray())
-    val previewFields = setOf("message", "title", "description", "pic", "message_cover", "picArr", "message_raw_output", "messageRawOutput", "ershou_info")
+    val previewFields = setOf("message", "title", "description", "pic", "message_cover", "picArr", "message_raw_output", "messageRawOutput", "ershou_info") + embeddedReplyFields
     detail.keys().forEach { key ->
         val value = detail.get(key)
         val empty = value == JSONObject.NULL || (value is String && value.isBlank()) || (value is JSONArray && value.length() == 0) ||

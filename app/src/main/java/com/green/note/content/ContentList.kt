@@ -38,8 +38,9 @@ internal class ContentListState(initialRows: List<JSONObject> = emptyList(), pri
         private set
     var refreshing by mutableStateOf(false)
         private set
-    var error by mutableStateOf<String?>(null)
-        private set
+    private var failure by mutableStateOf<Exception?>(null)
+    val error get() = failure?.let { it.message ?: "加载失败，请重试" }
+    val accessRestricted get() = failure is com.green.note.network.CaptchaRequired || isContentAccessError(error)
     var more by mutableStateOf(true)
         private set
     var appliedSource by mutableStateOf<Any?>(null)
@@ -83,7 +84,7 @@ internal class ContentListState(initialRows: List<JSONObject> = emptyList(), pri
         val requestGeneration = generation
         busy = true
         refreshing = refresh
-        error = null
+        failure = null
         try {
             val result = loadPage(if (restart) 1 else page + 1, if (restart) "" else first, if (restart) "" else last)
             currentCoroutineContext().ensureActive()
@@ -114,7 +115,7 @@ internal class ContentListState(initialRows: List<JSONObject> = emptyList(), pri
                 appliedSource = source
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { if (requestGeneration == generation) error = failure.message ?: "加载失败，请重试" }
+        catch (error: Exception) { if (requestGeneration == generation) failure = error }
         finally { if (requestGeneration == generation) { busy = false; refreshing = false } }
     }
 }
@@ -132,20 +133,22 @@ internal fun ContentList(api: ContentApi, state: ContentListState, onOpen: (JSON
     refreshAction: (() -> Unit)? = null, emptyContent: (@Composable () -> Unit)? = null, endText: String = "", showAccessErrors: Boolean = true, emptyHeightFraction: Float? = null,
     refreshShowText: Boolean = true, refreshTextDimension: androidx.compose.ui.unit.Dp? = null,
     flingBehavior: androidx.compose.foundation.gestures.FlingBehavior = androidx.compose.foundation.gestures.ScrollableDefaults.flingBehavior(),
-    loadInitially: Boolean = true, header: (@Composable () -> Unit)? = null) {
+    loadInitially: Boolean = true, fallbackRows: List<JSONObject> = emptyList(),
+    accessErrorContent: (@Composable (Boolean, () -> Unit) -> Unit)? = null, header: (@Composable () -> Unit)? = null) {
     com.green.note.ui.ReviewScrollActivity(scroll)
     val scope = rememberCoroutineScope()
     val emptyHeight = with(androidx.compose.ui.platform.LocalDensity.current) {
         (androidx.compose.ui.platform.LocalWindowInfo.current.containerSize.height * (emptyHeightFraction ?: if (itemContent == null && indexedItemContent == null) .55f else .2f)).toDp()
     }
-    val listPadding = contentPadding ?: if (state.rows.isEmpty()) PaddingValues(0.dp) else PaddingValues(top = if (header == null) 10.dp else 0.dp, bottom = 24.dp)
+    val displayedRows = state.rows.ifEmpty { fallbackRows }
+    val listPadding = contentPadding ?: if (displayedRows.isEmpty()) PaddingValues(0.dp) else PaddingValues(top = if (header == null) 10.dp else 0.dp, bottom = 24.dp)
     var anchored by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(initialBodyAnchor, bodyAnchorIndex) { if (initialBodyAnchor && !anchored) { scroll.scrollToItem(if (header == null) 0 else bodyAnchorIndex); anchored = true } }
     LaunchedEffect(state, loadInitially) { if (loadInitially && state.needsInitialLoad && state.error == null) state.load(refresh = state.rows.isNotEmpty()) }
     LaunchedEffect(state, scroll, lazyItemCount, header != null, beforeRows != null) {
-        snapshotFlow { scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.distinctUntilChanged().collect { last ->
+        snapshotFlow { Triple(scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0, state.rows.size, state.busy) }.distinctUntilChanged().collect { (last, count, busy) ->
             val leading = lazyItemCount + (if (header == null) 0 else 1) + (if (beforeRows == null) 0 else 1)
-            if (state.rows.isNotEmpty() && last >= leading + state.rows.size - 3 && state.error == null) state.load()
+            if (!busy && count > 0 && last >= leading + count - 3 && state.more && state.error == null) state.load()
         }
     }
     com.green.note.ui.ReviewRefreshBox(isRefreshing = state.refreshing, onRefresh = { if (refreshAction != null) refreshAction() else scope.launch { state.load(true) } }, modifier = modifier.fillMaxSize(), failed = state.error != null, showText = refreshShowText, textDimension = refreshTextDimension) {
@@ -153,14 +156,16 @@ internal fun ContentList(api: ContentApi, state: ContentListState, onOpen: (JSON
             if (header != null) item { header() }
             lazyContent?.invoke(this)
             if (beforeRows != null) item { beforeRows() }
-            itemsIndexed(state.rows, key = { _, row -> entityKey(row) }) { index, original ->
+            itemsIndexed(displayedRows, key = { _, row -> entityKey(row) }) { index, original ->
                 fun grouped(item: JSONObject?) = item?.optBoolean("_composeGroupProducts") == true && item.text("entityType") == "product"
-                val row = if (grouped(original)) JSONObject(original.toString()).put("_composeGroupStart", !grouped(state.rows.getOrNull(index - 1))).put("_composeGroupEnd", !grouped(state.rows.getOrNull(index + 1))) else original
+                val row = if (grouped(original)) JSONObject(original.toString()).put("_composeGroupStart", !grouped(displayedRows.getOrNull(index - 1))).put("_composeGroupEnd", !grouped(displayedRows.getOrNull(index + 1))) else original
                 if (indexedItemContent != null) indexedItemContent(index, row) else if (itemContent != null) itemContent(row)
                 else EntityRow(api, row, onOpen, onUser, onLink, onGallery, onLike, onMore)
 
             }
-            if (state.rows.isEmpty()) item {
+            if (state.accessRestricted && accessErrorContent != null) item {
+                accessErrorContent(displayedRows.isNotEmpty()) { scope.launch { state.load(refresh = !state.more) } }
+            } else if (displayedRows.isEmpty()) item {
                 if (emptyContent != null && !state.busy && state.error == null) emptyContent()
                 else Box(Modifier.fillMaxWidth().height(emptyHeight), contentAlignment = Alignment.Center) {
                     if (state.busy) com.green.note.ui.ReviewCircularProgress()
@@ -173,7 +178,7 @@ internal fun ContentList(api: ContentApi, state: ContentListState, onOpen: (JSON
             } else if (state.busy || state.error != null || !state.more && endText.isNotEmpty()) item {
                 when {
                     state.busy -> Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) { com.green.note.ui.ReviewCircularProgress() }
-                    state.error != null -> if (!isContentAccessError(state.error)) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { com.green.note.ui.ReviewTextButton(onClick = { scope.launch { state.load(false) } }) { Text("加载失败，点击重试：${state.error}") } }
+                    state.error != null -> if (!isContentAccessError(state.error)) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { com.green.note.ui.ReviewTextButton(onClick = { scope.launch { state.load(refresh = !state.more) } }) { Text("加载失败，点击重试：${state.error}") } }
                     else -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { Text(endText, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
                 }
             }

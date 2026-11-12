@@ -10,7 +10,7 @@ import org.junit.Test
 
 class ApiClientTest {
     private val signer = RequestSigner(ByteArray(1024) { 65 })
-    @Test fun versionRejectedReplyReadsRetryWithMatchingHeadersAndSignature() = runBlocking {
+    @Test fun regularReplyReadsUseMatchingModernHeadersFromTheFirstRequest() = runBlocking {
         val requests = mutableListOf<okhttp3.Request>()
         val http = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
@@ -25,7 +25,7 @@ class ApiClientTest {
         api.request("https://api.coolapk.com/v6/feed/replyList", query = mapOf("id" to "43", "feedType" to "feed_reply"))
         api.request("/v6/topic/newTagDetail", query = mapOf("tag" to "OriginOS7"))
         api.request("/v6/feed/hotReplyList", query = mapOf("id" to "42"))
-        assertEquals(listOf("2604201", "2609291", "2604201", "2609291", "2604201", "2604201"), requests.map { it.header("X-App-Code") })
+        assertEquals(listOf("2609291", "2609291", "2604201", "2604201"), requests.map { it.header("X-App-Code") })
         requests.forEach { request ->
             val code = request.header("X-App-Code")!!
             val version = if (code == "2609291") "16.6.4" else "16.2.0"
@@ -36,18 +36,21 @@ class ApiClientTest {
             assertEquals("uid=1", request.header("Cookie"))
             assertNotNull(request.header("X-App-Token"))
         }
-        assertEquals("feed_reply", requests[3].url.queryParameter("feedType"))
-        assertEquals("42", requests[1].url.queryParameter("id"))
+        assertEquals("feed_reply", requests[1].url.queryParameter("feedType"))
+        assertEquals("42", requests[0].url.queryParameter("id"))
     }
-    @Test fun successfulReplyReadsRetainTheirOriginalProtocol() = runBlocking {
+    @Test fun captchaWithoutStatusOrUsableMetadataDoesNotBecomeAnEmptyPageOrRetryAnotherHost() = runBlocking {
         var count = 0
         val http = OkHttpClient.Builder().addInterceptor { chain ->
             count++
-            assertEquals("2604201", chain.request().header("X-App-Code"))
+            assertEquals("2609291", chain.request().header("X-App-Code"))
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
-                .body("""{"status":0,"data":[]}""".toResponseBody()).build()
+                .body("""{"messageStatus":"err_request_captcha_v2","message":"当前访问需要验证码"}""".toResponseBody()).build()
         }.build()
-        ApiClient({ ApiSession("device") }, signer, http).request("/v6/feed/replyList", query = mapOf("id" to "42"))
+        try {
+            ApiClient({ ApiSession("device") }, signer, http).request("/v6/feed/replyList", query = mapOf("id" to "42"))
+            fail("A challenge is not an empty comment list")
+        } catch (_: UnsupportedCaptcha) { }
         assertEquals(1, count)
     }
     @Test fun aVersionErrorCannotReplayPublishingOrOtherEndpoints() = runBlocking {

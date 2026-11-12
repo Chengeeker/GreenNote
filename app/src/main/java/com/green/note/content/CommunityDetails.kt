@@ -63,6 +63,8 @@ private fun CommunityDetailContent(api: ContentApi, kind: String, id: String, on
     var data by remember(kind, id) { mutableStateOf(initial?.let { JSONObject(it.toString()) }) }
     var complete by remember(kind, id) { mutableStateOf(false) }
     var failure by remember { mutableStateOf<String?>(null) }
+    var challenge by remember(kind, id) { mutableStateOf<com.green.note.network.CaptchaRequired?>(null) }
+    var requestedVerification by remember(kind, id) { mutableStateOf<com.green.note.network.CaptchaRequired?>(null) }
     var revision by remember { mutableIntStateOf(0) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var sort by rememberSaveable { mutableStateOf("reply") }
@@ -86,14 +88,20 @@ private fun CommunityDetailContent(api: ContentApi, kind: String, id: String, on
     val toast = remember { com.green.note.ui.AppToastState() }
     val repo = remember(api) { ContentRepository(api) }
     LaunchedEffect(api, kind, id, revision) {
+        val verification = requestedVerification
+        requestedVerification = null
+        challenge = null
         failure = null
         try {
             val path = when (kind) { "question", "goods", "anylist" -> "/v6/feed/detail"; "live" -> "/v6/live/detail"; "collection" -> "/v6/collection/detail"; "dyh" -> "/v6/dyh/detail"; else -> "/v6/album/detail" }
-            val loaded = api.request(path, query = mapOf((if (kind == "dyh") "dyhId" else "id") to id)).optJSONObject("data") ?: error("详情为空")
+            val response = if (verification != null && path == "/v6/feed/detail") api.verifyFeedDetail(id, verification)
+                else api.request(path, query = mapOf((if (kind == "dyh") "dyhId" else "id") to id))
+            val loaded = response.optJSONObject("data") ?: error("详情为空")
             if (kind == "live") (loaded.optJSONObject("live") ?: loaded.optJSONObject("liveInfo") ?: loaded.optJSONObject("live_info"))?.let { nested -> nested.keys().forEach { loaded.put(it, nested.opt(it)) } }
             data = loaded; complete = true
-        } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) { failure = error.message ?: "详情加载失败" }
+        } catch (cancelled: CancellationException) { throw cancelled } catch (error: Exception) { challenge = error as? com.green.note.network.CaptchaRequired; failure = error.message ?: "详情加载失败" }
     }
+    fun retryDetail() { requestedVerification = challenge; revision++ }
     suspend fun write(path: String, method: String = "GET", query: Map<String, String> = emptyMap(), body: Map<String, String>? = null, multipart: Boolean = false, actionKey: String = path): Boolean {
         if (requests[actionKey] == true) return false
         if (!session.authenticated) { toast.showSnackbar("请先使用酷安账号登录"); return false }
@@ -180,11 +188,11 @@ private fun CommunityDetailContent(api: ContentApi, kind: String, id: String, on
                 }
             }
         }
-        failure?.let { com.green.note.ui.ReviewTextButton(onClick = { revision++ }) { Text(it) } }
+        failure?.let { com.green.note.ui.ReviewTextButton(onClick = ::retryDetail) { Text(if (challenge == null) it else "完成验证并重试") } }
     }
     if (kind in setOf("goods", "anylist") && row != null) {
         Box(Modifier.fillMaxSize()) {
-            GoodsRankingContent(api, row, complete = complete, error = failure, onReload = { revision++ }, onComments = onComments, onUser = onUser, onLink = onLink)
+            GoodsRankingContent(api, row, complete = complete, error = failure, onReload = ::retryDetail, onComments = onComments, onUser = onUser, onLink = onLink)
             ContentToolbarRow(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
                 ContentIcon("arrow_back", "返回", onBack, Modifier.width(56.dp)); Spacer(Modifier.weight(1f))
                 Box { ContentIcon("more_vert", "更多榜单操作", { goodsMenu = true }); com.green.note.ui.ReviewPopupMenu(goodsMenu, { goodsMenu = false }) {
@@ -204,8 +212,8 @@ private fun CommunityDetailContent(api: ContentApi, kind: String, id: String, on
         }
         when {
             row == null && failure == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { com.green.note.ui.ReviewCircularProgress() }
-            row == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(failure.orEmpty(), textAlign = androidx.compose.ui.text.style.TextAlign.Center); Spacer(Modifier.height(12.dp)); com.green.note.ui.ReviewFilledTonalButton(onClick = { revision++ }) { Text("重试") } } }
-            kind == "goods" || kind == "anylist" -> GoodsRankingContent(api, row, complete = complete, error = failure, onReload = { revision++ }, onComments = onComments, onUser = onUser, onLink = onLink)
+            row == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(failure.orEmpty(), textAlign = androidx.compose.ui.text.style.TextAlign.Center); Spacer(Modifier.height(12.dp)); com.green.note.ui.ReviewFilledTonalButton(onClick = ::retryDetail) { Text(if (challenge == null) "重试" else "完成验证并重试") } } }
+            kind == "goods" || kind == "anylist" -> GoodsRankingContent(api, row, complete = complete, error = failure, onReload = ::retryDetail, onComments = onComments, onUser = onUser, onLink = onLink)
             kind == "live" -> Column(Modifier.verticalScroll(rememberReviewScrollState())) { Header() }
             kind == "album" && tab == 0 -> Column(Modifier.verticalScroll(rememberReviewScrollState())) { Header(); (row.optJSONArray("apkRows") ?: row.optJSONArray("apkList") ?: row.optJSONArray("apks")).objects().forEach { EntityRow(api, it, onOpen, onUser, onLink, onGallery, onLike, onMore) } }
             else -> ContentList(api, state, onOpen, onUser, onLink, onGallery, onLike, onMore, itemContent = if (kind == "collection") ({ item ->

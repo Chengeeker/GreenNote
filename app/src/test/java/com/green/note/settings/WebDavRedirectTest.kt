@@ -39,59 +39,7 @@ class WebDavRedirectTest {
         }
     }
 
-    @Test fun signedHttpsDownloadDoesNotForwardCredentialsEvenWhenItReturnsToTheOriginalHost() = runBlocking {
-        val requests = mutableListOf<Request>()
-        val client = OkHttpClient.Builder().addInterceptor { chain ->
-            requests += chain.request()
-            val target = when (requests.size) {
-                1 -> "https://cdn.example/file?signature=synthetic%2Bvalue"
-                2 -> "https://dav.example/returned-file"
-                else -> null
-            }
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).message("synthetic")
-                .code(if (target == null) 200 else 302).body((if (target == null) fixture else "").toResponseBody())
-                .apply { if (target != null) header("Location", target) }.build()
-        }.build()
-        assertEquals(3, WebDavService(client).download(config, "synthetic-password")!!.getInt("version"))
-        assertEquals(3, requests.size)
-        assertEquals("synthetic%2Bvalue", requests[1].url.encodedQuery!!.substringAfter('='))
-        assertEquals(authorization, requests.first().header("Authorization"))
-        requests.drop(1).forEach { request ->
-            assertNull(request.header("Authorization"))
-            assertNull(request.header("Cookie"))
-            assertNull(request.header("Proxy-Authorization"))
-        }
-    }
-
-    @Test fun unsafeOrMissingRedirectLocationsFailBeforeRequestingTheTarget() = runBlocking {
-        for (target in listOf(null, "http://cdn.example/file", "https://user:password@cdn.example/file", "file:///private", "")) {
-            var requests = 0
-            val client = OkHttpClient.Builder().addInterceptor { chain ->
-                requests++
-                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(302).message("synthetic")
-                    .body("".toResponseBody()).apply { if (target != null) header("Location", target) }.build()
-            }.build()
-            try { WebDavService(client).download(config, "synthetic-password"); fail("Expected redirect rejection") }
-            catch (_: IllegalStateException) { }
-            assertEquals(1, requests)
-        }
-    }
-
-    @Test fun redirectLoopsAndExcessiveHopsStopWithoutUnboundedRequests() = runBlocking {
-        for (loop in listOf(true, false)) {
-            var requests = 0
-            val client = OkHttpClient.Builder().addInterceptor { chain ->
-                requests++
-                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(302).message("synthetic")
-                    .header("Location", if (loop) chain.request().url.toString() else "/hop-$requests")
-                    .body("".toResponseBody()).build()
-            }.build()
-            try { WebDavService(client).download(config, "synthetic-password"); fail("Expected bounded redirect failure") }
-            catch (_: IllegalStateException) { }
-            assertEquals(if (loop) 1 else 6, requests)
-        }
-    }
-
+    // Real HTTP/TLS servers in WebDavTransportTest cover cross-origin secrets and unsafe redirects.
     @Test fun redirectedMissingFileCanStillUseTheFlutterPathAndSizeLimitStillApplies() = runBlocking {
         MockWebServer().use { server ->
             server.start()
@@ -108,7 +56,7 @@ class WebDavRedirectTest {
             server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", "/large"))
             server.enqueue(MockResponse().setHeader("Content-Length", WebDavService.MAX_BACKUP_BYTES + 1))
             try { service.download(destination, "synthetic-password"); fail("Expected size rejection") }
-            catch (_: IllegalArgumentException) { }
+            catch (_: IllegalStateException) { }
         }
     }
 }

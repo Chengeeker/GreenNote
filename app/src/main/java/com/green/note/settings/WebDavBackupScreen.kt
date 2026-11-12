@@ -33,7 +33,7 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
     var loading by remember { mutableStateOf(true) }; var status by remember { mutableStateOf<String?>(null) }
     var statusTitle by remember { mutableStateOf("WebDAV 提示") }
     var restoreDialog by remember { mutableStateOf(false) }
-    var restoredLocal by remember { mutableStateOf<String?>(null) }
+    var restoredLocal by remember { mutableStateOf<com.green.note.account.AccountState?>(null) }
     val account by accounts.state.collectAsState()
     var fieldErrors by remember {mutableStateOf<Map<String,String>>(emptyMap())}
     val scope = rememberCoroutineScope()
@@ -62,8 +62,10 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
         busy = operation
         scope.launch {
             try {
-                settings.saveWebDavConfig(config)
-                accounts.writeSecret(WebDavBackups.PASSWORD_KEY, password.ifEmpty { null })
+                if(operation!="restore") {
+                    settings.saveWebDavConfig(config)
+                    accounts.writeSecret(WebDavBackups.PASSWORD_KEY, password.ifEmpty { null })
+                }
                 when (operation) {
                     "test" -> { status = if (service.test(config, password)) "连接成功。" else "连接失败，请检查服务器地址、账号、密码和 WebDAV 权限。" }
                     "backup" -> {
@@ -78,7 +80,7 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
                             val (restored, message) = backups.restore(data)
                             url = restored.url; username = restored.username; directory = restored.directory
                             password = accounts.readSecret(WebDavBackups.PASSWORD_KEY).orEmpty(); status = message
-                            if (data.has("localAccount")) restoredLocal = accounts.state.value.localJson
+                            if (data.has("localAccount")) restoredLocal = accounts.state.value
                         }
                     }
                 }
@@ -157,7 +159,7 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
         }
     }
     if (enabled) status?.let { message ->
-        val canActivate = restoredLocal != null && account.localJson == restoredLocal && account.mode == com.green.note.account.AccountMode.GUEST
+        val canActivate = restoredLocal != null && account.revision == restoredLocal?.revision && account.localJson == restoredLocal?.localJson && account.mode == com.green.note.account.AccountMode.GUEST
         ReviewAlertDialog(appDialog = true, onDismissRequest = { status = null },
             title = { Text(statusTitle) },
             text = { Text(message, Modifier.verticalScroll(rememberScrollState())
@@ -168,7 +170,7 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
                     if (canActivate) {
                         busy = "activate"
                         scope.launch {
-                            try { accounts.activateAnonymous(); status = "已进入恢复的匿名账户。" }
+                            try { accounts.activateRestoredAnonymous(checkNotNull(restoredLocal)); status = "已进入恢复的匿名账户。" }
                             catch (cancelled: CancellationException) { throw cancelled }
                             catch (_: Exception) { status = "匿名账户启用失败，已恢复的资料保留，请重试。" }
                             finally { busy = "" }

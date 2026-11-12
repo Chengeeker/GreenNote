@@ -38,7 +38,10 @@ data class AccountState(
     override fun toString() = "AccountState(mode=$mode, revision=$revision)"
 }
 
-class AccountKeyUnavailableException : IllegalStateException("此设备缺少可用的账号密钥，请重新登录或从原手机恢复应用内备份")
+enum class AccountKeyFailure { MISSING_OR_UNUSABLE, AUTHENTICATION }
+class AccountKeyUnavailableException(val reason: AccountKeyFailure = AccountKeyFailure.MISSING_OR_UNUSABLE) : IllegalStateException(
+    if(reason==AccountKeyFailure.AUTHENTICATION) "密文认证失败，可能是密钥不匹配或文件损坏；原文件已保留"
+    else "此设备缺少可用的账号密钥，请重试或从原手机恢复应用内备份")
 
 /** Independent encrypted state; existing Flutter preferences and keys are never modified. */
 class AccountRepository internal constructor(context: Context, private val accountKey: (Boolean) -> SecretKey) {
@@ -89,7 +92,7 @@ class AccountRepository internal constructor(context: Context, private val accou
                 throw failure
             } catch (_: AEADBadTagException) {
                 recoveryAvailable = true
-                throw AccountKeyUnavailableException()
+                throw AccountKeyUnavailableException(AccountKeyFailure.AUTHENTICATION)
             }
         }
     }
@@ -154,6 +157,10 @@ class AccountRepository internal constructor(context: Context, private val accou
     }
 
     suspend fun activateAnonymous() = change { it.copy(mode = AccountMode.ANONYMOUS) }
+    suspend fun activateRestoredAnonymous(expected: AccountState) = change {
+        check(it.revision==expected.revision && it.mode==AccountMode.GUEST && it.localJson==expected.localJson) { "资料或账号已改变，请从匿名账户管理重新选择" }
+        it.copy(mode=AccountMode.ANONYMOUS)
+    }
     suspend fun refreshOfficialProfile(profile: JSONObject, expectedCookie: String, expectedUid: String) = change { current ->
         check(current.authenticated && current.requestCookie == expectedCookie && current.uid == expectedUid) { "账号已变更，已取消资料更新" }
         current.copy(username = profile.optString("username").ifBlank { current.username }, avatar = profile.optString("userAvatar").ifBlank { profile.optString("avatar").ifBlank { current.avatar } })

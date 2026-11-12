@@ -103,9 +103,9 @@ class WebDavBackupsTest {
             server.start()
             val config = WebDavConfig(server.url("/").toString(), "test-user")
             val service = WebDavService()
-            assertFalse(service.test(config, "synthetic"))
+            try{service.test(config,"synthetic");fail("PROPFIND must not follow redirects")}catch(e:IllegalStateException){assertTrue(e.message!!.contains("302"))}
             assertEquals(1, server.requestCount)
-            try { service.download(config, "synthetic"); fail("Expected size rejection") } catch (_: IllegalArgumentException) { }
+            try { service.download(config, "synthetic"); fail("Expected size rejection") } catch (_: IllegalStateException) { }
         }
     }
 

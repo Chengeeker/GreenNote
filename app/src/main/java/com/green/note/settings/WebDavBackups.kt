@@ -57,85 +57,32 @@ object WebDavAddress {
 
 class WebDavService(client: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(20, TimeUnit.SECONDS).build()) {
-    private val client = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
-    suspend fun test(config: WebDavConfig, password: String): Boolean = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url(WebDavAddress.normalize(config.url)).header("Authorization", Credentials.basic(config.username, password, Charsets.UTF_8))
-            .header("Depth", "0").method("PROPFIND", ByteArray(0).toRequestBody()).build()
-        client.newCall(request).execute().use { it.code == 200 || it.code == 207 }
+    private val transport=WebDavTransport(client,MAX_BACKUP_BYTES)
+    suspend fun test(config:WebDavConfig,password:String):Boolean {
+        transport.request(WebDavAddress.normalize(config.url),"PROPFIND",Credentials.basic(config.username,password,Charsets.UTF_8))
+            .requireStatus("连接测试",setOf(200,207))
+        return true
     }
-
-    suspend fun upload(config: WebDavConfig, password: String, data: JSONObject): Boolean = withContext(Dispatchers.IO) {
-        val authorization = Credentials.basic(config.username, password, Charsets.UTF_8)
-        var directory = WebDavAddress.normalize(config.url)
-        for (segment in WebDavAddress.segments(config.directory)) {
-            directory = directory.newBuilder().addPathSegment(segment).addPathSegment("").build()
-            client.newCall(Request.Builder().url(directory).header("Authorization", authorization)
-                .method("MKCOL", ByteArray(0).toRequestBody()).build()).execute().use {
-                if (it.code !in listOf(200, 201, 405)) return@withContext false
-            }
+    suspend fun upload(config:WebDavConfig,password:String,data:JSONObject):Boolean {
+        val bytes=data.toString(2).toByteArray(Charsets.UTF_8)
+        require(bytes.size<=MAX_BACKUP_BYTES){"备份超过 20 MB，无法上传"}
+        val authorization=Credentials.basic(config.username,password,Charsets.UTF_8)
+        var directory=WebDavAddress.normalize(config.url)
+        for(segment in WebDavAddress.segments(config.directory)) {
+            directory=directory.newBuilder().addPathSegment(segment).addPathSegment("").build()
+            transport.request(directory,"MKCOL",authorization).requireStatus("创建目录",setOf(200,201,405))
         }
-        client.newCall(Request.Builder().url(WebDavAddress.backupUrl(config)).header("Authorization", authorization)
-            .put(data.toString(2).toRequestBody("application/json; charset=utf-8".toMediaType())).build()).execute().use {
-            it.code in listOf(200, 201, 204)
-        }
+        transport.request(WebDavAddress.backupUrl(config),"PUT",authorization,bytes).requireStatus("上传",setOf(200,201,204))
+        return true
     }
-
-    suspend fun download(config: WebDavConfig, password: String): JSONObject? = withContext(Dispatchers.IO) {
-        val locations = listOf(WebDavAddress.backupUrl(config), WebDavAddress.backupUrl(config, legacyFlutter = true)).distinct()
-        for (location in locations) {
-            val backup = downloadResponse(location, Credentials.basic(config.username, password, Charsets.UTF_8)).use { response ->
-                when (response.code) {
-                    200 -> Unit
-                    404 -> return@use null
-                    401 -> error("WebDAV 身份验证失败（401），请检查账号和应用密码 / Token")
-                    403 -> error("WebDAV 拒绝读取备份（403），请检查文件读取权限")
-                    in 300..399 -> error("WebDAV 返回不支持的下载响应（${response.code}），未恢复任何资料")
-                    429 -> error("WebDAV 请求过于频繁（429），请稍后重试")
-                    else -> error("WebDAV 读取失败（HTTP ${response.code}），请检查服务状态后重试")
-                }
-                val body = response.body ?: error("WebDAV 返回空内容，未恢复任何资料")
-                require(body.contentLength() <= MAX_BACKUP_BYTES) { "备份超过 20 MB，无法恢复" }
-                val output = ByteArrayOutputStream()
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(8192)
-                    while (true) {
-                        coroutineContext.ensureActive()
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        require(output.size().toLong() + count <= MAX_BACKUP_BYTES) { "备份超过 20 MB，无法恢复" }
-                        output.write(buffer, 0, count)
-                    }
-                }
-                try { JSONObject(output.toString("UTF-8")) }
-                catch (_: org.json.JSONException) { error("下载内容不是有效的 JSON 备份，未恢复任何资料") }
-            }
-            if (backup != null) return@withContext backup
+    suspend fun download(config:WebDavConfig,password:String):JSONObject? {
+        val locations=listOf(WebDavAddress.backupUrl(config),WebDavAddress.backupUrl(config,legacyFlutter=true)).distinct()
+        for(location in locations) {
+            val response=transport.request(location,"GET",Credentials.basic(config.username,password,Charsets.UTF_8))
+            if(response.code==404)continue
+            return response.requireStatus("下载",setOf(200)).json()
         }
-        null
-    }
-
-    private suspend fun downloadResponse(location: HttpUrl, authorization: String): Response {
-        var request = Request.Builder().url(location).header("Authorization", authorization).build()
-        val visited = mutableSetOf<HttpUrl>()
-        for (hop in 0..5) {
-            coroutineContext.ensureActive()
-            check(visited.add(request.url)) { "WebDAV 下载地址循环跳转，未恢复任何资料" }
-            val response = client.newCall(request).execute()
-            if (response.code !in listOf(301, 302, 303, 307, 308)) return response
-            response.use {
-                check(hop < 5) { "WebDAV 下载跳转次数过多，未恢复任何资料" }
-                val target = response.header("Location")?.takeIf { it.isNotBlank() }?.let(request.url::resolve)
-                    ?.newBuilder()?.fragment(null)?.build()
-                    ?: error("WebDAV 下载跳转缺少有效地址（${response.code}），未恢复任何资料")
-                check(target.username.isEmpty() && target.password.isEmpty()) { "WebDAV 下载跳转地址包含账号信息，已停止恢复" }
-                val sameOrigin = target.scheme == request.url.scheme && target.host == request.url.host && target.port == request.url.port
-                check(target.isHttps || sameOrigin) { "WebDAV 下载跳转未使用 HTTPS，已停止恢复" }
-                // Signed CDN downloads need no DAV credentials; never reattach them after leaving the origin.
-                val auth = request.header("Authorization").takeIf { sameOrigin }
-                request = Request.Builder().url(target).apply { if (auth != null) header("Authorization", auth) }.build()
-            }
-        }
-        error("WebDAV 下载跳转次数过多，未恢复任何资料")
+        return null
     }
 
     companion object { const val MAX_BACKUP_BYTES = 20L * 1024 * 1024 }

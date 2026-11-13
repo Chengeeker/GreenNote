@@ -46,8 +46,9 @@ class CaptchaBehaviorTest {
         val requests = mutableListOf<okhttp3.Request>()
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             requests += chain.request()
+            // This fixture intentionally shares one server session across api and api2.
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("fixture")
-                .header("Set-Cookie", "SESSID=fixture-session; Path=/; Secure")
+                .header("Set-Cookie", "SESSID=fixture-session; Domain=coolapk.com; Path=/; Secure")
                 .body((if (accept) """{"status":0,"data":{"id":"42","message":"正文"}}""" else challenge).toResponseBody()).build()
         }.build()
         var owner = ApiSession("fixture-device", "uid=1; token=fixture")
@@ -89,5 +90,39 @@ class CaptchaBehaviorTest {
         cancelled = true
         try { actions.verifyFeedDetail("42", error); fail("cancellation lost") } catch (_: CaptchaRequired) { }
         assertEquals(3, calls); assertEquals(2, prompts)
+    }
+
+    @Test fun commentVerificationIsExplicitAndCancellationLeavesTheOriginalRequestUnreplayed() = runBlocking {
+        var prompts = 0
+        var cancelled = true
+        var calls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            calls++
+            val request = chain.request()
+            val result = if (request.header("Cookie").orEmpty().contains("validate="))
+                """{"status":0,"data":[{"id":"6","message":"普通评论","replynum":0}]}""" else challenge
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture")
+                .body(result.toResponseBody()).build()
+        }.build()
+        val owner = ApiSession("fixture-device", "uid=1; token=fixture")
+        val api = ApiClient({ owner }, RequestSigner(ByteArray(1024) { 65 }), client)
+        val actions = ContentActions(api, AccountRepository(RuntimeEnvironment.getApplication()), { owner }) {
+            prompts++
+            if (cancelled) null else "fixture-proof"
+        }
+        val error = try { actions.request("/v6/feed/replyList", query = mapOf("id" to "42")); error("missing challenge") }
+            catch (failure: CaptchaRequired) { failure }
+        assertTrue(error.canVerifyComment)
+        assertEquals(0, prompts)
+        try { actions.verifyCommentRequest(error); fail("cancellation lost") } catch (_: CaptchaRequired) { }
+        assertEquals(1, calls)
+        assertEquals(1, prompts)
+        cancelled = false
+        actions.verifyCommentRequest(error)
+        assertEquals(2, calls)
+        assertEquals(2, prompts)
+        val result = actions.request("/v6/feed/replyList", query = mapOf("id" to "42"))
+        assertEquals("普通评论", result.getJSONArray("data").getJSONObject(0).getString("message"))
+        assertEquals(2, calls)
     }
 }

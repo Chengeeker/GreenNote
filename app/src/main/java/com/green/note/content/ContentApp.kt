@@ -66,7 +66,10 @@ fun ContentApp(
     externalDestination: ContentDestination? = null,
     onExternalDestinationConsumed: () -> Unit = {},
     onAccountAction: (String) -> Unit = {},
+    preserveCommentNavigation: Boolean = false,
 ) {
+    val commentRecovery = LocalCommentDeviceRecovery.current
+    val importingCommentDevice by rememberUpdatedState(commentRecovery?.importing == true)
     var selected by rememberSaveable { mutableIntStateOf(0) }
     var digital by rememberSaveable { mutableIntStateOf(1) }
     var discovery by rememberSaveable { mutableIntStateOf(3) }
@@ -114,7 +117,12 @@ fun ContentApp(
     val homeFeedStates = remember(api, currentOwner) { mutableMapOf<String, HomeFeedState>() }
     val homeHeadlineCache = remember(context) { HomeHeadlineCache(context) }
     var navigationOwner by remember { mutableStateOf(currentOwner) }
+    var handledCommentImport by remember { mutableLongStateOf(commentRecovery?.revision ?: 0) }
+    val preserveDeviceNavigation = preserveCommentNavigation &&
+        (commentRecovery?.importing == true || (commentRecovery?.revision ?: 0) > handledCommentImport)
     LaunchedEffect(api, currentOwner) {
+        // A device secret publishes its epoch before AppGraph publishes the new device value.
+        snapshotFlow { importingCommentDevice }.first { !it }
         mainTabRoutes = MainTabRoutes(emptyMap(), emptyMap())
         try { val parsed = parseMainTabRoutes(api.request("/v6/main/init", query = mapOf("appVersionCode" to "2604201"))); if (currentOwner == api.imageCacheScope()) mainTabRoutes = parsed }
         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (_: Exception) { }
@@ -140,8 +148,14 @@ fun ContentApp(
             if (localFollow?.initialized == false && localFollow.sourceError == null) localFollow.refresh()
         }
     }
-    LaunchedEffect(currentOwner) {
-        if (navigationOwner != currentOwner) { stack = arrayListOf(); transientEntities.clear(); lists.clear(); clearContentTextCache(); clearContentDeviceCache(); navigationOwner = currentOwner }
+    LaunchedEffect(currentOwner, commentRecovery?.importing, commentRecovery?.revision, preserveCommentNavigation) {
+        if (navigationOwner != currentOwner) {
+            if (preserveDeviceNavigation) moveCommentFeedSeeds(transientEntities, navigationOwner, currentOwner)
+            else { stack = arrayListOf(); transientEntities.clear() }
+            lists.clear(); clearContentTextCache(); clearContentDeviceCache(); navigationOwner = currentOwner
+        }
+        // Consume successful same-code imports too; a later unrelated owner change must clear normally.
+        handledCommentImport = commentRecovery?.revision ?: 0
     }
     var moreRow by remember { mutableStateOf<JSONObject?>(null) }
     var publishPicker by remember { mutableStateOf(false) }
@@ -527,7 +541,7 @@ fun ContentApp(
                 "collections" -> CollectionLibraryScreen(api, current.text("id"), ::back, ::openEntity, onUser, ::openLink, onOpenGallery, title = current.text("title"), route = current.text("route"))
                 "home_destination" -> HomeDestinationScreen(api, current.text("id"), current.text("title"), current.text("route"), ::back, ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }) { if (session.authenticated || session.anonymous) push("publish", "发布动态", "feed") else notice(session.loginRequiredMessage) }
                 "product_selector" -> NativeProductSelector(api, ::back, ::openEntity)
-                "feed" -> { val detailArgs = runCatching { JSONObject(current.text("route")) }.getOrNull(); val id = current.text("id"); FeedDetailScreen(api, id, session, ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, onOpenAccount, initialReplyId = detailArgs?.text("replyId") ?: current.text("route"), onBack = ::back, questionId = detailArgs?.text("questionId").orEmpty(), initialFeed = transientEntities["feed:$currentOwner:$id"]) }
+                "feed" -> { val detailArgs = runCatching { JSONObject(current.text("route")) }.getOrNull(); val id = current.text("id"); FeedDetailScreen(api, id, session, ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, onOpenAccount, initialReplyId = detailArgs?.text("replyId") ?: current.text("route"), onBack = ::back, questionId = detailArgs?.text("questionId").orEmpty(), initialFeed = commentFeedSeed(transientEntities, id, currentOwner, navigationOwner, preserveDeviceNavigation)) }
                 "user" -> UserScreen(api, current.text("id"), ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, session, ::back, onAccountAction,
                     { partner -> push("chat", partner.name.ifEmpty { "私信" }, partner.uid, JSONObject().put("avatar", partner.avatar).toString()) }, onOpenAccount)
                 "topic" -> TopicScreen(api, current.text("id"), ::openEntity, onUser, ::openLink, onOpenGallery, ::like, { moreRow = it }, ::back,
@@ -576,6 +590,8 @@ fun ContentApp(
         if (current == null && floatingNav) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) { bottomBar(selected, selectNav) }
     })
     }
+    // Do not compose the previous account's detail or modal while the clearing effect is pending.
+    if (navigationOwner != currentOwner && !preserveDeviceNavigation) return
     CompositionLocalProvider(LocalContentVideo provides onOpenVideo, LocalContentSession provides session, LocalContentLogin provides onOpenAccount, LocalTopicPreparation provides topics) {
         Box(Modifier.fillMaxSize()) {
             ActivePage(stack.isEmpty()) { Page(null) }
@@ -624,4 +640,15 @@ internal fun ChannelTabs(titles: List<String>, selected: Int, modifier: Modifier
 @Composable
 internal fun LoginRequired(onLogin: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { com.green.note.ui.ReviewTextButton(onClick = onLogin) { Text("请先登录") } }
+}
+
+/** Preserve the exact seed instance while a successful same-account import changes its scope key. */
+internal fun commentFeedSeed(entities: Map<String, JSONObject>, id: String, owner: String, previousOwner: String, preserve: Boolean): JSONObject? =
+    entities["feed:$owner:$id"] ?: entities["feed:$previousOwner:$id"].takeIf { preserve }
+
+internal fun moveCommentFeedSeeds(entities: MutableMap<String, JSONObject>, previousOwner: String, owner: String) {
+    if (previousOwner == owner) return
+    val prefix = "feed:$previousOwner:"
+    val previous = entities.filterKeys { it.startsWith(prefix) }
+    previous.forEach { (key, value) -> entities["feed:$owner:${key.removePrefix(prefix)}"] = value; entities.remove(key) }
 }

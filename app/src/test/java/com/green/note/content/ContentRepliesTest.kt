@@ -1,8 +1,13 @@
 package com.green.note.content
 
+import com.green.note.network.CaptchaChallenge
+import com.green.note.network.CaptchaRequired
+import com.green.note.network.UnsupportedCaptcha
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -89,7 +94,7 @@ class ContentRepliesTest {
         assertEquals(3, calls)
     }
 
-    @Test fun missingAuthorsAreHydratedWithBoundedConcurrencyAndRejectUnrelatedReplies() = runBlocking {
+    @Test fun allMissingReplyBodiesAreHydratedWithBoundedConcurrency() = runBlocking {
         val active = AtomicInteger(); val maximum = AtomicInteger(); val details = mutableListOf<String>()
         val api = object : ContentApi {
             override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
@@ -97,15 +102,190 @@ class ContentRepliesTest {
                     org.json.JSONArray((1..7).map { JSONObject().put("id", "$it").put("entityType", "feed_reply") }))
                 val id = query.getValue("id"); details += id
                 val concurrent = active.incrementAndGet(); maximum.updateAndGet { maxOf(it, concurrent) }
-                try { delay(2); return JSONObject().put("data", JSONObject().put("id", id).put("feedId", if (id == "2") "other" else "7").put("uid", "42").put("message", "回复")) }
+                try { delay(2); return replyDetail(id) }
                 finally { active.decrementAndGet() }
             }
         }
         val page = loadContentReplies(api, null, "7", 0, false, 1, "", "")
-        assertEquals(6, details.size); assertEquals(listOf("1", "3", "4", "5", "6"), page.rows.map(::replyId))
+        assertEquals((1..7).map(Int::toString), details)
+        assertEquals((1..7).map(Int::toString), page.rows.map(::replyId))
         assertTrue(maximum.get() <= 3); assertFalse(page.more)
+        assertEquals(0, page.pendingReplyCount); assertNull(page.error)
         assertTrue(page.rows.all { it.text("feedid") == "7" && it.text("entityType") == "feed_reply" })
     }
+
+    @Test fun unrelatedAndSponsorDetailsDoNotBecomeSuccessfulComments() = runBlocking {
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                if (path.endsWith("replyList")) return skeletonPage(3)
+                return when (val id = query.getValue("id")) {
+                    "1" -> replyDetail(id).apply { getJSONObject("data").put("feedid", "other") }
+                    "2" -> replyDetail(id).apply { getJSONObject("data").put("entityType", "feed_detail_reply_sponsor_card") }
+                    else -> replyDetail(id)
+                }
+            }
+        }
+        val page = loadContentReplies(api, null, "7", 0, false, 1, "", "")
+        assertEquals(listOf("3"), page.rows.map(::replyId))
+        assertEquals(2, page.pendingReplyCount)
+        assertNotNull(page.error)
+    }
+
+    @Test fun ordinaryBodyDoesNotRequireChildRepliesOrAuthorHydration() = runBlocking {
+        val requests = mutableListOf<String>()
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                requests += path
+                if (path.endsWith("replyDetail")) throw UnsupportedCaptcha()
+                return JSONObject("""{"hasMore":false,"data":[{"id":"1","message":"普通评论","replynum":0},{"id":"2","message":"另一条普通评论","replyRows":[]}]}""")
+            }
+        }
+        val page = loadContentReplies(api, null, "7", 0, false, 1, "", "")
+        assertEquals(listOf("1", "2"), page.rows.map(::replyId))
+        assertEquals(0, page.pendingReplyCount)
+        assertNull(page.error)
+        assertEquals(1, requests.count { it.endsWith("replyDetail") })
+    }
+
+    @Test fun childPreviewStillHydratesItsParentAndEmptyArraysAcceptDetailContent() = runBlocking {
+        val requested = mutableListOf<String>()
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                if (path.endsWith("replyList")) return JSONObject("""{"hasMore":false,"data":[
+                    {"id":"1","entityType":"feed_reply","username":"父评论作者","replyRows":[{"id":"11","message":"子回复"}]},
+                    {"id":"2","entityType":"feed_reply","username":"图片作者","picArr":[],"replyRows":[]}
+                ]}""")
+                val id = query.getValue("id"); requested += id
+                return if (id == "1") replyDetail(id)
+                else JSONObject("""{"data":{"id":"2","feedid":"7","picArr":["https://a.test/p.png"],"replyRows":[{"id":"21","message":"完整子回复"}]}}""")
+            }
+        }
+        val page = loadContentReplies(api, null, "7", 0, false, 1, "", "")
+        assertEquals(listOf("1", "2"), requested)
+        assertEquals("完整回复1", replyMessage(page.rows[0]))
+        assertEquals(listOf("https://a.test/p.png"), feedImages(page.rows[1]))
+        assertEquals(listOf("21"), visibleReplyChildren(page.rows[1]).map(::replyId))
+        assertEquals(0, page.pendingReplyCount); assertNull(page.error)
+    }
+
+    @Test fun mixedPageRetainsPartialRowsAndChallengeUntilTheSamePageRecovers() = runBlocking {
+        for (challenge in listOf(CaptchaRequired(CaptchaChallenge("abcdefghijklmnop", ""), "fixture", "请完成验证"), UnsupportedCaptcha())) {
+            var blocked = true
+            val pages = mutableListOf<String>()
+            val api = object : ContentApi {
+                override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                    if (path.endsWith("replyList")) {
+                        pages += query.getValue("page")
+                        return JSONObject("""{"hasMore":false,"data":[
+                            {"id":"1","entityType":"feed_reply","username":"普通评论作者"},
+                            {"id":"2","entityType":"feed_reply","username":"父评论作者","replyRows":[{"id":"21","message":"子回复"}]}
+                        ]}""")
+                    }
+                    if (blocked) throw challenge
+                    return replyDetail(query.getValue("id"))
+                }
+            }
+            val partial = loadContentReplies(api, null, "7", 0, false, 1, "", "")
+            assertEquals(listOf("2"), partial.rows.map(::replyId))
+            assertSame(challenge, partial.error)
+            assertEquals(2, partial.pendingReplyCount)
+            blocked = false
+            val recovered = loadContentReplies(api, null, "7", 0, false, 1, "", "")
+            assertEquals(listOf("1", "2"), recovered.rows.map(::replyId))
+            assertTrue(recovered.rows.all { replyMessage(it).isNotEmpty() })
+            assertNull(recovered.error); assertEquals(0, recovered.pendingReplyCount)
+            assertEquals(listOf("1", "1"), pages)
+        }
+    }
+
+    @Test fun aChallengeKeepsSuccessfulSiblingDetailsAndStopsLaterRequests() = runBlocking {
+        val challenge = CaptchaRequired(CaptchaChallenge("abcdefghijklmnop", ""), "fixture", "请完成验证")
+        val thirdStarted = CompletableDeferred<Unit>()
+        val challengeSeen = CompletableDeferred<Unit>()
+        val requested = mutableListOf<String>()
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                if (path.endsWith("replyList")) return skeletonPage(5)
+                val id = query.getValue("id"); requested += id
+                when (id) {
+                    "1" -> Unit
+                    "2" -> { thirdStarted.await(); challengeSeen.complete(Unit); throw challenge }
+                    "3" -> { thirdStarted.complete(Unit); challengeSeen.await() }
+                    else -> fail("A challenge must stop later detail requests")
+                }
+                return replyDetail(id)
+            }
+        }
+        val page = loadContentReplies(api, null, "7", 0, false, 1, "", "")
+        assertEquals(listOf("1", "2", "3"), requested)
+        assertEquals(listOf("1", "3"), page.rows.map(::replyId))
+        assertSame(challenge, page.error)
+        assertEquals(3, page.pendingReplyCount)
+    }
+
+    @Test fun bodyHydrationPrecedesOptionalAuthorHydration() = runBlocking {
+        val requested = mutableListOf<String>()
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                if (path.endsWith("replyList")) return JSONObject("""{"hasMore":false,"data":[
+                    {"id":"1","message":"作者缺失但正文完整"},
+                    {"id":"2","entityType":"feed_reply","username":"作者"}
+                ]}""")
+                val id = query.getValue("id"); requested += id
+                if (id == "1") throw UnsupportedCaptcha()
+                return replyDetail(id)
+            }
+        }
+        val page = loadContentReplies(api, null, "7", 0, false, 1, "", "")
+        assertEquals(listOf("2", "1"), requested)
+        assertEquals(listOf("1", "2"), page.rows.map(::replyId))
+        assertNull(page.error); assertEquals(0, page.pendingReplyCount)
+    }
+
+    @Test fun authorOnlyNeedsTheUidEvenWhenTheBodyAndNameArePresent() = runBlocking {
+        var blocked = true
+        val challenge = UnsupportedCaptcha()
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                if (path.endsWith("replyList")) return JSONObject("""{"hasMore":false,"data":[{"id":"1","username":"作者","message":"正文完整但身份尚缺"}]}""")
+                if (blocked) throw challenge
+                return replyDetail(query.getValue("id"))
+            }
+        }
+        val feed = JSONObject().put("uid", "42")
+        val partial = loadContentReplies(api, feed, "7", 3, true, 1, "", "")
+        assertTrue(partial.rows.isEmpty())
+        assertSame(challenge, partial.error); assertEquals(1, partial.pendingReplyCount)
+        blocked = false
+        val recovered = loadContentReplies(api, feed, "7", 3, true, 1, "", "")
+        assertEquals(listOf("1"), recovered.rows.map(::replyId))
+        assertNull(recovered.error); assertEquals(0, recovered.pendingReplyCount)
+    }
+
+    @Test fun authorIdentityHydrationDoesNotPromoteUnknownEmptyServiceRows() = runBlocking {
+        var calls = 0
+        val api = object : ContentApi {
+            override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
+                calls++
+                assertEquals("/v6/feed/replyList", path)
+                return JSONObject("""{"hasMore":false,"data":[
+                    {"id":"9","entityType":"unknown","message":"<p>&nbsp;<br/></p>"},
+                    {"id":"1","uid":"42","username":"作者","message":"楼主的评论"}
+                ]}""")
+            }
+        }
+        val page = loadContentReplies(api, JSONObject().put("uid", "42"), "7", 3, true, 1, "", "")
+        assertEquals(listOf("1"), page.rows.map(::replyId))
+        assertEquals(1, calls)
+        assertNull(page.error); assertEquals(0, page.pendingReplyCount)
+    }
+
+    private fun skeletonPage(count: Int) = JSONObject().put("hasMore", false).put("data", JSONArray((1..count).map { id ->
+        JSONObject().put("id", "$id").put("entityType", "feed_reply")
+    }))
+
+    private fun replyDetail(id: String) = JSONObject().put("data", JSONObject().put("id", id).put("feedid", "7")
+        .put("uid", "42").put("username", "作者").put("message", "完整回复$id"))
 
     @Test fun authorFilterUsesServerResultsAndNeverFetchesRecentIds() = runBlocking {
         var calls = 0

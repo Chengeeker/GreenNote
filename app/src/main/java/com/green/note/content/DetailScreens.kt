@@ -64,7 +64,7 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     var challenge by remember(id) { mutableStateOf<com.green.note.network.CaptchaRequired?>(null) }
     var requestedVerification by remember(id) { mutableStateOf<com.green.note.network.CaptchaRequired?>(null) }
     var attempt by remember(id) { mutableIntStateOf(0) }
-    var ordering by rememberSaveable(id) { mutableIntStateOf(1) }
+    var ordering by rememberSaveable(id) { mutableIntStateOf(0) }
     var replyTo by remember { mutableStateOf<JSONObject?>(null) }
     var replyToDelete by remember { mutableStateOf<JSONObject?>(null) }
     var targetReply by remember(initialReplyId) { mutableStateOf<JSONObject?>(null) }
@@ -73,15 +73,20 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     var menu by remember { mutableStateOf(false) }; var delete by remember { mutableStateOf(false) }; var working by remember { mutableStateOf(false) }; var following by remember(id, seed) { mutableStateOf(seed?.let(api::isUserFollowed) ?: false) }
     val scope = rememberCoroutineScope(); val context = androidx.compose.ui.platform.LocalContext.current
     val toast = remember { com.green.note.ui.AppToastState() }
-    val replyLists = remember(api, id, api.imageCacheScope()) { List(4) { ContentListState() } }
+    val deviceRecovery = LocalCommentDeviceRecovery.current
+    val importing = deviceRecovery?.importing == true
+    val importRevision = deviceRecovery?.revision ?: 0L
+    val owner = api.imageCacheScope()
+    val replyLists = remember(api, id) { CommentListOwner(owner, importRevision) }
+        .listsFor(owner, importRevision, importing, deviceRecovery?.preserveOwner == true)
     val removedReplies = remember(replyLists) { mutableStateListOf<String>() }
     val replies = replyLists[ordering]
     val hotReplies = replyLists[1]
     val requestedOrdering = ordering
     val requestedAuthorOnly = ordering == 3
     val authorUid = feed?.let(::replyAuthor)?.uid.orEmpty()
-    val replySource = Triple(attempt, requestedOrdering, authorUid.takeIf { requestedAuthorOnly }.orEmpty())
-    val hotSource = Triple(attempt, 1, "")
+    val replySource = Triple(attempt to importRevision, requestedOrdering, authorUid.takeIf { requestedAuthorOnly }.orEmpty())
+    val hotSource = Triple(attempt to importRevision, 1, "")
     val previewFeed = feed
     val restricted = replies.accessRestricted && replies.rows.isEmpty()
     val emptyHotPage = hotReplies.appliedSource == hotSource && !hotReplies.busy &&
@@ -94,9 +99,9 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     val needsRecentFallback = embedded.isEmpty() && (ordering == 1 && emptyHotPage ||
         restricted && !requestedAuthorOnly && !checkingHot && hotReplies.rows.isEmpty())
     val recentIds = if (needsRecentFallback) recentReplyIds(previewFeed) else emptyList()
-    val recentPreview by key(replyLists, recentIds, attempt) {
-        produceState<List<JSONObject>?>(null) {
-            if (recentIds.isNotEmpty()) value = loadRecentReplyPreview(api, recentIds, id)
+    val recentPreview by key(replyLists, recentIds, attempt, importRevision) {
+        produceState<List<JSONObject>?>(null, importing) {
+            if (!importing && value == null && recentIds.isNotEmpty()) value = loadRecentReplyPreview(api, recentIds, id)
         }
     }
     val loadingRecent = recentIds.isNotEmpty() && recentPreview == null
@@ -106,15 +111,16 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
         restricted || ordering == 1 && emptyHotPage -> embedded.ifEmpty { recentPreview.orEmpty() }
         else -> emptyList()
     }.filterNot { replyId(it) in removedReplies }
-    LaunchedEffect(replies, replySource) {
-        if (requestedOrdering != 1) {
+    LaunchedEffect(replies, replySource, importing) {
+        if (!importing && requestedOrdering != 1) {
             replies.bind(replySource) { page, first, last ->
                 check(!requestedAuthorOnly || authorUid.isNotEmpty()) { "暂时无法确认原帖作者" }
                 loadContentReplies(api, feed, id, requestedOrdering, requestedAuthorOnly, page, first, last)
             }
         }
     }
-    LaunchedEffect(hotReplies, hotSource) {
+    LaunchedEffect(hotReplies, hotSource, importing) {
+        if (importing) return@LaunchedEffect
         // Keep one hot request alive across a switch between the selected list and its preview.
         snapshotFlow {
             val selected = replyLists[ordering]
@@ -130,7 +136,8 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
             if (feed === seed) parsedParts = preview
         }
     }
-    LaunchedEffect(api, id, attempt, seed) {
+    LaunchedEffect(api, id, attempt, seed, importRevision) {
+        if (importing) return@LaunchedEffect
         val verification = requestedVerification
         requestedVerification = null
         challenge = null
@@ -144,8 +151,8 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
     }
     fun retryDetail() { requestedVerification = challenge; attempt++ }
     val inlineFailure = failure?.takeIf { feed != null && challenge == null && !isContentAccessError(it) }
-    LaunchedEffect(initialReplyId, attempt) {
-        if (initialReplyId.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(initialReplyId, attempt, importRevision) {
+        if (initialReplyId.isEmpty() || importing) return@LaunchedEffect
         try {
             val root = api.request("/v6/feed/replyDetail", query = mapOf("id" to initialReplyId)); val row = root.optJSONObject("data") ?: root
             check(replyMatchesFeed(row, id)) { "评论不属于当前帖子" }
@@ -174,7 +181,7 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
                 fontWeight = if (trade != null) FontWeight.Normal else FontWeight.Bold)
             androidx.compose.foundation.text.selection.DisableSelection {
               Row(Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = .5f), androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).padding(2.5.dp)) {
-                listOf("默认" to 0, "最新" to 2, "热门" to 1, "楼主" to 3).forEach { (label, value) -> Text(label, Modifier.semantics { selected = ordering == value }.background(if (ordering == value) MaterialTheme.colorScheme.surface else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).clickable { if (ordering == value) scope.launch { replies.load(true) } else ordering = value }.padding(horizontal = 9.dp, vertical = 4.dp), fontSize = 12.sp, color = if (ordering == value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
+                listOf("默认" to 0, "最新" to 2, "热门" to 1, "楼主" to 3).forEach { (label, value) -> Text(label, Modifier.semantics { selected = ordering == value }.background(if (ordering == value) MaterialTheme.colorScheme.surface else androidx.compose.ui.graphics.Color.Transparent, androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).clickable(enabled = !importing) { if (ordering == value) scope.launch { replies.load(true) } else ordering = value }.padding(horizontal = 9.dp, vertical = 4.dp), fontSize = 12.sp, color = if (ordering == value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
               }
             }
         }
@@ -203,7 +210,7 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
                 scroll = scroll, selectable = true, contentPadding = PaddingValues(bottom = 84.dp), initialBodyAnchor = initialReplyId.isNotEmpty() && (targetReply != null || targetFailure != null),
                 bodyAnchorIndex = commentsIndex + 1,
                 lazyItemCount = commentsIndex,
-                refreshAction = { attempt++ }, endText = if (emptyHotPage && fallbackReplies.isNotEmpty()) "已显示原帖附带的部分评论" else "已经到底了", loadInitially = false,
+                refreshAction = { attempt++ }, endText = if (emptyHotPage && fallbackReplies.isNotEmpty()) "已显示原帖附带的部分评论" else "已经到底了", loadInitially = false, commentErrors = true,
                 emptyContent = {
                     if (ordering == 1 && emptyHotPage && (loadingRecent || feed == null ||
                             (feed?.text("replynum", "replyNum")?.toIntOrNull() ?: 0) > 0)) {
@@ -215,22 +222,14 @@ private fun FeedDetailContent(api: ContentApi, id: String, session: ContentSessi
                 },
                 fallbackRows = fallbackReplies,
                 accessErrorContent = { hasRows, retry ->
-                    androidx.compose.foundation.text.selection.DisableSelection {
-                        Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(when {
-                                hotPreview -> "当前排序暂不可用，已显示热门评论"
-                                hasRows -> "已显示部分评论，完整列表暂不可用"
-                                checkingHot -> "正在加载热门评论"
-                                loadingRecent -> "正在补读原帖附带评论"
-                                else -> "暂时无法加载评论"
-                            },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                            Row {
-                                if (ordering != 1) com.green.note.ui.ReviewTextButton(onClick = { ordering = 1 }) { Text("查看热门评论") }
-                                com.green.note.ui.ReviewTextButton(onClick = retry) { Text("重试") }
-                            }
-                        }
-                    }
+                    CommentRecoveryNotice(replies, hasRows, onRetry = retry,
+                        onVerify = { scope.launch { replies.verify(api) } }, message = when {
+                            hotPreview -> "当前排序暂不可用，已显示热门评论"
+                            hasRows -> "已显示部分评论，完整列表暂不可用"
+                            checkingHot -> "正在加载热门评论"
+                            loadingRecent -> "正在补读原帖附带评论"
+                            else -> "暂时无法加载评论"
+                        })
                 },
                 itemContent = { row -> if (row.text("id") != targetReply?.text("id")) ReplyRow(api, row, onUser, onLink, onGallery, authorUid = feed?.text("uid").orEmpty(), onFilterAuthor = { ordering = 3 }, onReplyRequest = { replyTo = it }, onDeleteRequest = { replyToDelete = it }) },
                 lazyContent = {

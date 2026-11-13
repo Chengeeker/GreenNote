@@ -26,6 +26,7 @@ import com.green.note.account.*
 import com.green.note.content.*
 import com.green.note.media.*
 import com.green.note.network.CaptchaScreen
+import com.green.note.network.OfficialDeviceIdentity
 import com.green.note.notifications.ReplyRuntime
 import com.green.note.settings.*
 import com.green.note.ui.*
@@ -52,6 +53,9 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
         if (account.anonymous) local.optString("avatar") else account.avatar, account.authenticated, account.anonymous)
     var routes by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val route = routes.lastOrNull()
+    var commentImportOwner by remember { mutableStateOf<AccountState?>(null) }
+    var completedCommentImportOwner by remember { mutableStateOf<AccountState?>(null) }
+    var commentImportRevision by remember { mutableLongStateOf(0) }
     var loginOptions by remember { mutableStateOf(false) }
     var anonymousPicker by remember { mutableStateOf(false) }
     var gallery by remember { mutableStateOf<GalleryRequest?>(null) }
@@ -81,6 +85,24 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
     var permissionPending by remember { mutableStateOf<ReplyReminderSettings?>(null) }
     fun push(next: String) { routes = ArrayList(routes + next) }
     fun back() { routes = ArrayList(routes.dropLast(1)) }
+    fun openCommentDeviceImport() {
+        if (routes.isNotEmpty()) return
+        commentImportOwner = graph.accounts.state.value
+        push(COMMENT_DEVICE_IMPORT_ROUTE)
+    }
+    fun completeCommentDeviceImport() {
+        val expected = commentImportOwner
+        if (!routeIsCommentDeviceImport(routes.lastOrNull())) return
+        if (sameCommentRecoveryAccount(expected, graph.accounts.state.value)) {
+            completedCommentImportOwner = expected
+            commentImportRevision++
+        }
+        commentImportOwner = null
+        back()
+    }
+    LaunchedEffect(route) {
+        if (!routeIsCommentDeviceImport(route)) commentImportOwner = null
+    }
     LaunchedEffect(showDownloads) {
         if (showDownloads) {
             gallery = null
@@ -139,7 +161,16 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
     BackHandler(route != null || gallery != null || video != null) {
         when { gallery != null -> gallery = null; video != null -> video = null; else -> back() }
     }
-    CompositionLocalProvider(LocalScrollRateController provides scrolling, LocalPhotoStatusBars provides photoStatusBars) {
+    val preserveCommentNavigation = sameCommentRecoveryAccount(commentImportOwner ?: completedCommentImportOwner, account)
+    val commentRecovery = CommentDeviceRecovery(
+        imported = OfficialDeviceIdentity.fields(graph.session().device) != null,
+        onImport = ::openCommentDeviceImport,
+        revision = commentImportRevision,
+        importing = routeIsCommentDeviceImport(route) && sameCommentRecoveryAccount(commentImportOwner, account),
+        preserveOwner = preserveCommentNavigation,
+    )
+    CompositionLocalProvider(LocalScrollRateController provides scrolling, LocalPhotoStatusBars provides photoStatusBars,
+        LocalCommentDeviceRecovery provides commentRecovery) {
     Box(Modifier.fillMaxSize()) {
         ActivePage(route == null && gallery == null && video == null && pendingCaptcha == null) {
         Box(if (route != null || gallery != null || video != null || pendingCaptcha != null) Modifier.clearAndSetSemantics { invisibleToUser() } else Modifier) {
@@ -152,7 +183,7 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
                     val delivered = destination
                     destination = null
                     if (pendingLink != null && delivered?.type == "link" && delivered.route == pendingLink.url) consumeLink()
-                }, onAccountAction = { action ->
+                }, preserveCommentNavigation = preserveCommentNavigation, onAccountAction = { action ->
                     when (action) {
                         "appmanager" -> openContent("appmanager", "应用管理")
                         "switch_anonymous" -> anonymousPicker = true
@@ -201,6 +232,8 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
                 "anonymous", "local_profile" -> LocalProfileScreen(graph.accounts, pageRoute == "anonymous", graph.api::requestPublic, ::back, { push("local_accounts") })
                 "local_accounts" -> AnonymousAccountsScreen(graph.accounts, graph.api::requestPublic, ::back) { id -> task { graph.accounts.switchProfile(id); push("local_profile") } }
                 "device" -> DeviceIdentityScreen(graph.session().device, graph::importDevice, graph::restoreDevice, ::back)
+                COMMENT_DEVICE_IMPORT_ROUTE -> DeviceIdentityScreen(graph.session().device, graph::importDevice, graph::restoreDevice, ::back,
+                    onImported = ::completeCommentDeviceImport)
                 "profile" -> OfficialProfileScreen(graph.accounts, graph.api::request, { bytes -> graph.api.multipart("/v6/account/changeAvatar", emptyMap(), avatar = bytes) }, ::back, imageApi = graph.contentApi)
                 "qr" -> UserQrScreen(graph.contentApi, session.uid, session.username, if (account.anonymous) identity?.optString("userAvatar").orEmpty() else session.avatar, ::back)
                 "downloads" -> DownloadScreen(graph.contentApi, ::back)
@@ -248,6 +281,13 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
     }
     }
 }
+
+private const val COMMENT_DEVICE_IMPORT_ROUTE = "comment_device"
+private fun routeIsCommentDeviceImport(route: String?) = route == COMMENT_DEVICE_IMPORT_ROUTE
+
+/** Device epochs may change; authentication and active anonymous identity may not. Never logs identity values. */
+internal fun sameCommentRecoveryAccount(expected: AccountState?, current: AccountState): Boolean =
+    expected != null && nextSessionRevision(expected, current) == expected.sessionRevision
 
 private data class GalleryRequest(val urls: List<String>, val index: Int, val feed: JSONObject?, val coolPicture: Boolean = false)
 

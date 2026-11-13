@@ -42,4 +42,16 @@ class ApiRulesTest {
         assertEquals("uid=10; SESSID=new", ApiClient.withCookie("uid=10; SESSID=old", "SESSID", "new"))
         assertEquals("uid=10", ApiClient.withCookie("uid=10; SESSID=old", "SESSID", ""))
     }
+
+    @Test fun captchaNullMetadataHasTheSameDefaultsAsMissingMetadata() {
+        val metadata = JSONObject().put("captchaId", "abcdefghijklmnop").put("captchaType", JSONObject.NULL).put("captchaField", JSONObject.NULL)
+        val root = JSONObject().put("messageStatus", "err_request_captcha_v2").put("messageExtra", JSONObject.NULL).put("extra", metadata)
+        assertEquals(CaptchaChallenge("abcdefghijklmnop", "_v2_post_token"), CaptchaChallenge.parse(root))
+        metadata.put("captchaField", "")
+        assertEquals("", CaptchaChallenge.parse(root)!!.field)
+        metadata.put("captchaType", "other")
+        assertNull(CaptchaChallenge.parse(root))
+        metadata.put("captchaType", "NEC").put("captchaId", JSONObject.NULL)
+        assertNull(CaptchaChallenge.parse(root))
+    }
 }

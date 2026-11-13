@@ -79,7 +79,7 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
                         else {
                             val (restored, message) = backups.restore(data)
                             url = restored.url; username = restored.username; directory = restored.directory
-                            password = accounts.readSecret(WebDavBackups.PASSWORD_KEY).orEmpty(); status = message
+                            password = accounts.readSecret(WebDavBackups.PASSWORD_KEY).orEmpty(); status = "$message\n\n备份不含设备标识。若评论仍需验证，可从评论区导入本机官方设备标识。"
                             if (data.has("localAccount")) restoredLocal = accounts.state.value
                         }
                     }
@@ -96,7 +96,7 @@ fun WebDavBackupScreen(settings: SettingsStore, accounts: AccountRepository, val
                 MaterialGlyph("cloud_sync_outlined", color = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("备份内容", fontWeight = adjustedWeight(700), color = MaterialTheme.colorScheme.primary, fontSize = 16.sp)
-                    Spacer(Modifier.height(4.dp)); Text("备份应用设置、匿名资料、关注和收藏，不含图片及视频文件。新备份会覆盖云端旧备份。", fontSize = 14.sp, lineHeight = 19.6.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp)); Text("备份应用设置、匿名资料、关注和收藏，不含图片及视频文件。两种备份均不含设备标识；换机恢复后若评论仍需验证，可导入本机官方设备标识。新备份会覆盖云端旧备份。", fontSize = 14.sp, lineHeight = 19.6.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

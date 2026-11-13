@@ -282,10 +282,23 @@ private fun ReplySubLine(api: ContentApi, child: JSONObject, parent: JSONObject,
 private fun ReplyThread(api: ContentApi, root: JSONObject, onUser: (String) -> Unit, onLink: (String) -> Unit,
     onGallery: (List<String>, Int, JSONObject?) -> Unit, authorUid: String, onReplyRequest: (JSONObject) -> Unit, onDeleteRequest: (JSONObject) -> Unit, onCloseAll: () -> Unit, close: () -> Unit) {
     val feedId = root.text("feedid", "feedId", "feed_id", "fid")
-    val state = remember(api, root) { ContentListState(visibleReplyChildren(root).filter(::visibleReply).distinctBy(::replyId).map { normalizeReply(it, feedId) }) { page, first, last ->
+    val state = remember(api, feedId, replyId(root)) { ContentListState(visibleReplyChildren(root).filter(::visibleReply).distinctBy(::replyId).map { normalizeReply(it, feedId) }) { page, first, last ->
         val request = ContentRequest("/v6/feed/replyList", mapOf("id" to replyId(root), "feedType" to "feed_reply", "discussMode" to "1", "listType" to "lastupdate_desc"))
         loadReplyPage(api, request, feedId, page, first, last)
     } }
+    val recovery = LocalCommentDeviceRecovery.current
+    val importing = recovery?.importing == true
+    val importRevision = recovery?.revision ?: 0L
+    var handledImportRevision by remember(state) { mutableLongStateOf(importRevision) }
+    LaunchedEffect(state, importing, importRevision) {
+        if (importing) return@LaunchedEffect
+        val imported = handledImportRevision != importRevision
+        handledImportRevision = importRevision
+        if (imported) state.load(true)
+        else if (state.needsInitialLoad && state.error == null) state.load(refresh = state.rows.isNotEmpty())
+    }
+    // The sheet owns a separate window. Hide it while the import route is open, retaining its rows.
+    if (importing) return
     com.green.note.ui.ReviewModalBottomSheet(onDismissRequest = close, containerColor = Color.Transparent) {
         Surface(shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.height(with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * .64f).toDp() })) {
@@ -295,7 +308,7 @@ private fun ReplyThread(api: ContentApi, root: JSONObject, onUser: (String) -> U
                 com.green.note.ui.ReviewTextButton(onClick = onCloseAll) { Text("查看原动态") }; Spacer(Modifier.width(8.dp))
             }
             HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .35f))
-            ContentList(api, state, {}, onUser, onLink, onGallery, {}, {}, itemContent = { row -> ReplyRow(api, row, onUser, onLink, onGallery, authorUid = authorUid, onReplyRequest = onReplyRequest, onDeleteRequest = onDeleteRequest, onCloseAllThreads = onCloseAll) }, header = {
+            ContentList(api, state, {}, onUser, onLink, onGallery, {}, {}, commentErrors = true, loadInitially = false, itemContent = { row -> ReplyRow(api, row, onUser, onLink, onGallery, authorUid = authorUid, onReplyRequest = onReplyRequest, onDeleteRequest = onDeleteRequest, onCloseAllThreads = onCloseAll) }, header = {
                 Surface(color = if (dark) Color(0xFF2A2A2A) else MaterialTheme.colorScheme.surfaceContainerHigh) { ReplyRow(api, root, onUser, onLink, onGallery, nested = true, authorUid = authorUid, onReplyRequest = onReplyRequest, onDeleteRequest = onDeleteRequest, onCloseAllThreads = onCloseAll) }
             })
         }

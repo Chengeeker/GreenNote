@@ -21,11 +21,14 @@ import com.green.note.network.OfficialDeviceIdentity
 import com.green.note.ui.MaterialGlyph
 import com.green.note.ui.ReviewPage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun DeviceIdentityScreen(deviceCode: String, importIdentity: suspend (String) -> Unit, restoreIdentity: suspend () -> Unit, onBack: () -> Unit) {
+fun DeviceIdentityScreen(deviceCode: String, importIdentity: suspend (String) -> Unit, restoreIdentity: suspend () -> Unit, onBack: () -> Unit,
+    onImported: (() -> Unit)? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf("") }
@@ -99,12 +102,19 @@ fun DeviceIdentityScreen(deviceCode: String, importIdentity: suspend (String) ->
             com.green.note.ui.ReviewButton(enabled = !busy && pending != null, modifier = Modifier.fillMaxWidth(), onClick = { scope.launch {
                 val id = pending ?: return@launch
                 busy = true
-                try { importIdentity("ShuzlmID: $id"); pending = null; status = "已保存并用于后续请求，请返回内容页刷新"; failed = false }
+                var saved = false
+                try {
+                    importIdentity("ShuzlmID: $id")
+                    currentCoroutineContext().ensureActive()
+                    pending = null; text = ""; failed = false; saved = true
+                    status = if (onImported == null) "已保存并用于后续请求，请返回内容页刷新" else "已保存，正在返回评论"
+                }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { status = "保存失败，设备标识未应用，请重试"; failed = true }
                 finally { busy = false }
+                if (saved) onImported?.invoke()
             } }) { Text("保存并应用") }
-            if (imported) com.green.note.ui.ReviewTextButton(onClick = { restore = true }, enabled = !busy) { Text("恢复原设备码") }
+            if (imported && onImported == null) com.green.note.ui.ReviewTextButton(onClick = { restore = true }, enabled = !busy) { Text("恢复原设备码") }
         }
     }
     if (restore) com.green.note.ui.ReviewAlertDialog(appDialog = true, onDismissRequest = { restore = false }, title = { Text("恢复原设备码？") },

@@ -68,7 +68,7 @@ class PromotionContentTest {
         compose.waitForIdle()
         assertEquals(0, verifications.get())
         compose.onNodeWithText("可以继续阅读的正文").assertIsDisplayed()
-        assertEquals("/v6/feed/hotReplyList", commentPaths.first())
+        assertEquals("/v6/feed/replyList", commentPaths.first())
         compose.onNodeWithText("验证码", substring = true).assertDoesNotExist()
         compose.onNodeWithText("重新加载原帖").assertDoesNotExist()
         compose.onNodeWithText("完成验证并重试").assertDoesNotExist()

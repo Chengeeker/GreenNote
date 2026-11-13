@@ -91,7 +91,7 @@ class WebDavResultDialogTest {
         tap("从云端恢复备份")
         compose.onNodeWithText("恢复 WebDAV 备份？").assert(hasAnyAncestor(isDialog()))
         compose.onNodeWithText("恢复设置").performClick()
-        result("恢复结果", "设置和匿名资料已恢复，匿名资料可切换后使用。")
+        result("恢复结果", "设置和匿名资料已恢复，匿名资料可切换后使用。\n\n备份不含设备标识。若评论仍需验证，可从评论区导入本机官方设备标识。")
         compose.onNodeWithText("使用已恢复的匿名账户").assertIsDisplayed().performClick()
         result("恢复结果", "已进入恢复的匿名账户。")
         assertEquals(AccountMode.ANONYMOUS, accounts.state.value.mode)

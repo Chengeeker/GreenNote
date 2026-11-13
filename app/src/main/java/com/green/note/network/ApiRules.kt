@@ -3,6 +3,7 @@ package com.green.note.network
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class ApiSession(val device: String, val cookie: String = "", val anonymous: Boolean = false, val revision: Long = 0) {
     val authenticated get() = !anonymous && cookie.isNotBlank()
@@ -11,6 +12,7 @@ data class ApiSession(val device: String, val cookie: String = "", val anonymous
 }
 
 object ApiRules {
+    internal val commentPaths = setOf("/v6/feed/replyList", "/v6/feed/hotReplyList", "/v6/feed/replyDetail")
     private val mutatingGets = setOf(
         "/v6/user/unfollow", "/v6/user/addToBlackList", "/v6/user/removeFromBlackList",
         "/v6/user/addToIgnoreList", "/v6/user/removeFromIgnoreList", "/v6/feed/favorite",
@@ -19,6 +21,8 @@ object ApiRules {
 
     fun trusted(url: HttpUrl) = url.isHttps && url.port == 443 &&
         url.host in setOf("api.coolapk.com", "api2.coolapk.com") && url.username.isEmpty() && url.password.isEmpty()
+
+    internal fun commentRead(url: HttpUrl) = trusted(url) && url.encodedPath in commentPaths
 
     fun resolve(path: String, query: Map<String, String>): HttpUrl {
         val url = "https://api.coolapk.com/".toHttpUrl().resolve(path) ?: error("接口地址无效")
@@ -58,15 +62,16 @@ data class CaptchaChallenge(val id: String, val field: String) {
     companion object {
         fun parse(root: JSONObject): CaptchaChallenge? {
             if (root.optString("messageStatus") != "err_request_captcha_v2") return null
-            val raw = root.opt("messageExtra") ?: root.opt("extra") ?: root
+            fun JSONObject.value(key: String) = opt(key).takeUnless { it == null || it == JSONObject.NULL }
+            val raw = root.value("messageExtra") ?: root.value("extra") ?: root
             val extra = when (raw) {
                 is JSONObject -> raw
                 is String -> runCatching { JSONObject(raw) }.getOrNull()
                 else -> null
             } ?: return null
-            if (extra.has("captchaType") && extra.optString("captchaType") != "NEC") return null
+            if (extra.value("captchaType")?.let { it != "NEC" } == true) return null
             val id = extra.opt("captchaId") as? String ?: return null
-            val field = if (extra.has("captchaField")) extra.opt("captchaField") as? String ?: return null else "_v2_post_token"
+            val field = (extra.value("captchaField") ?: "_v2_post_token") as? String ?: return null
             if (!id.matches(Regex("[a-zA-Z0-9]{16,64}")) ||
                 field.isNotEmpty() && !field.matches(Regex("_[a-zA-Z0-9_]{1,63}"))) return null
             return CaptchaChallenge(id, field)
@@ -74,6 +79,28 @@ data class CaptchaChallenge(val id: String, val field: String) {
     }
 }
 
-class CaptchaRequired(val challenge: CaptchaChallenge, val context: String, message: String) : ApiException(message)
+/** An immutable read request issued by one ApiClient. It never retains credentials or a proof. */
+class CommentCaptchaRequest internal constructor(
+    internal val url: HttpUrl,
+    internal val modernReplies: Boolean,
+    internal val issuer: Any,
+) {
+    private val replayed = AtomicBoolean(false)
+    internal fun claim() = replayed.compareAndSet(false, true)
+    internal fun matches(other: HttpUrl, modern: Boolean): Boolean = modernReplies == modern &&
+        url.scheme == other.scheme && url.host == other.host && url.port == other.port &&
+        url.encodedPath == other.encodedPath && url.queryParameterNames == other.queryParameterNames &&
+        url.queryParameterNames.all { url.queryParameterValues(it) == other.queryParameterValues(it) }
+    override fun toString() = "CommentCaptchaRequest(host=${url.host}, path=${url.encodedPath}, modern=$modernReplies)"
+}
 
-internal class UnsupportedCaptcha : ApiException("当前访问需要验证码")
+class CaptchaRequired(
+    val challenge: CaptchaChallenge,
+    val context: String,
+    message: String,
+    val request: CommentCaptchaRequest? = null,
+) : ApiException(message) {
+    val canVerifyComment get() = request?.let { ApiRules.commentRead(it.url) } == true
+}
+
+internal class UnsupportedCaptcha : ApiException("当前接口需要验证码，但未返回可用的验证参数，请稍后重试")

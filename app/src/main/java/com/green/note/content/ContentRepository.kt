@@ -79,7 +79,17 @@ internal fun extractFeeds(root: JSONObject): List<JSONObject> {
     return result.distinctBy { it.text("id") }
 }
 
-data class ContentPage(val rows: List<JSONObject>, val page: Int, val first: String, val last: String, val more: Boolean)
+data class ContentPage(
+    val rows: List<JSONObject>,
+    val page: Int,
+    val first: String,
+    val last: String,
+    val more: Boolean,
+    // Partial rows may be displayed, but a failed page must be retried before its cursor is committed.
+    val error: Exception? = null,
+    // Missing body, or missing author identity required by the selected author-only filter.
+    val pendingReplyCount: Int = 0,
+)
 
 class ContentRepository(private val api: ContentApi) {
     suspend fun page(request: ContentRequest, page: Int, first: String = "", last: String = ""): ContentPage {

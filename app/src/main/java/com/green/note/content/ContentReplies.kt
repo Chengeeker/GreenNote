@@ -1,14 +1,16 @@
 package com.green.note.content
 
+import com.green.note.network.ApiException
 import com.green.note.network.CaptchaRequired
+import com.green.note.network.ReplyDiagnostics
 import com.green.note.network.UnsupportedCaptcha
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicReference
 
 internal val embeddedReplyFields = listOf("topReplyRows", "top_reply_rows", "replyMeRows", "reply_me_rows", "replyRows", "reply_rows")
 
@@ -48,7 +50,8 @@ private fun replyEntry(row: JSONObject): Boolean = replyType(row) !in nonReplyTy
     !replyMessage(row).equals("FEED_DETAIL_REPLY_SPONSOR_CARD", true)
 
 private fun replyRecord(row: JSONObject): Boolean = replyId(row).isNotEmpty() && replyEntry(row)
-private fun replyChildren(row: JSONObject) = (row.optJSONArray("replyRows") ?: row.optJSONArray("reply_rows")).objects()
+private fun replyChildren(row: JSONObject) = listOfNotNull(row.optJSONArray("replyRows"), row.optJSONArray("reply_rows"))
+    .firstOrNull { it.length() > 0 }.objects()
 private fun replyHasBody(row: JSONObject) = replyMessage(row).isNotEmpty() || feedImages(row).isNotEmpty()
 internal fun visibleReply(row: JSONObject): Boolean = replyRecord(row) &&
     (replyHasBody(row) || replyChildren(row).any { replyEntry(it) && replyHasBody(it) })
@@ -71,19 +74,61 @@ internal fun normalizeReply(row: JSONObject, feedId: String): JSONObject {
 internal fun replyMatchesFeed(row: JSONObject, feedId: String, parentReplyId: String = ""): Boolean =
     feedId.isEmpty() || row.text("feedid", "feedId", "feed_id", "fid").let { it.isEmpty() || it == feedId || it == parentReplyId }
 
-private suspend fun fetchReplyDetails(api: ContentApi, ids: List<String>, feedId: String, owner: String, parentReplyId: String = ""): List<JSONObject> {
-    val limit = Semaphore(3)
-    return coroutineScope { ids.map { id -> async { limit.withPermit {
-        try {
-            check(owner == api.imageCacheScope()) { "账号已变化" }
-            val response = api.request("/v6/feed/replyDetail", query = mapOf("id" to id))
-            val row = response.optJSONObject("data") ?: response
-            row.takeIf { replyId(it) == id && replyMatchesFeed(it, feedId, parentReplyId) && visibleReply(it) }
-        } catch (error: Exception) {
-            if (error is CancellationException || error is CaptchaRequired || error is UnsupportedCaptcha || owner != api.imageCacheScope()) throw error
-            null
+private data class ReplyDetails(
+    val rows: List<JSONObject>,
+    val failures: Map<String, Exception>,
+    val challenge: Exception?,
+)
+
+private suspend fun fetchReplyDetails(api: ContentApi, ids: List<String>, feedId: String, owner: String, parentReplyId: String = ""): ReplyDetails = coroutineScope {
+    val rows = mutableListOf<JSONObject>()
+    val failures = mutableMapOf<String, Exception>()
+    val challenge = AtomicReference<Exception?>(null)
+    // Schedule at most three at a time. A challenge stops later work without cancelling successful siblings.
+    for (batch in ids.distinct().chunked(3)) {
+        if (challenge.get() != null) break
+        val results = batch.map { id -> async {
+            challenge.get()?.let { return@async id to Result.failure<JSONObject>(it) }
+            try {
+                check(owner == api.imageCacheScope()) { "账号已变化" }
+                val response = api.request("/v6/feed/replyDetail", query = mapOf("id" to id))
+                check(owner == api.imageCacheScope()) { "账号已变化" }
+                val row = response.optJSONObject("data") ?: response
+                if (replyId(row) != id || !replyMatchesFeed(row, feedId, parentReplyId) || !visibleReply(row)) {
+                    throw ApiException("评论详情暂未完整返回，请重试")
+                }
+                id to Result.success(row)
+            } catch (error: Exception) {
+                if (error is CancellationException || owner != api.imageCacheScope()) throw error
+                if (error is CaptchaRequired || error is UnsupportedCaptcha) challenge.compareAndSet(null, error)
+                id to Result.failure<JSONObject>(error)
+            }
+        } }.awaitAll()
+        for ((id, result) in results) {
+            result.getOrNull()?.let(rows::add)
+            (result.exceptionOrNull() as? Exception)?.let { failures[id] = it }
         }
-    } } }.awaitAll().filterNotNull() }
+    }
+    ReplyDetails(rows, failures, challenge.get())
+}
+
+private fun missingReplyValue(value: Any?): Boolean = when (value) {
+    null, JSONObject.NULL -> true
+    is String -> value.isBlank()
+    is JSONArray -> value.length() == 0
+    is JSONObject -> value.length() == 0
+    else -> false
+}
+
+private fun mergeReplyDetail(row: JSONObject, detail: JSONObject?, feedId: String): JSONObject {
+    val normalized = normalizeReply(row, feedId)
+    if (detail != null) {
+        val full = normalizeReply(detail, feedId)
+        full.keys().forEach { key ->
+            if (missingReplyValue(normalized.opt(key))) normalized.put(key, full.opt(key))
+        }
+    }
+    return normalized
 }
 
 internal fun recentReplyIds(feed: JSONObject?): List<String> = feed?.text("recent_reply_ids", "recentReplyIds").orEmpty()
@@ -93,8 +138,8 @@ internal fun recentReplyIds(feed: JSONObject?): List<String> = feed?.text("recen
 internal suspend fun loadRecentReplyPreview(api: ContentApi, ids: List<String>, feedId: String): List<JSONObject> {
     val owner = api.imageCacheScope()
     return try {
-        val rows = fetchReplyDetails(api, ids, feedId, owner)
-        if (owner == api.imageCacheScope()) rows.map { normalizeReply(it, feedId) } else emptyList()
+        val details = fetchReplyDetails(api, ids, feedId, owner)
+        if (owner == api.imageCacheScope()) details.rows.map { normalizeReply(it, feedId) } else emptyList()
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -126,26 +171,31 @@ internal suspend fun loadReplyPage(api: ContentApi, request: ContentRequest, fee
     var previousCursor = last
     repeat(3) { attempt ->
         val records = result.rows.filter { replyRecord(it) && replyMatchesFeed(it, feedId, parentReplyId) }
-        val unresolved = records.filter { if (visibleReply(it)) replyAuthor(it).name.isEmpty() else replyType(it) in replyTypes }
-            .map(::replyId).distinct().take(6)
-        var challenge: Exception? = null
-        val details = try { fetchReplyDetails(api, unresolved, feedId, owner, parentReplyId).associateBy(::replyId) }
-            catch (error: Exception) {
-                if (error !is CaptchaRequired && error !is UnsupportedCaptcha) throw error
-                challenge = error
-                emptyMap()
-            }
+            .filter { authorUid == null || replyAuthor(it).uid.let { uid -> uid.isEmpty() || uid == authorUid } }
+            .distinctBy(::replyId)
+        // A readable child is a partial preview, not proof that its parent's body was loaded.
+        val missingBodies = records.filter { !replyHasBody(it) && (replyType(it) in replyTypes || visibleReply(it)) }.map(::replyId)
+        val missingAuthorIds = if (authorUid == null) emptyList() else records.filter {
+            replyAuthor(it).uid.isEmpty() && (replyType(it) in replyTypes || visibleReply(it))
+        }.map(::replyId)
+        val missingAuthors = records.filter { replyHasBody(it) && replyAuthor(it).name.isEmpty() }.map(::replyId)
+        val details = fetchReplyDetails(api, missingBodies + missingAuthorIds + missingAuthors, feedId, owner, parentReplyId)
         check(owner == api.imageCacheScope()) { "账号已变化" }
-        val replies = records.map { row ->
-            val normalized = normalizeReply(row, feedId)
-            details[replyId(row)]?.let { detail ->
-                val full = normalizeReply(detail, feedId)
-                full.keys().forEach { key -> if (normalized.text(key).isEmpty()) normalized.put(key, full.opt(key)) }
-            }
-            normalized
-        }.filter { visibleReply(it) && (authorUid == null || authorUid.isNotEmpty() && replyAuthor(it).uid == authorUid) }.distinctBy(::replyId)
+        val byId = details.rows.associateBy(::replyId)
+        val normalized = records.map { mergeReplyDetail(it, byId[replyId(it)], feedId) }
+        val missingBodyCount = normalized.count { replyId(it) in missingBodies && !replyHasBody(it) }
+        val pending = normalized.filter {
+            replyId(it) in missingBodies && !replyHasBody(it) || replyId(it) in missingAuthorIds && replyAuthor(it).uid.isEmpty()
+        }
+        val replies = normalized.filter { visibleReply(it) && (authorUid == null || authorUid.isNotEmpty() && replyAuthor(it).uid == authorUid) }
+        ReplyDiagnostics.page(request.path, sourceCount = records.size, visibleCount = replies.size,
+            missingBodyCount = missingBodyCount, hydrationCount = details.rows.size, partial = pending.isNotEmpty())
+        if (pending.isNotEmpty()) {
+            val failure = details.challenge ?: pending.firstNotNullOfOrNull { details.failures[replyId(it)] }
+                ?: ApiException("评论暂未加载完整，请重试")
+            return result.copy(rows = replies, error = failure, pendingReplyCount = pending.size)
+        }
         if (replies.isNotEmpty()) return result.copy(rows = replies)
-        challenge?.let { throw it }
         if (!result.more) return result.copy(rows = emptyList())
         // Filtered service rows are not the end of the comments; keep the retry bounded.
         check(attempt < 2 && result.last.isNotEmpty() && result.last != previousCursor) { "评论暂未加载完整，请重试" }

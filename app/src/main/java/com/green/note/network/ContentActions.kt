@@ -62,6 +62,11 @@ class ContentActions(private val api: ApiClient, private val accounts: AccountRe
         val validate = solveCaptcha(challenge) ?: throw challenge
         return api.verifyFeedDetail(id, challenge, validate)
     }
+    override suspend fun verifyCommentRequest(challenge: CaptchaRequired) {
+        if (!challenge.canVerifyComment) throw challenge
+        val validate = solveCaptcha(challenge) ?: throw challenge
+        api.verifyCommentRequest(challenge, validate)
+    }
     override suspend fun submitMultipart(path: String, fields: Map<String, String>, query: Map<String, String>): JSONObject = api.multipart(path, fields, query)
     private val collectionScopes = ConcurrentHashMap<String, ApiSession>()
     private val uploadClient = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)

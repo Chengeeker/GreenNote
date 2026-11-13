@@ -5,6 +5,7 @@ import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
 import com.green.note.account.AccountRepository
+import com.green.note.account.AccountVerifiedReadSessionStore
 import com.green.note.content.DigitalBrandAssets
 import com.green.note.network.ApiClient
 import com.green.note.network.ApiSession
@@ -16,6 +17,7 @@ import com.green.note.settings.SettingsStore
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -26,6 +28,7 @@ class AppGraph private constructor(val context: Context) {
     val settings = SettingsStore(context)
     val captcha = CaptchaCoordinator()
     private val initialization = Mutex()
+    private val deviceIdentityChanges = Mutex()
     private var initialized = false
     @Volatile private var device = ""
     lateinit var api: ApiClient
@@ -52,7 +55,8 @@ class AppGraph private constructor(val context: Context) {
             device = official?.takeIf { OfficialDeviceIdentity.fields(it) != null } ?: guest
             val blob = try { context.assets.open("coolapk_auth_blob.b64").bufferedReader().use { it.readText().trim() }.decodeBase64()?.toByteArray() ?: byteArrayOf() }
             catch (_: java.io.FileNotFoundException) { byteArrayOf() }
-            api = ApiClient(::session, RequestSigner(blob))
+            api = ApiClient(::session, RequestSigner(blob),
+                verifiedReadSessionStore = AccountVerifiedReadSessionStore(accounts, ::session))
             contentApi = ContentActions(api, accounts, ::session, captcha::solve)
             Coil.setImageLoader(ImageLoader.Builder(context).okHttpClient(api.imageHttpClient())
                 .components { if (android.os.Build.VERSION.SDK_INT >= 28) add(coil.decode.ImageDecoderDecoder.Factory()) else add(coil.decode.GifDecoder.Factory()) }
@@ -61,20 +65,26 @@ class AppGraph private constructor(val context: Context) {
         }
     }
 
-    suspend fun importDevice(text: String) {
+    suspend fun importDevice(text: String) = deviceIdentityChanges.withLock {
         val id = OfficialDeviceIdentity.parse(text)
         val code = OfficialDeviceIdentity.encode(id, device, mapOf(
             "manufacturer" to android.os.Build.MANUFACTURER, "brand" to android.os.Build.BRAND,
             "model" to android.os.Build.MODEL, "display" to android.os.Build.DISPLAY,
         ))
-        accounts.writeSecret("official_device_code", code)
-        device = code
+        // Once the encrypted write commits, publish the matching runtime identity even if the
+        // importing screen is dismissed. Its success callback runs only after this pair completes.
+        withContext(NonCancellable) {
+            accounts.writeSecret("official_device_code", code)
+            device = code
+        }
     }
 
-    suspend fun restoreDevice() {
+    suspend fun restoreDevice() = deviceIdentityChanges.withLock {
         val guest = accounts.readSecret("guest_device_code") ?: error("原始设备标识不可用")
-        accounts.writeSecret("official_device_code", null)
-        device = guest
+        withContext(NonCancellable) {
+            accounts.writeSecret("official_device_code", null)
+            device = guest
+        }
     }
 
     companion object {

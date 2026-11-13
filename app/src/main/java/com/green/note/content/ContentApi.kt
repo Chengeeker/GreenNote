@@ -6,6 +6,7 @@ data class LocalFollowSource(val profileId: String, val publicUid: String, val u
 
 interface ContentApi {
     suspend fun verifyFeedDetail(id: String, challenge: com.green.note.network.CaptchaRequired): JSONObject = throw challenge
+    suspend fun verifyCommentRequest(challenge: com.green.note.network.CaptchaRequired): Unit = throw challenge
     fun headlineCacheScope(): String = imageCacheScope()
     fun localFollowSources(): kotlinx.coroutines.flow.Flow<LocalFollowSource> = kotlinx.coroutines.flow.emptyFlow()
     fun localFollowRevision(): Long = 0

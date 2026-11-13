@@ -20,6 +20,9 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+private const val VERIFIED_READ_SESSION_KEY = "greennote.read.verification.v1"
+private val sessionDeviceKeys = setOf("guest_device_code", "official_device_code")
+
 enum class AccountMode { GUEST, ANONYMOUS, COOKIE }
 data class AccountState(
     val mode: AccountMode = AccountMode.GUEST,
@@ -77,7 +80,14 @@ class AccountRepository internal constructor(context: Context, private val accou
                     val mode = AccountMode.valueOf(saved.getString("mode"))
                     val cookie = saved.optString("cookie")
                     require(mode != AccountMode.COOKIE || OfficialLoginSession.hasAccountCookie(cookie)) { "保存的账号凭据无效" }
-                    mutable.value = AccountState(mode, cookie, saved.optString("uid"), saved.optString("username"), saved.optString("avatar"), local.toString())
+                    val sessionRevision = if (!saved.has("sessionRevision")) 0L else {
+                        val value = saved.opt("sessionRevision")
+                        val restored = if (value is Number) value.toString().toLongOrNull() else null
+                        require(restored != null && restored >= 0) { "保存的账号会话版本无效，原文件已保留" }
+                        restored
+                    }
+                    mutable.value = AccountState(mode, cookie, saved.optString("uid"), saved.optString("username"), saved.optString("avatar"),
+                        local.toString(), sessionRevision = sessionRevision)
                 } else {
                     val legacy = FlutterAccountImport(app).read()
                     if (legacy != null) {
@@ -120,22 +130,29 @@ class AccountRepository internal constructor(context: Context, private val accou
         } }
     }
 
-    private fun persist(next: AccountState, backup: String? = rollback, secretValues: JSONObject = secrets) {
+    private fun persist(next: AccountState, backup: String? = rollback, secretValues: JSONObject = secrets, accountMutation: Boolean = true) {
         check(initialized) { "账户尚未读取完成" }
-        val root = JSONObject().put("mode", next.mode.name).put("cookie", next.cookie).put("uid", next.uid)
-            .put("username", next.username).put("avatar", next.avatar).put("local", JSONObject(next.localJson)).put("secrets", secretValues)
+        val previous = mutable.value
+        val sessionChanged = nextSessionRevision(previous, next) != previous.sessionRevision ||
+            sessionDeviceKeys.any { (secretValues.opt(it) as? String) != (secrets.opt(it) as? String) }
+        val committed = next.copy(revision = previous.revision + if (accountMutation) 1 else 0,
+            sessionRevision = if (sessionChanged) Math.addExact(previous.sessionRevision, 1) else previous.sessionRevision)
+        val committedSecrets = if (sessionChanged) JSONObject(secretValues.toString()).apply { remove(VERIFIED_READ_SESSION_KEY) } else secretValues
+        val root = JSONObject().put("mode", committed.mode.name).put("cookie", committed.cookie).put("uid", committed.uid)
+            .put("username", committed.username).put("avatar", committed.avatar).put("local", JSONObject(committed.localJson))
+            .put("sessionRevision", committed.sessionRevision).put("secrets", committedSecrets)
         backup?.let { root.put("rollback", JSONObject(it)) }
         val plain = root.toString().toByteArray(Charsets.UTF_8)
         require(plain.size <= 80 * 1024 * 1024 - 29) { "账户资料超过存储限制" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, accountKey(true))
+        // A background cache update may use an existing key, but must never replace a lost key.
+        cipher.init(Cipher.ENCRYPT_MODE, accountKey(accountMutation))
         val bytes = byteArrayOf(1) + cipher.iv + cipher.doFinal(plain)
         val stream = file.startWrite()
         try { stream.write(bytes); file.finishWrite(stream) } catch (error: Exception) { file.failWrite(stream); throw error }
         rollback = backup
-        secrets = secretValues
-        val previous = mutable.value
-        mutable.value = next.copy(revision = previous.revision + 1, sessionRevision = nextSessionRevision(previous, next))
+        secrets = committedSecrets
+        mutable.value = committed
     }
 
     suspend fun acceptCookie(candidate: String, validate: suspend (String) -> JSONObject) {
@@ -177,9 +194,11 @@ class AccountRepository internal constructor(context: Context, private val accou
     val canRollback get() = rollback != null
 
     suspend fun readSecret(key: String): String? = withContext(Dispatchers.IO) {
+        require(key != VERIFIED_READ_SESSION_KEY) { "验证会话仅可通过专用存储访问" }
         mutex.withLock { check(initialized); secrets.opt(key) as? String }
     }
     suspend fun writeSecret(key: String, value: String?) = withContext(Dispatchers.IO) {
+        require(key != VERIFIED_READ_SESSION_KEY) { "验证会话仅可通过专用存储访问" }
         require(Regex("^[A-Za-z0-9_.-]{1,128}$").matches(key) && (value == null || value.length <= 32768))
         mutex.withLock {
             val next = JSONObject(secrets.toString())
@@ -188,6 +207,7 @@ class AccountRepository internal constructor(context: Context, private val accou
         }
     }
     suspend fun compareAndSetSecret(key: String, expected: String?, replacement: String?): Boolean = withContext(Dispatchers.IO) {
+        require(key != VERIFIED_READ_SESSION_KEY) { "验证会话仅可通过专用存储访问" }
         require(Regex("^[A-Za-z0-9_.-]{1,128}$").matches(key) && (replacement == null || replacement.length <= 32768))
         mutex.withLock {
             check(initialized)
@@ -195,6 +215,30 @@ class AccountRepository internal constructor(context: Context, private val accou
             val next = JSONObject(secrets.toString())
             if (replacement == null) next.remove(key) else next.put(key, replacement)
             persist(state.value, secretValues = next)
+            true
+        }
+    }
+
+    internal suspend fun readVerifiedReadSession(ownerRevision: Long, isCurrent: () -> Boolean): String? = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            check(initialized)
+            if (ownerRevision != state.value.sessionRevision || !isCurrent()) return@withLock null
+            secrets.opt(VERIFIED_READ_SESSION_KEY) as? String
+        }
+    }
+
+    internal suspend fun compareAndSetVerifiedReadSession(ownerRevision: Long, expected: String?, replacement: String?,
+        isCurrent: () -> Boolean): Boolean = withContext(Dispatchers.IO) {
+        require(replacement == null || replacement.length <= 32768) { "验证会话超过存储限制" }
+        mutex.withLock {
+            check(initialized)
+            if (ownerRevision != state.value.sessionRevision || !isCurrent() ||
+                (secrets.opt(VERIFIED_READ_SESSION_KEY) as? String) != expected) return@withLock false
+            if (expected == replacement) return@withLock true
+            val next = JSONObject(secrets.toString())
+            if (replacement == null) next.remove(VERIFIED_READ_SESSION_KEY) else next.put(VERIFIED_READ_SESSION_KEY, replacement)
+            // Background verification storage must not invalidate pending login/profile/backup operations.
+            persist(state.value, secretValues = next, accountMutation = false)
             true
         }
     }

@@ -6,6 +6,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -25,7 +26,11 @@ class ApiClient(
         .dispatcher(Dispatcher().apply { maxRequestsPerHost = 32 })
         .connectionPool(ConnectionPool(32, 30, TimeUnit.SECONDS))
         .followRedirects(false).followSslRedirects(false).build(),
+    private val elapsedNanos: () -> Long = System::nanoTime,
+    verifiedReadSessionStore: VerifiedReadSessionStore? = null,
+    wallClockMillis: () -> Long = System::currentTimeMillis,
 ) : ContentApi {
+    private val readSessions = VerifiedReadSessions(session, verifiedReadSessionStore, wallClockMillis)
     private data class ImageOwner(val session: ApiSession)
     override fun imageCacheScope(): String = session().let { owner ->
         "${owner.revision}:${owner.anonymous}:${owner.effectiveCookie}".encodeUtf8().sha256().hex()
@@ -56,28 +61,61 @@ class ApiClient(
             if (ApiRules.trusted(original.url) && owner != session()) { response.close(); throw IOException("图片会话已变更") }
             response
         }.build()
-    private data class SessionCookie(val owner: ApiSession, val value: String?)
-    private data class Validation(val context: String, val proof: String, val expires: Long)
-    @Volatile private var sessionCookie: SessionCookie? = null
-    @Volatile private var acceptedValidation: Validation? = null
-
-    private fun context(owner: ApiSession): String = JSONObject().put("device", owner.device)
-        .put("cookie", owner.effectiveCookie).put("anonymous", owner.anonymous).put("revision", owner.revision)
-        .put("session", sessionCookie?.takeIf { it.owner == owner }?.value.orEmpty())
-        .toString().encodeUtf8().sha256().hex()
+    private data class ReadVerification(val request: CommentCaptchaRequest?, val context: String, val cookieProof: String?)
+    private data class VerifiedCommentResponse(val request: CommentCaptchaRequest, val context: String, val expires: Long, val json: String)
+    private val verificationIssuer = Any()
+    // One short-lived handoff to the list loader, never a persistent or general response cache.
+    private var verifiedCommentResponse: VerifiedCommentResponse? = null
 
     override suspend fun request(path: String, method: String, query: Map<String, String>, body: Map<String, String>?): JSONObject {
         val owner = session()
-        suspend fun fetch(target: String) = execute(target, method, query, body, owner, owner, true)
+        readSessions.restore(owner)
+        takeVerifiedCommentResponse(path, method, query, body, owner)?.let { cached ->
+            return withContext(Dispatchers.Default) {
+                val result = JSONObject(cached.json)
+                if (owner != session() || cached.context != readSessions.context(owner, cached.request.url)) throw ApiException("账号、设备或会话已变更，已忽略旧验证结果")
+                result
+            }
+        }
+        suspend fun fetch(target: String): JSONObject {
+            try { return execute(target, method, query, body, owner, owner, true) }
+            catch (failure: ApiException) {
+                if (failure is CaptchaRequired || failure is UnsupportedCaptcha || owner != session() || !method.equals("GET", true) ||
+                    ApiRules.resolve(target, emptyMap()).encodedPath != "/v6/feed/replyList" ||
+                    failure.message?.contains("评论接口异常") != true || failure.message?.contains("升级") != true) throw failure
+                return execute(target, method, query, body, owner, owner, true, modernReplies = true)
+            }
+        }
         if (method.equals("GET", true) && path in setOf("/v6/feed/replyList", "/v6/feed/hotReplyList")) {
             try { return fetch("https://api2.coolapk.com$path") }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (challenge: CaptchaRequired) { throw challenge }
-            catch (challenge: UnsupportedCaptcha) { throw challenge }
             catch (failure: Exception) { if (owner != session()) throw failure }
         }
         return fetch(path)
     }
+
+    private fun takeVerifiedCommentResponse(path: String, method: String, query: Map<String, String>, body: Map<String, String>?, owner: ApiSession): VerifiedCommentResponse? =
+        synchronized(this) {
+            val cached = verifiedCommentResponse ?: return@synchronized null
+            if (owner != session() || cached.context != readSessions.context(owner, cached.request.url) || elapsedNanos() >= cached.expires) {
+                verifiedCommentResponse = null
+                return@synchronized null
+            }
+            if (!method.equals("GET", true) || body != null) return@synchronized null
+            val targets = if (path in setOf("/v6/feed/replyList", "/v6/feed/hotReplyList"))
+                listOf("https://api2.coolapk.com$path", path) else listOf(path)
+            val matched = targets.any { target ->
+                val url = ApiRules.resolve(target, query)
+                // A previously challenged upgraded request is already verified. Reuse that exact
+                // profile instead of sending the older request (and its upgrade probe) again.
+                val profiles = if (url.encodedPath == "/v6/feed/replyList") listOf(false, true) else listOf(false)
+                profiles.any { modern -> cached.request.matches(url, modern) }
+            }
+            if (!matched) return@synchronized null
+            verifiedCommentResponse = null
+            cached
+        }
 
     suspend fun validateCookie(candidate: String): JSONObject {
         require(candidate.length <= 32768 && candidate.none { it.code < 32 || it.code == 127 }) { "Cookie格式无效" }
@@ -137,15 +175,33 @@ class ApiClient(
     suspend fun verifyFeedDetail(id: String, error: CaptchaRequired, validate: String): JSONObject {
         require(id.matches(Regex("[1-9][0-9]*"))) { "动态标识无效" }
         val owner = session()
-        if (error.context != context(owner)) throw ApiException("账号、设备或会话已变更，请重新加载榜单")
+        readSessions.restore(owner)
+        if (error.context != readSessions.context(owner, ApiRules.resolve("/v6/feed/detail", emptyMap()))) throw ApiException("账号、设备或会话已变更，请重新加载榜单")
         val proof = error.challenge.proof(validate) ?: throw ApiException("验证结果无效，请重试")
         val query = mutableMapOf("id" to id)
         if (error.challenge.field.isNotEmpty()) query[error.challenge.field] = proof
-        val result = execute("/v6/feed/detail", "GET", query, null, owner, owner, true,
-            if (error.challenge.field.isEmpty()) proof else null)
-        if (owner != session()) throw ApiException("账号或设备已变更，已忽略旧验证结果")
-        if (error.challenge.field.isEmpty()) acceptedValidation = Validation(context(owner), proof, System.currentTimeMillis() + 3600000)
-        return result
+        return execute("/v6/feed/detail", "GET", query, null, owner, owner, true,
+            explicitProof = proof.takeIf { error.challenge.field.isEmpty() },
+            verification = ReadVerification(null, error.context, proof.takeIf { error.challenge.field.isEmpty() }))
+    }
+
+    suspend fun verifyCommentRequest(error: CaptchaRequired, validate: String) {
+        val request = error.request?.takeIf { it.issuer === verificationIssuer && ApiRules.commentRead(it.url) }
+            ?: throw ApiException("缺少当前评论的验证请求，请重新加载评论")
+        val owner = session()
+        readSessions.restore(owner)
+        if (error.context != readSessions.context(owner, request.url)) throw ApiException("账号、设备或会话已变更，请重新加载评论")
+        val proof = error.challenge.proof(validate) ?: throw ApiException("验证结果无效，请重试")
+        if (!request.claim()) throw ApiException("这次验证已提交，请重新加载评论后重试")
+        synchronized(this) { verifiedCommentResponse = null }
+        val target = if (error.challenge.field.isEmpty()) request.url else request.url.newBuilder()
+            .setQueryParameter(error.challenge.field, proof).build()
+        // Directly replay the challenged GET. Do not enter host fallback, version upgrades, or
+        // another interactive verification from here. A second challenge returns to the caller.
+        execute(target.toString(), "GET", emptyMap(), null, owner, owner, true,
+            explicitProof = proof.takeIf { error.challenge.field.isEmpty() },
+            modernReplies = request.modernReplies,
+            verification = ReadVerification(request, error.context, proof.takeIf { error.challenge.field.isEmpty() }))
     }
 
     override fun imageHeaders(url: String): Map<String, String> {
@@ -165,6 +221,8 @@ class ApiClient(
     private suspend fun execute(
         path: String, method: String, query: Map<String, String>, body: Map<String, String>?,
         owner: ApiSession, requestSession: ApiSession, rememberSession: Boolean, explicitProof: String? = null, extraBody: RequestBody? = null,
+        modernReplies: Boolean = false,
+        verification: ReadVerification? = null,
     ): JSONObject = withContext(Dispatchers.IO) {
         require(method.uppercase() in setOf("GET", "POST")) { "接口方法无效" }
         var requestPath = path
@@ -175,71 +233,87 @@ class ApiClient(
             when (params["type"]) { "picture" -> params["type"] = "article"; "ershou" -> params["type"] = "trade" }
         }
         val url = ApiRules.resolve(requestPath, params)
-        val modernReplies = method.equals("GET", true) && url.encodedPath == "/v6/feed/replyList"
         ApiRules.allow(requestSession, method, url.encodedPath)
-        val remembered = if (rememberSession) sessionCookie?.takeIf { it.owner == owner } else null
-        val requestContext = context(owner)
-        val proof = if (method.uppercase() == "GET") explicitProof ?: acceptedValidation?.takeIf {
-            rememberSession && it.context == requestContext && it.expires > System.currentTimeMillis()
-        }?.proof else null
+        if (rememberSession) readSessions.restore(owner)
+        val sentSession = readSessions.prepare(owner, url, rememberSession, explicitProof, verification != null, method.equals("GET", true))
+        val requestContext = sentSession.context
+        if (verification != null && (owner != session() || verification.context != requestContext)) {
+            throw ApiException("账号、设备或会话已变更，请重新加载评论")
+        }
+        val proof = sentSession.proof
         var cookie = requestSession.effectiveCookie
-        if (remembered != null) cookie = withCookie(cookie, "SESSID", remembered.value.orEmpty())
+        if (sentSession.hasSessionOverride) cookie = withCookie(cookie, "SESSID", sentSession.sessionValue.orEmpty())
         if (proof != null) cookie = withCookie(cookie, "validate", java.net.URLEncoder.encode(proof, "UTF-8").replace("+", "%20"))
         val builder = Request.Builder().url(url)
         headers(requestSession, replyList = modernReplies).forEach { (name, value) -> builder.header(name, value) }
         builder.header("X-App-Token", signer.token(requestSession.device, appCode = if (modernReplies) 2609291 else 2604201))
         if (cookie.isNotEmpty()) builder.header("Cookie", cookie)
         if (method.uppercase() == "POST") builder.post(extraBody ?: FormBody.Builder().apply { body.orEmpty().forEach { (k,v) -> add(k,v) } }.build())
+        if (verification != null && (owner != session() || verification.context != readSessions.context(owner, url))) {
+            throw ApiException("账号、设备或会话已变更，请重新加载评论")
+        }
         val response = http.newCall(builder.build()).await()
         response.use {
             if (owner != session()) throw ApiException("账号或设备已变更，已忽略旧请求")
-            if (response.isRedirect) throw ApiException("接口返回了重定向，请重新加载")
-            if (rememberSession) {
-                Cookie.parseAll(url, response.headers).lastOrNull { it.name == "SESSID" }?.let { value ->
-                    synchronized(this@ApiClient) {
-                        if (owner == session() && (sessionCookie?.owner != owner || sessionCookie == remembered)) {
-                            sessionCookie = SessionCookie(owner, value.value.takeIf { it.isNotEmpty() && value.expiresAt > System.currentTimeMillis() })
-                        }
+            val responseContext = readSessions.response(owner, url, response.headers, sentSession, rememberSession, verification != null)
+            try {
+                if (response.isRedirect) throw ApiException("接口返回了重定向，请重新加载")
+                val bytes = ByteArrayOutputStream()
+                response.body?.byteStream()?.use { stream ->
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val count = stream.read(buffer)
+                        if (count < 0) break
+                        if (bytes.size() + count > 20 * 1024 * 1024) throw ApiException("接口响应过大")
+                        bytes.write(buffer, 0, count)
                     }
                 }
-            }
-            val bytes = ByteArrayOutputStream()
-            response.body?.byteStream()?.use { stream ->
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val count = stream.read(buffer)
-                    if (count < 0) break
-                    if (bytes.size() + count > 20 * 1024 * 1024) throw ApiException("接口响应过大")
-                    bytes.write(buffer, 0, count)
+                val text = bytes.toString("UTF-8")
+                val root = try {
+                    if (text.trimStart().startsWith("[")) JSONObject().put("data", JSONArray(text)).put("status", 0) else JSONObject(text)
+                } catch (_: Exception) {
+                    ReplyDiagnostics.response(url, if (modernReplies) 2609291 else 2604201, response.code, null, "", false)
+                    throw ApiException(when (response.code) { 401 -> "登录状态已失效，请重新登录"; 403 -> "暂时拒绝了请求，可能触发了访问限制"; else -> "服务器返回了无法识别的响应" })
                 }
+                if (owner != session()) throw ApiException("账号或设备已变更，已忽略旧请求")
+                val code = (root.opt("status") ?: root.opt("code"))?.toString()?.toIntOrNull()
+                val parsedChallenge = CaptchaChallenge.parse(root)
+                ReplyDiagnostics.response(url, if (modernReplies) 2609291 else 2604201, response.code, code, root.optString("messageStatus"), parsedChallenge != null)
+                parsedChallenge?.let { challenge ->
+                    readSessions.challenged(owner, sentSession)
+                    val commentRequest = if (rememberSession && owner == requestSession && method.equals("GET", true) &&
+                        body == null && extraBody == null && ApiRules.commentRead(url))
+                        CommentCaptchaRequest(verification?.request?.url ?: url, modernReplies, verificationIssuer) else null
+                    throw CaptchaRequired(challenge, responseContext, root.optString("message").ifBlank { "当前访问需要验证码" }, commentRequest)
+                }
+                val message = root.optString("message")
+                if (root.optString("messageStatus") == "err_request_captcha_v2" || root.isNull("data") &&
+                    (message.contains("验证码") || message.contains("captcha", ignoreCase = true))) {
+                    readSessions.challenged(owner, sentSession)
+                    throw UnsupportedCaptcha()
+                }
+                if (!response.isSuccessful || code != null && code !in setOf(0, 200)) {
+                    throw ApiException(root.optString("message").ifBlank { "接口返回错误（${code ?: response.code}）" })
+                }
+                val installed = readSessions.succeeded(owner, url, sentSession, responseContext, verification != null, verification?.cookieProof)
+                if (verification?.request != null) synchronized(this@ApiClient) {
+                    if (installed == null || !readSessions.owns(installed)) {
+                        throw ApiException("账号、设备或会话已变更，已忽略旧验证结果")
+                    }
+                    verifiedCommentResponse = VerifiedCommentResponse(verification.request, responseContext,
+                        elapsedNanos() + TimeUnit.SECONDS.toNanos(30), root.toString())
+                }
+                root
+            } catch (failure: Exception) {
+                // A server cookie rotation/deletion must not leave an older resumable session on disk.
+                withContext(NonCancellable) { readSessions.failed(owner, sentSession) }
+                throw failure
             }
-            val text = bytes.toString("UTF-8")
-            val root = try {
-                if (text.trimStart().startsWith("[")) JSONObject().put("data", JSONArray(text)).put("status", 0) else JSONObject(text)
-            } catch (_: Exception) {
-                throw ApiException(when (response.code) { 401 -> "登录状态已失效，请重新登录"; 403 -> "暂时拒绝了请求，可能触发了访问限制"; else -> "服务器返回了无法识别的响应" })
-            }
-            if (owner != session()) throw ApiException("账号或设备已变更，已忽略旧请求")
-            CaptchaChallenge.parse(root)?.let { challenge ->
-                if (proof != null) acceptedValidation = null
-                throw CaptchaRequired(challenge, context(owner), root.optString("message").ifBlank { "当前访问需要验证码" })
-            }
-            val message = root.optString("message")
-            if (root.optString("messageStatus") == "err_request_captcha_v2" || root.isNull("data") &&
-                (message.contains("验证码") || message.contains("captcha", ignoreCase = true))) {
-                if (proof != null) acceptedValidation = null
-                throw UnsupportedCaptcha()
-            }
-            val code = (root.opt("status") ?: root.opt("code"))?.toString()?.toIntOrNull()
-            if (!response.isSuccessful || code != null && code !in setOf(0, 200)) {
-                throw ApiException(root.optString("message").ifBlank { "接口返回错误（${code ?: response.code}）" })
-            }
-            root
         }
     }
 
     private fun headers(owner: ApiSession, replyList: Boolean = false): Map<String, String> {
-        // Match the regular comment endpoint's version requirement from the first request.
+        // Upgrade only when the reply endpoint explicitly requires a newer client.
         val version = if (replyList) "16.6.4" else "16.2.0"
         val code = if (replyList) "2609291" else "2604201"
         return mapOf(

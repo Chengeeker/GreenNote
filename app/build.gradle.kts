@@ -16,8 +16,8 @@ android {
         applicationId = "com.green.note"
         minSdk = 24
         targetSdk = 36
-        versionCode = 211
-        versionName = "2.0.19"
+        versionCode = 212
+        versionName = "2.0.20"
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {
@@ -47,6 +47,7 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.02.00"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.mindrot:jbcrypt:0.4")
     implementation("io.coil-kt:coil-compose:2.7.0")

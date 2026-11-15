@@ -42,6 +42,9 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -322,7 +325,10 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
             enter = androidx.compose.animation.fadeIn(tween(140, easing = CubicBezierEasing(.215f, .61f, .355f, 1f))),
             exit = androidx.compose.animation.fadeOut(tween(if (liquid && closing) 0 else 140))) { Box(Modifier.fillMaxSize()) {
             Row(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                com.green.note.ui.GalleryTopControl("返回", liquid, onClick = ::dismiss) { MaterialGlyph("arrow_back_rounded", color = Color.White, size = 22.dp, contentDescription = "返回") }
+                com.green.note.ui.GalleryTopControl("返回", liquid, onClick = ::dismiss) {
+                    if (liquid) MaterialGlyph("arrow_back_rounded", color = Color.White, size = 22.dp, contentDescription = "返回")
+                    else Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, Modifier.size(22.dp), tint = Color.White)
+                }
                 if (post != null) {
                     Spacer(Modifier.width(10.dp))
                     val avatar = remember(post) { com.green.note.network.normalizeNetworkImageUrl(post.optString("userAvatar")) }
@@ -349,6 +355,7 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                 Box {
                     com.green.note.ui.GalleryTopControl(if (post == null) "保存高清大图到相册" else "更多", liquid, enabled = !busy, onClick = { if (post == null) requestSave() else more = true }) {
                         if (busy) com.green.note.ui.ReviewCircularProgress(Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                        else if (!liquid && post == null) Icon(painterResource(com.green.note.R.drawable.review_download_rounded), null, Modifier.size(22.dp), tint = Color.White)
                         else MaterialGlyph(if (post == null) "download_rounded" else "more_vert", color = Color.White, size = 22.dp, contentDescription = if (post == null) "保存高清大图到相册" else "更多")
                     }
                 }

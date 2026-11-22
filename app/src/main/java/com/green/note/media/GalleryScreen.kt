@@ -362,7 +362,7 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
             }
                 if (urls.size > 1) BoxWithConstraints(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = thumbnailBottom)) {
                     val width = maxWidth * .16f
-                    HorizontalPager(thumbnails, Modifier.fillMaxWidth().height(64.dp), pageSize = PageSize.Fixed(width), contentPadding = PaddingValues(horizontal = (maxWidth - width) / 2), beyondViewportPageCount = 4, flingBehavior = reelFling) { index ->
+                    HorizontalPager(thumbnails, Modifier.fillMaxWidth().height(64.dp), pageSize = PageSize.Fixed(width), contentPadding = PaddingValues(horizontal = (maxWidth - width) / 2), beyondViewportPageCount = 4, flingBehavior = reelFling, overscrollEffect = null) { index ->
                         val url = urls[index]
                         val preview by galleryPreview(url, cacheScope, headersForUrl(url), 0, galleryImageLoader, previewPool)
                         val previewDrawable = remember(preview.drawable) { preview.drawable?.constantState?.newDrawable(context.resources)?.mutate() ?: preview.drawable }

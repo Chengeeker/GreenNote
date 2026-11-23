@@ -90,7 +90,8 @@ import kotlin.math.abs
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit, headersForUrl: (String) -> Map<String, String> = { emptyMap() }, cacheScope: String = "guest",
-                  feed: JSONObject? = null, showPostChrome: Boolean = false, onFeedAction: (String) -> Unit = {}, saveDirectory: String = "GreenNote") {
+                  feed: JSONObject? = null, showPostChrome: Boolean = false, onFeedAction: (String) -> Unit = {}, saveDirectory: String = "GreenNote",
+                  resolveLivePhoto: suspend (String) -> String = { error("实况视频暂不可用") }) {
     val post = feed.takeIf { showPostChrome }
     val previewText = remember(post) {
         post?.optString("message")?.let { html ->
@@ -102,7 +103,6 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
     val view = LocalView.current
     val haptics by rememberUpdatedState(LocalAppPreferences.current.haptics)
     val pixelDensity = LocalDensity.current.density
-    val tapFeedback by rememberUpdatedState(com.green.note.ui.rememberHapticClick {})
     val scope = rememberCoroutineScope()
     val baseImageLoader = context.imageLoader
     // Original ExtendedImage(cache:true) retains encoded media independently of HTTP freshness.
@@ -121,13 +121,17 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
             val previousPage = pager.currentPage
             pager.scrollToPage(page, fraction)
             if (thumbnailUserScroll && pager.currentPage != previousPage) {
-                AppHaptics.selection(view, haptics, tick = true)
+                AppHaptics.galleryPage(view, haptics)
             }
             if (!scrolling && !thumbnailDragged) { thumbnailUserScroll = false; launch { thumbnails.animateScrollToPage(page, animationSpec = tween(120, easing = CubicBezierEasing(.215f, .61f, .355f, 1f))) }; pager.animateScrollToPage(page, animationSpec = tween(120, easing = CubicBezierEasing(.215f, .61f, .355f, 1f))) }
         }
     } }
     LaunchedEffect(pager) { snapshotFlow { pager.currentPage to pager.currentPageOffsetFraction }.distinctUntilChanged().collect { (page, fraction) -> if (!thumbnailUserScroll) { val position = (page + fraction).coerceIn(0f, (thumbnails.pageCount - 1).coerceAtLeast(0).toFloat()); val nearest = kotlin.math.round(position).toInt(); thumbnails.requestScrollToPage(nearest, position - nearest) } } }
     var chrome by remember { mutableStateOf(true) }
+    var livePlaying by remember(pager.currentPage) { mutableStateOf(false) }
+    var liveError by remember(pager.currentPage) { mutableStateOf(false) }
+    var liveRetry by remember(pager.currentPage) { mutableIntStateOf(0) }
+    LaunchedEffect(pager.isScrollInProgress) { if (pager.isScrollInProgress) livePlaying = false }
     val knownHdr by HdrImageRegistry.known.collectAsState()
     val activity = remember(context) { generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }.filterIsInstance<android.app.Activity>().firstOrNull() }
     LaunchedEffect(chrome) { activity?.window?.let { window -> val controls = WindowCompat.getInsetsController(window, window.decorView); controls.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE; if (chrome) controls.show(WindowInsetsCompat.Type.statusBars()) else controls.hide(WindowInsetsCompat.Type.statusBars()) } }
@@ -230,10 +234,9 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                 Box(Modifier.fillMaxSize().onSizeChanged { bounds = it }
                     .pointerInput(url) {
                         detectTapGestures(onTap = { point ->
-                            tapFeedback()
                             if (point.x >= bounds.width / 3f && point.x < bounds.width * 2f / 3f) chrome = !chrome else dismiss()
                         }, onDoubleTap = { point ->
-                            tapFeedback()
+                            if (haptics) view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
                             zoomJob?.cancel()
                             val start = scale; val startOffset = offset
                             val long = imageSize.width > 0 && imageSize.height.toFloat() / imageSize.width > 2f
@@ -243,6 +246,14 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                                 offset = clampOffset(startOffset * ratio + Offset(bounds.width / 2f - point.x, bounds.height / 2f - point.y) * (ratio - 1), value)
                                 zoomed = value > 1.01f
                             } }
+                        }, onLongPress = {
+                            if (page == pager.currentPage && isLivePhoto(url)) {
+                                if (haptics) view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                                if (liveError) { liveError = false; liveRetry++ }
+                                livePlaying = true
+                            }
+                        }, onPress = {
+                            try { tryAwaitRelease() } finally { if (page == pager.currentPage && isLivePhoto(url)) livePlaying = false }
                         })
                     }.pointerInput(url) {
                         awaitEachGesture {
@@ -296,8 +307,11 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                     NativeHdrImage(url, cacheScope, !loading && !failed, page == pager.currentPage && !entering && !closing, Modifier.fillMaxSize().graphicsLayer {
                         scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y
                     }) { hdr = it }
+                    LivePhoto(url, cacheScope, !loading && !failed, page == pager.currentPage && !entering && !closing && !pager.isScrollInProgress,
+                        livePlaying, liveRetry, scale, offset.x, offset.y, resolveLivePhoto,
+                        onError = { livePlaying = false; liveError = true }, onStopped = { livePlaying = false })
                     val badge = galleryBadge(url, feed, hdr || url in knownHdr)
-                    if (badge.isNotEmpty() && chrome) {
+                    if (badge.isNotEmpty() && badge != "实况" && chrome) {
                         val badgeModifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = badgeBottom)
                         if (badge == "HDR") HdrBadge(badgeModifier)
                         else Text(badge, badgeModifier.background(Color.Black.copy(alpha = .72f), RoundedCornerShape(6.dp))
@@ -339,7 +353,9 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                         Spacer(Modifier.width(12.dp))
                     }
                 } else Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                    Text("${pager.currentPage + 1} / ${urls.size}", Modifier.clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = .45f)).padding(horizontal = 14.dp, vertical = 6.dp), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    if (isLivePhoto(urls.getOrNull(pager.currentPage).orEmpty())) LivePhotoControl(livePlaying) {
+                        if (liveError) { liveError = false; liveRetry++ }; livePlaying = !livePlaying
+                    } else Text("${pager.currentPage + 1} / ${urls.size}", Modifier.clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = .45f)).padding(horizontal = 14.dp, vertical = 6.dp), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Box {
                     com.green.note.ui.GalleryTopControl(if (post == null) "保存高清大图到相册" else "更多", liquid, enabled = !busy, onClick = { if (post == null) requestSave() else more = true }) {
@@ -349,13 +365,17 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                     }
                 }
             }
+            if (post != null && isLivePhoto(urls.getOrNull(pager.currentPage).orEmpty())) Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp)) {
+                LivePhotoControl(livePlaying) { if (liveError) { liveError = false; liveRetry++ }; livePlaying = !livePlaying }
+            }
+            if (liveError) Text("动态照片播放失败，请重试", Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .7f), RoundedCornerShape(12.dp)).padding(12.dp), color = Color.White)
                 if (urls.size > 1) BoxWithConstraints(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = thumbnailBottom)) {
                     val width = maxWidth * .16f
                     HorizontalPager(thumbnails, Modifier.fillMaxWidth().height(64.dp), pageSize = PageSize.Fixed(width), contentPadding = PaddingValues(horizontal = (maxWidth - width) / 2), beyondViewportPageCount = 4, flingBehavior = reelFling, overscrollEffect = null) { index ->
                         val url = urls[index]
                         val preview by galleryPreview(url, cacheScope, headersForUrl(url), 0, galleryImageLoader, previewPool)
                         val previewDrawable = remember(preview.drawable) { preview.drawable?.constantState?.newDrawable(context.resources)?.mutate() ?: preview.drawable }
-                        Box(Modifier.fillMaxSize().padding(horizontal = 3.dp, vertical = 2.dp).clip(RoundedCornerShape(8.dp)).border(2.dp, if (index == pager.currentPage) Color.White else Color.Transparent, RoundedCornerShape(8.dp)).clickable { thumbnailUserScroll = false; scope.launch { thumbnails.scrollToPage(index); pager.scrollToPage(index) } }) {
+                        Box(Modifier.fillMaxSize().padding(horizontal = 3.dp, vertical = 2.dp).clip(RoundedCornerShape(8.dp)).border(2.dp, if (index == pager.currentPage) Color.White else Color.Transparent, RoundedCornerShape(8.dp)).clickable { if (haptics) view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP); thumbnailUserScroll = false; scope.launch { thumbnails.scrollToPage(index); pager.scrollToPage(index) } }) {
                             if (previewDrawable != null) AsyncImage(previewDrawable, "第 ${index + 1} 张图片", modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)), imageLoader = galleryImageLoader, contentScale = ContentScale.Crop)
                             val badge = galleryBadge(url, feed, url in knownHdr)
                             if (badge.isNotEmpty()) {
@@ -418,6 +438,22 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
                 Text(title, fontSize = 13.sp, lineHeight = 1.35.em, fontWeight = com.green.note.ui.adjustedWeight(600), color = MaterialTheme.colorScheme.onSurface)
             }
         }
+    }
+}
+
+@Composable
+internal fun LivePhotoControl(playing: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(20.dp)
+    val background by androidx.compose.animation.animateColorAsState(if (playing) Color.White else Color.Black.copy(alpha = .54f), tween(250), label = "live-background")
+    val outline by androidx.compose.animation.animateColorAsState(if (playing) Color.White else Color.White.copy(alpha = .24f), tween(250), label = "live-outline")
+    val color = if (playing) Color.Black else Color.White
+    Row(Modifier.clip(shape).background(background).border(1.dp, outline, shape).clickable(onClick = onClick)
+        .padding(horizontal = 15.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (playing) Box(Modifier.size(16.dp).border(1.5.dp, color, CircleShape), contentAlignment = Alignment.Center) {
+            MaterialGlyph("pause_rounded", color = color, size = 12.dp)
+        } else MaterialGlyph("play_circle_outline_rounded", color = color, size = 16.dp)
+        Spacer(Modifier.width(5.dp))
+        Text(if (playing) "暂停 Live 图" else "播放 Live 图", color = color, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
     }
 }
 

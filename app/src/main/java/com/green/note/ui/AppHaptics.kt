@@ -23,11 +23,14 @@ internal class HapticGate {
 
 object AppHaptics {
     private val gate = HapticGate()
-    fun light(view: View, enabled: Boolean) {
-        if (enabled && gate.claim(SystemClock.elapsedRealtime())) view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+    fun light(view: View, enabled: Boolean, constant: Int = HapticFeedbackConstants.VIRTUAL_KEY) {
+        if (enabled && gate.claim(SystemClock.elapsedRealtime())) view.performHapticFeedback(constant)
     }
     fun selection(view: View, enabled: Boolean, tick: Boolean = false) {
         if (enabled && gate.claim(SystemClock.elapsedRealtime(), tick = tick)) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+    }
+    fun galleryPage(view: View, enabled: Boolean) {
+        if (enabled && gate.claim(SystemClock.elapsedRealtime(), tick = true)) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
     }
 }
 

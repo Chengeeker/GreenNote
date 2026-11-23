@@ -117,10 +117,14 @@ fun MaterialGlyph(name: String, modifier: Modifier = Modifier, size: Dp = LocalM
 }
 
 @Composable
-fun rememberHapticClick(onClick: () -> Unit): () -> Unit {
+fun rememberHapticClick(onClick: () -> Unit): () -> Unit =
+    rememberHapticClick(onClick, android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+
+@Composable
+fun rememberHapticClick(onClick: () -> Unit, constant: Int): () -> Unit {
     val view = LocalView.current
     val enabled = LocalAppPreferences.current.haptics
-    return { AppHaptics.light(view, enabled); onClick() }
+    return { AppHaptics.light(view, enabled, constant); onClick() }
 }
 
 @Composable

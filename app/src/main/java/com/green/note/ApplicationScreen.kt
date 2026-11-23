@@ -240,7 +240,7 @@ internal fun ApplicationScreen(graph: AppGraph, preferences: AppPreferences, rep
             }
         }
         gallery?.let { request -> GalleryScreen(request.urls, request.index, { gallery = null; galleryCollections = false }, graph.api::imageHeaders,
-            graph.api.imageCacheScope(), request.feed, showPostChrome = request.coolPicture, onFeedAction = { action ->
+            graph.api.imageCacheScope(), request.feed, showPostChrome = request.coolPicture, resolveLivePhoto = graph.api::resolveLivePhotoUrl, onFeedAction = { action ->
                 val feed = request.feed.takeIf { request.coolPicture }
                 if (feed != null) when (action) {
                     "comment", "reply", "detail" -> { gallery = null; openContent("feed", "动态详情", feed.optString("id")) }

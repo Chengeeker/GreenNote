@@ -63,6 +63,7 @@ internal fun feedPictureDimension(raw:JSONObject,name:String):Int {
 internal fun feedImageBadge(url:String,raw:JSONObject,feed:JSONObject?,knownHdr:Boolean,width:Int=0,height:Int=0):String? {
     val lower=url.lowercase()
     if(lower.contains(".gif"))return "GIF"
+    if(com.green.note.media.isLivePhoto(url))return "实况"
     fun hdr(value:JSONObject?)=listOf("is_hdr","isHdr","hdr").any{value?.opt(it)?.toString() in setOf("1","true")}
     if(knownHdr||hdr(raw)||hdr(feed)||listOf("is_hdr=1","hdr=1","ultrahdr","ultra_hdr","gainmap").any(lower::contains))return "HDR"
     val w=feedPictureDimension(raw,"width").takeIf{it>0} ?: width

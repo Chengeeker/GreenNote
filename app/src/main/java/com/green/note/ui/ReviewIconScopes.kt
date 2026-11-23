@@ -17,8 +17,10 @@ fun ReviewToolbarIcons(color:Color=MaterialTheme.colorScheme.onSurface,content:@
 fun ReviewIconButton(onClick:()->Unit,modifier:Modifier=Modifier,enabled:Boolean=true,
     colors:IconButtonColors=IconButtonDefaults.iconButtonColors(
         contentColor=LocalIconButtonColor.current.takeIf { it!=Color.Unspecified } ?: MaterialTheme.colorScheme.onSurfaceVariant),
-    interactionSource:MutableInteractionSource?=null,content:@Composable ()->Unit) {
-    IconButton(rememberHapticClick(onClick),modifier,enabled,colors,interactionSource) {
+    interactionSource:MutableInteractionSource?=null,
+    hapticConstant:Int=android.view.HapticFeedbackConstants.VIRTUAL_KEY,
+    content:@Composable ()->Unit) {
+    IconButton(rememberHapticClick(onClick,hapticConstant),modifier,enabled,colors,interactionSource) {
         CompositionLocalProvider(LocalMaterialGlyphColor provides LocalContentColor.current,content=content)
     }
 }

@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.util.Base64
 
 plugins {
     id("com.android.application")
@@ -16,8 +17,8 @@ android {
         applicationId = "com.green.note"
         minSdk = 24
         targetSdk = 36
-        versionCode = 214
-        versionName = "2.0.22"
+        versionCode = 217
+        versionName = "2.1.1"
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {
@@ -91,3 +92,18 @@ val verifyComposeAlignment by tasks.registering {
     }
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(verifyComposeAlignment) }
+
+val verifyRequestSigningAsset by tasks.registering {
+    doLast {
+        val file = file("src/main/assets/coolapk_auth_blob.b64")
+        val valid = runCatching {
+            val blob = Base64.getDecoder().decode(file.readText().filterNot { it.isWhitespace() })
+            require(blob.size >= 652)
+            for (offset in 0 until 100) {
+                Base64.getDecoder().decode(blob.copyOfRange(128 + offset * 4, 256 + offset * 4))
+            }
+        }.isSuccess
+        check(valid) { "请求签名素材缺失或无效：请将本机素材放入 app/src/main/assets/coolapk_auth_blob.b64 后重新构建。" }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(verifyRequestSigningAsset) }

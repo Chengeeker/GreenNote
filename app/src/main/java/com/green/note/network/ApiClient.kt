@@ -153,6 +153,25 @@ class ApiClient(
         }
     }
 
+    suspend fun resolveLivePhotoUrl(imageUrl: String): String = withContext(Dispatchers.IO) {
+        val image = imageUrl.toHttpUrlOrNull() ?: throw ApiException("图片地址无效")
+        require(image.isHttps && image.username.isEmpty() && image.password.isEmpty()) { "图片地址无效" }
+        val owner = session()
+        val url = ApiRules.resolve("/v6/livePhoto/showVideo", mapOf("picUrl" to imageUrl))
+        val request = Request.Builder().url(url).apply {
+            headers(owner).forEach { (key, value) -> header(key, value) }
+            header("X-App-Token", signer.token(owner.device))
+            if (owner.authenticated) header("Cookie", owner.effectiveCookie)
+        }.build()
+        http.newCall(request).await().use { response ->
+            if (owner != session()) throw ApiException("账号或设备已变更")
+            val target = response.header("Location")?.let(url::resolve)
+            if (!response.isRedirect || target == null || !target.isHttps || target.username.isNotEmpty() || target.password.isNotEmpty())
+                throw ApiException("实况视频暂不可用")
+            target.toString()
+        }
+    }
+
     suspend fun requestPublic(path: String, query: Map<String, String> = emptyMap()): JSONObject {
         val owner = session()
         return execute(path, "GET", query, null, owner, owner.copy(cookie = "", anonymous = true), false)

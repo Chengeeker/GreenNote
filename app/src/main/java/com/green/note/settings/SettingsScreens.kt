@@ -158,9 +158,9 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 Text(if (version.isEmpty()) "版本未知" else "v$version", Modifier.align(Alignment.CenterVertically).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 8.dp, vertical = 2.5.dp),
                     fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
-            Spacer(Modifier.height(6.dp)); Text("Material You 风格的简洁内容客户端", textAlign = TextAlign.Center, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp)); Text("简洁的内容与社区客户端", textAlign = TextAlign.Center, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(30.dp))
-            listOf("palette_outlined" to "Compose 与 Material You 动态主题配色", "dynamic_feed_outlined" to "动态阅读、数码社区与应用管理", "photo_library_outlined" to "自适应九宫格、长图与高清画廊浏览").forEach { (icon, text) ->
+            listOf("palette_outlined" to "液态玻璃效果与个性化主题", "dynamic_feed_outlined" to "动态阅读、数码社区与应用管理", "photo_library_outlined" to "自适应九宫格、长图与高清画廊浏览").forEach { (icon, text) ->
                 Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.Top) {
                     MaterialGlyph(icon, size = 16.dp, color = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(8.dp))
                     Text(text, Modifier.weight(1f), fontSize = 12.5.sp, lineHeight = 16.875.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

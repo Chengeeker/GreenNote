@@ -9,6 +9,7 @@ import org.json.JSONObject
  * pass raw metadata for HDR but leave width/height at zero. */
 internal fun galleryBadge(url: String, feed: JSONObject?, detectedHdr: Boolean): String {
     if (url.contains(".gif", ignoreCase = true)) return "GIF"
+    if (isLivePhoto(url)) return "实况"
     if (detectedHdr || galleryDeclaredHdr(url, feed)) return "HDR"
     if (url.contains("is_long=1", ignoreCase = true)) return "长图"
     if (feed?.optBoolean("_composeGalleryUseDeclaredDimensions") == true) {

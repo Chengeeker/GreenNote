@@ -112,18 +112,7 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
     val snackbar = remember { com.green.note.ui.AppToastState() }
     val pager = rememberPagerState(initialPage = initialIndex.coerceIn(0, (urls.size - 1).coerceAtLeast(0)), pageCount = { urls.size.coerceAtLeast(1) })
     val thumbnails = rememberPagerState(initialPage = pager.currentPage, pageCount = { urls.size.coerceAtLeast(1) })
-    val reelDecay = ScrollableDefaults.flingBehavior()
-    val reelFling = remember(reelDecay) {
-        object : TargetedFlingBehavior {
-            override suspend fun ScrollScope.performFling(initialVelocity: Float, onRemainingDistanceUpdated: (Float) -> Unit): Float {
-                // Flutter's reel disables page snapping. Let inertia end at a fractional
-                // page; the existing ownership-aware 120 ms settle handles alignment.
-                val remaining = with(reelDecay) { performFling(initialVelocity) }
-                onRemainingDistanceUpdated(0f)
-                return remaining
-            }
-        }
-    }
+    val reelFling = rememberGalleryThumbnailFling(thumbnails)
     val thumbnailDragged by thumbnails.interactionSource.collectIsDraggedAsState()
     var thumbnailUserScroll by remember { mutableStateOf(false) }
     LaunchedEffect(thumbnailDragged) { if (thumbnailDragged) thumbnailUserScroll = true }
@@ -137,7 +126,7 @@ fun GalleryScreen(inputUrls: List<String>, initialIndex: Int, onBack: () -> Unit
             if (!scrolling && !thumbnailDragged) { thumbnailUserScroll = false; launch { thumbnails.animateScrollToPage(page, animationSpec = tween(120, easing = CubicBezierEasing(.215f, .61f, .355f, 1f))) }; pager.animateScrollToPage(page, animationSpec = tween(120, easing = CubicBezierEasing(.215f, .61f, .355f, 1f))) }
         }
     } }
-    LaunchedEffect(pager) { snapshotFlow { pager.currentPage to pager.currentPageOffsetFraction }.distinctUntilChanged().collect { (page, fraction) -> if (!thumbnailUserScroll) thumbnails.scrollToPage(page, fraction) } }
+    LaunchedEffect(pager) { snapshotFlow { pager.currentPage to pager.currentPageOffsetFraction }.distinctUntilChanged().collect { (page, fraction) -> if (!thumbnailUserScroll) { val position = (page + fraction).coerceIn(0f, (thumbnails.pageCount - 1).coerceAtLeast(0).toFloat()); val nearest = kotlin.math.round(position).toInt(); thumbnails.requestScrollToPage(nearest, position - nearest) } } }
     var chrome by remember { mutableStateOf(true) }
     val knownHdr by HdrImageRegistry.known.collectAsState()
     val activity = remember(context) { generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }.filterIsInstance<android.app.Activity>().firstOrNull() }

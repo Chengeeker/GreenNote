@@ -90,18 +90,16 @@ fun PersonalizationScreen(preferences: AppPreferences, onChange: ((AppPreference
 
         Spacer(Modifier.height(16.dp))
         AppearanceSection("底部导航") {
-            SwitchRow("使用悬浮底栏", preferences.floatingNavBar, { value -> onChange { it.copy(floatingNavBar = value) } }, "居中显示悬浮式导航栏", "dock_rounded", enabled)
+            SwitchRow("使用悬浮底栏", preferences.floatingNavBar, { value -> onChange { it.copy(floatingNavBar = value) } }, icon = "dock_rounded", enabled = enabled)
         }
         Spacer(Modifier.height(16.dp))
         AppearanceSection("显示效果") {
-            SwitchRow("使用液态玻璃效果", preferences.liquidGlassNavBar, { value -> onChange { it.copy(liquidGlassNavBar = value) } },
-                "为底栏、悬浮按钮及操作条启用液态玻璃质感", "blur_on_rounded", enabled)
-            if (enabled && preferences.liquidGlassNavBar && preferences.floatingNavBar) com.green.note.ui.NavigationGlassChoice(preferences.translucentNavigationGlass, hapticsEnabled = preferences.haptics) { value -> onChange { it.copy(translucentNavigationGlass = value) } }
+            SwitchRow("使用液态玻璃效果", preferences.liquidGlassNavBar, { value -> onChange { it.copy(liquidGlassNavBar = value) } }, icon = "blur_on_rounded", enabled = enabled)
+            if (enabled && preferences.liquidGlassNavBar) com.green.note.ui.NavigationGlassChoice(preferences.translucentNavigationGlass, hapticsEnabled = preferences.haptics) { value -> onChange { it.copy(translucentNavigationGlass = value) } }
         }
         Spacer(Modifier.height(16.dp))
         AppearanceSection("触感与震动") {
-            SwitchRow("触感与震动反馈", preferences.haptics, { value -> onChange { it.copy(haptics = value) } },
-                "按键、卡片点击、手势滑动与底栏切换的触感反馈", "vibration_rounded", enabled)
+            SwitchRow("触感与震动反馈", preferences.haptics, { value -> onChange { it.copy(haptics = value) } }, icon = "vibration_rounded", enabled = enabled)
         }
         Spacer(Modifier.height(24.dp))
     }

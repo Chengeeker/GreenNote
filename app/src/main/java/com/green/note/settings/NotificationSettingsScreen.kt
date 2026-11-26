@@ -36,7 +36,7 @@ fun NotificationSettingsScreen(settings: ReplyReminderSettings, official: Boolea
     var intervalAnchor by remember{mutableStateOf(IntRect.Zero)}
     val anchorFeedback = rememberHapticClick {}
     ReviewPage("回复提醒设置", onBack, topPadding = 16.dp, bottomPadding = 16.dp) {
-        Text(if (official) "酷安官方 Cookie 账号的评论与回复提醒" else "请先使用酷安账号登录；匿名账户与 UID 绑定不支持私有回复提醒。")
+        if (!official) Text("请先使用酷安账号登录；匿名账户与 UID 绑定不支持私有回复提醒。")
         Spacer(Modifier.height(16.dp))
         SectionCard {
             SwitchRow("自动检查新回复", settings.enabled, { onSave(settings.copy(enabled = it)) }, "首次开启或切换 Cookie 后不提醒已有消息", enabled = !working && (official || settings.enabled),titleSize=13f,subtitleSize=12f,horizontalPadding=14.dp,verticalPadding=0.dp,disabledTextColor=LocalMaterialGlyphColor.current.copy(alpha=.38f))

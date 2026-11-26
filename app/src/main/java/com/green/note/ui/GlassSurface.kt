@@ -32,10 +32,21 @@ enum class GlassMaterial { GALLERY, NAVIGATION }
 @Composable
 fun GlassSurface(modifier:Modifier=Modifier,cornerRadius:Dp=24.dp,opacity:Float=1f,liquid:Boolean?=null,
     interactive:Boolean=true,material:GlassMaterial=GlassMaterial.GALLERY,tintColor:Color?=null,themeAdaptive:Boolean=true,content:@Composable BoxScope.()->Unit) {
-    val useLiquid=liquid ?: LocalAppPreferences.current.liquidGlassNavBar
+    val preferences=LocalAppPreferences.current
+    val useLiquid=liquid ?: preferences.liquidGlassNavBar
     val density=LocalDensity.current
     val scheme=androidx.compose.material3.MaterialTheme.colorScheme
     val dark=scheme.surface.red+scheme.surface.green+scheme.surface.blue<1.5f
+    val navigationDark=dark||!themeAdaptive
+    val navigationTint=(when {
+        navigationDark -> Color.Black
+        preferences.translucentNavigationGlass -> Color(0xFFF5F5F5)
+        else -> Color.White
+    }).copy(alpha=when {
+        !preferences.translucentNavigationGlass -> .75f
+        navigationDark -> .4f
+        else -> .42f
+    })
     val (host,region)=rememberBackdropRegion()
     var presentationReady by remember { mutableStateOf(false) }
     var logicalSize by remember { mutableStateOf(IntSize.Zero) }
@@ -83,7 +94,7 @@ fun GlassSurface(modifier:Modifier=Modifier,cornerRadius:Dp=24.dp,opacity:Float=
                     val bw=body.width()*transform.scaleX;val bh=body.height()*transform.scaleY
                     body.set(cx-bw/2,cy-bh/2,cx+bw/2,cy+bh/2)
                 }
-                val style=if(material==GlassMaterial.NAVIGATION)GlassSurfaceStyle(if(dark||!themeAdaptive)0x66000000 else 0xF0FFFFFF.toInt(),visibility=opacity,rimLight=if(dark||!themeAdaptive)0f else 1f)
+                val style=if(material==GlassMaterial.NAVIGATION)GlassSurfaceStyle(navigationTint.toArgb(),blur=if(preferences.translucentNavigationGlass&&!navigationDark)6f else 2f,visibility=opacity,rimLight=if(navigationDark)0f else 1f)
                 else GlassSurfaceStyle(0x66000000,32f,1.24f,.025f,if(useLiquid)2f else 2.5f*opacity,.25f,1.5f,
                     visibility=opacity,legacyGallery=!useLiquid,oval=useLiquid && logicalSize.width==logicalSize.height)
                 control.submit(GlassDrawRequest(origin,viewportSize.width,viewportSize.height,density.density,body,with(density){cornerRadius.toPx()},if(tintColor==null)style else style.copy(color=tintColor.toArgb()),touch=if(useLiquid&&interactive)GlassTouchFrame(touchPoint+Offset(padding,padding),touchIntensity,touchRadius) else null,sourceSize=host?.size,shapeScale=if(useLiquid)transform.scaleX to transform.scaleY else 1f to 1f))
@@ -92,7 +103,7 @@ fun GlassSurface(modifier:Modifier=Modifier,cornerRadius:Dp=24.dp,opacity:Float=
         // the existing material identifiable until TextureView presents a real frame.
         // Legacy gallery already supplies its own static treatment below.
         if(useLiquid&&!presentationReady) {
-            val base=tintColor?:if(material==GlassMaterial.NAVIGATION&&!dark&&themeAdaptive)Color(0xF0FFFFFF)else Color(0x66000000)
+            val base=tintColor?:if(material==GlassMaterial.NAVIGATION)navigationTint else Color(0x66000000)
             Box(Modifier.fillMaxSize().background(base.copy(alpha=base.alpha*opacity),RoundedCornerShape(cornerRadius))
                 .border(1.dp,Color.White.copy(alpha=.34f*opacity),RoundedCornerShape(cornerRadius)))
         }

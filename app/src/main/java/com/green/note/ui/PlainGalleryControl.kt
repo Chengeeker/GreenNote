@@ -36,6 +36,7 @@ internal fun PlainGalleryControl(label: String?, enabled: Boolean, onClick: () -
 
 @Composable
 internal fun GalleryTopControl(label: String, liquid: Boolean, enabled: Boolean = true, onClick: () -> Unit, content: @Composable () -> Unit) {
-    if (liquid) GlassSurface(Modifier.size(48.dp)) { ReviewIconButton(onClick, enabled = enabled, hapticConstant = android.view.HapticFeedbackConstants.KEYBOARD_TAP, content = content) }
+    val translucent = LocalAppPreferences.current.translucentNavigationGlass
+    if (liquid) GlassSurface(Modifier.size(48.dp), tintColor = Color.Black.copy(alpha = if (translucent) .4f else .75f)) { ReviewIconButton(onClick, enabled = enabled, hapticConstant = android.view.HapticFeedbackConstants.KEYBOARD_TAP, content = content) }
     else PlainGalleryControl(label, enabled, rememberHapticClick(onClick, android.view.HapticFeedbackConstants.KEYBOARD_TAP), content)
 }

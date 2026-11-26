@@ -100,9 +100,7 @@ internal fun AppearancePalette(dynamic: Boolean, onDynamic: (Boolean) -> Unit, s
         Spacer(Modifier.height(8.dp))
         AppearanceToggle("动态取色", "auto_awesome_outlined", dynamic && supportsDynamic, enabled = enabled && supportsDynamic, change = onDynamic)
         if (!dynamic || !supportsDynamic) {
-            Text("Material 3 预置主题色", Modifier.padding(start = 16.dp, top = 14.dp, bottom = 10.dp),
-                fontSize = 14.sp, color = colors.onSurfaceVariant)
-            FlowRow(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            FlowRow(Modifier.padding(start = 12.dp, top = 8.dp, end = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 names.forEachIndexed { index, title ->
                     val checked = selected == index
@@ -123,7 +121,6 @@ internal fun AppearancePalette(dynamic: Boolean, onDynamic: (Boolean) -> Unit, s
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
         }
         Spacer(Modifier.height(8.dp))
     }

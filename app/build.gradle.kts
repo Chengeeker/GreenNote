@@ -17,8 +17,8 @@ android {
         applicationId = "com.green.note"
         minSdk = 24
         targetSdk = 36
-        versionCode = 217
-        versionName = "2.1.1"
+        versionCode = 218
+        versionName = "2.1.2"
         ndk { abiFilters += "arm64-v8a" }
     }
     signingConfigs {

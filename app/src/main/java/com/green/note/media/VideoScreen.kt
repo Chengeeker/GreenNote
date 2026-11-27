@@ -13,7 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import com.green.note.ui.tapClickable as clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.AnimatedVisibility
@@ -26,7 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -53,6 +55,7 @@ import androidx.media3.ui.PlayerView
 import com.green.note.ui.MaterialGlyph
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -98,15 +101,29 @@ fun VideoScreen(url: String, headers: Map<String, String>, onBack: () -> Unit, t
     var activeUrl by remember(player) { mutableStateOf(url) }
     val currentQuality = qualityOptions.entries.firstOrNull { it.value == activeUrl }?.key ?: "画质"
     var speed by remember { mutableFloatStateOf(1f) }
+    var boostLocked by remember { mutableStateOf(false) }
+    val latestBoostLocked by rememberUpdatedState(boostLocked)
     var landscape by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var hud by remember { mutableStateOf<String?>(null) }
     var hudRevision by remember { mutableIntStateOf(0) }
+    var speedCue by remember { mutableStateOf("") }
+    var lockCue by remember { mutableStateOf("") }
     var retriedPublic by remember(url) { mutableStateOf(false) }
     var bounds by remember { mutableStateOf(IntSize.Zero) }
     var brightness by remember { mutableFloatStateOf(.5f) }
     var leftDrag by remember { mutableStateOf(false) }
     var longPress by remember { mutableStateOf(false) }
+    var lockOnRelease by remember { mutableStateOf(false) }
+    var unlockOnRelease by remember { mutableStateOf(false) }
+    var holdDrag by remember { mutableFloatStateOf(0f) }
+    var boostGestureHandled by remember { mutableStateOf(false) }
+    var dragMode by remember { mutableStateOf("") }
+    var dragStartPosition by remember { mutableLongStateOf(0L) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    var dragStartBrightness by remember { mutableFloatStateOf(.5f) }
+    var dragStartVolume by remember { mutableFloatStateOf(.7f) }
     var seekPreview by remember { mutableStateOf<Float?>(null) }
     var volume by remember { mutableFloatStateOf(.7f) }
     DisposableEffect(activity) {
@@ -147,6 +164,8 @@ fun VideoScreen(url: String, headers: Map<String, String>, onBack: () -> Unit, t
     LaunchedEffect(playing, player) { while (playing) { position = player.currentPosition; duration = player.duration.coerceAtLeast(0); delay(400) } }
     LaunchedEffect(touchRevision, playing, controls, speedPicker, qualityPicker) { if (playing && controls && !speedPicker && !qualityPicker) { delay(3500); controls = false } }
     LaunchedEffect(hud, hudRevision) { if (hud != null) { delay(900); hud = null } }
+    LaunchedEffect(speedCue) { if (speedCue.isNotEmpty()) { delay(900); speedCue = "" } }
+    LaunchedEffect(lockCue) { if (lockCue.isNotEmpty()) { delay(900); lockCue = "" } }
     fun togglePlayback() {
         if (!initialized) return
         if (player.isPlaying) { player.pause(); controls = true } else { player.play(); touchRevision++ }
@@ -165,8 +184,46 @@ fun VideoScreen(url: String, headers: Map<String, String>, onBack: () -> Unit, t
     Box(Modifier.fillMaxSize().background(Color.Black).onSizeChanged { bounds = it }) {
         AndroidView(factory = { PlayerView(it).apply { if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false; useController = false; this.player = player } }, modifier = Modifier.fillMaxSize(), update = { it.player = player })
         Box(Modifier.fillMaxSize().pointerInput(player, initialized) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                boostGestureHandled = false
+                if (!initialized) return@awaitEachGesture
+                val movedBeforeHold = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: return@withTimeoutOrNull true
+                        if (!change.pressed || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) return@withTimeoutOrNull true
+                    }
+                    false
+                }
+                if (movedBeforeHold != null) return@awaitEachGesture
+                boostGestureHandled = true
+                val lockedAtStart = latestBoostLocked
+                longPress = true; lockOnRelease = false; unlockOnRelease = false
+                player.setPlaybackSpeed(2f); speedCue = if (lockedAtStart) "2.0X 倍速已锁定" else "2.0X 快进中"; lockCue = ""; hud = null
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        val offset = change.position.y - down.position.y
+                        lockOnRelease = !lockedAtStart && offset >= 48.dp.toPx()
+                        unlockOnRelease = lockedAtStart && offset <= -48.dp.toPx()
+                        lockCue = when { lockOnRelease -> "松开锁定倍速"; unlockOnRelease -> "松开恢复原速"; else -> "" }
+                        change.consume()
+                    }
+                } finally {
+                    boostLocked = if (unlockOnRelease) false else lockOnRelease || lockedAtStart
+                    longPress = false
+                    player.setPlaybackSpeed(if (boostLocked) 2f else speed)
+                    speedCue = ""; lockCue = when { lockOnRelease -> "2.0X 倍速已锁定"; unlockOnRelease -> "已恢复原速"; else -> "" }; hud = null
+                    hudRevision++
+                }
+            }
+        }.pointerInput(player, initialized) {
             if (!initialized) return@pointerInput
-            detectTapGestures(onTap = { tapFeedback(); controls = !controls; touchRevision++ }, onDoubleTap = { point ->
+            detectTapGestures(onTap = { if (!boostGestureHandled) { tapFeedback(); controls = !controls; touchRevision++ } }, onDoubleTap = { point ->
+                if (boostGestureHandled) return@detectTapGestures
                 tapFeedback()
                 val seconds = videoDoubleTapSeconds(point.x, bounds.width.toFloat())
                 if (seconds == 0) togglePlayback() else {
@@ -175,19 +232,37 @@ fun VideoScreen(url: String, headers: Map<String, String>, onBack: () -> Unit, t
                     position = target; hud = "${if (seconds < 0) "-10" else "+10"}s (${time(target)})"
                     hudRevision++
                 }
-            }, onPress = {
-                val oldSpeed = player.playbackParameters.speed
-                val delayed = scope.launch { delay(500); longPress = true; player.setPlaybackSpeed(2f); hud = "2.0X 快进中" }
-                try { awaitRelease() } finally { delayed.cancel(); if (longPress) { player.setPlaybackSpeed(oldSpeed); longPress = false; hud = null } }
             })
         }.pointerInput(player, initialized) {
             if (!initialized) return@pointerInput
-            detectVerticalDragGestures(onDragStart = { leftDrag = it.x < bounds.width / 2f }) { change, amount ->
-                change.consume()
+            detectDragGestures(onDragStart = {
+                leftDrag = it.x < bounds.width / 2f
+                dragStartPosition = player.currentPosition; dragX = 0f; dragY = 0f; dragMode = ""
+                dragStartBrightness = brightness; dragStartVolume = volume
+                holdDrag = 0f
+            }, onDragEnd = {
+                if (dragMode == "seek") seekPreview = null
+            }, onDragCancel = { seekPreview = null }) { change, amount ->
+                change.consume(); dragX += amount.x; dragY += amount.y
+                if (longPress) {
+                    holdDrag = dragY
+                    val threshold = 48.dp.toPx()
+                    lockOnRelease = !latestBoostLocked && holdDrag >= threshold
+                    unlockOnRelease = latestBoostLocked && holdDrag <= -threshold
+                    lockCue = when { lockOnRelease -> "松开锁定倍速"; unlockOnRelease -> "松开恢复原速"; else -> "" }
+                    return@detectDragGestures
+                }
+                if (dragMode.isEmpty() && kotlin.math.max(kotlin.math.abs(dragX), kotlin.math.abs(dragY)) >= 14.dp.toPx())
+                    dragMode = if (kotlin.math.abs(dragX) > kotlin.math.abs(dragY)) "seek" else if (leftDrag) "brightness" else "volume"
+                when (dragMode) {
+                    "seek" -> {
+                        val target = (dragStartPosition + dragX / bounds.width.coerceAtLeast(1) * 60000).toLong().coerceIn(0L, player.duration.coerceAtLeast(0L))
+                        seekPreview = target.toFloat(); player.seekTo(target); position = target; hud = "定位 ${time(target)}"
+                    }
+                    "brightness" -> { brightness = (dragStartBrightness - dragY / bounds.height.coerceAtLeast(1) * .8f).coerceIn(.1f, 1f); hud = "亮度 ${(brightness * 100).toInt()}%" }
+                    "volume" -> { volume = (dragStartVolume - dragY / bounds.height.coerceAtLeast(1) * .8f).coerceIn(0f, 1f); player.volume = volume; hud = "音量" }
+                }
                 hudRevision++
-                val delta = -amount / density / 200f
-                if (leftDrag) { brightness = (brightness + delta).coerceIn(.1f, 1f); hud = "亮度 ${(brightness * 100).toInt()}%" }
-                else { volume = (volume + delta).coerceIn(0f, 1f); player.volume = volume; hud = "音量" }
             }
         })
         if (!initialized && visibleError == null) com.green.note.ui.ReviewCircularProgress(Modifier.align(Alignment.Center), color = Color.White.copy(alpha = .7f))
@@ -218,12 +293,15 @@ fun VideoScreen(url: String, headers: Map<String, String>, onBack: () -> Unit, t
                     touchRevision++
                 }, onSeek = { player.seekTo(it); position = it; touchRevision++ })
         } }
-        hud?.let { value -> Row(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .54f), RoundedCornerShape(10.dp)).padding(horizontal = 18.dp, vertical = if (value.startsWith("亮度") || value == "音量") 12.dp else 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        hud?.let { value -> VideoHintOverlay(player, true, speed = value.startsWith("2.0X") || value.startsWith("松开") || value == "已恢复原速", contentKey = value) { Row(Modifier.background(Color.Black.copy(alpha = .87f), RoundedCornerShape(10.dp)).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             val level = value.startsWith("亮度") || value == "音量"
             MaterialGlyph(when { value.startsWith("亮度") -> "brightness_6_rounded"; value == "音量" -> if (volume > 0) "volume_up_rounded" else "volume_off_rounded"; value.startsWith("-") -> "fast_rewind_rounded"; else -> "fast_forward_rounded" }, color = Color.White)
             Spacer(Modifier.width(if (level) 10.dp else 8.dp))
             if (level) com.green.note.ui.ReviewLinearProgress(progress = { if (value.startsWith("亮度")) brightness else volume }, modifier = Modifier.width(80.dp), color = Color(0xff2e7d32), trackColor = Color.White.copy(alpha = .24f))
             else Text(value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        } } }
+        VideoHintOverlay(player, speedCue.isNotEmpty() || lockCue.isNotEmpty(), speed = true, contentKey = lockCue.ifEmpty { speedCue }) { Row(Modifier.background(Color.Black.copy(alpha = .87f), RoundedCornerShape(10.dp)).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            MaterialGlyph("fast_forward_rounded", color = Color.White); Spacer(Modifier.width(8.dp)); Text(lockCue.ifEmpty { speedCue.ifEmpty { "2.0X 快进中" } }, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         } }
         com.green.note.ui.AppToastSink(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
